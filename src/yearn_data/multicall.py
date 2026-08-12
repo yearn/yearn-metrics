@@ -63,7 +63,11 @@ def _call_data_bytes(call_data: str | bytes) -> bytes:
     return bytes.fromhex(value)
 
 
-def _aggregate3_raw_once(chain: str, calls: list[tuple[str, str | bytes]]) -> list[tuple[bool, bytes]]:
+def _aggregate3_raw_once(
+    chain: str,
+    calls: list[tuple[str, str | bytes]],
+    block_number: int | None = None,
+) -> list[tuple[bool, bytes]]:
     """Run `(target, calldata)` calls with allowFailure=true."""
     if not calls:
         return []
@@ -77,14 +81,23 @@ def _aggregate3_raw_once(chain: str, calls: list[tuple[str, str | bytes]]) -> li
         }
         for target, call_data in calls
     ]
-    return [(bool(success), bytes(data)) for success, data in contract.functions.aggregate3(payload).call()]
+    if block_number is None:
+        raw = contract.functions.aggregate3(payload).call()
+    else:
+        raw = contract.functions.aggregate3(payload).call(block_identifier=int(block_number))
+    return [(bool(success), bytes(data)) for success, data in raw]
 
 
-def aggregate3_raw(chain: str, calls: list[tuple[str, str | bytes]], batch_size: int = 250) -> list[tuple[bool, bytes]]:
+def aggregate3_raw(
+    chain: str,
+    calls: list[tuple[str, str | bytes]],
+    batch_size: int = 250,
+    block_number: int | None = None,
+) -> list[tuple[bool, bytes]]:
     """Run `(target, calldata)` calls with allowFailure=true, chunked for RPC reliability."""
     results: list[tuple[bool, bytes]] = []
     for i in range(0, len(calls), batch_size):
-        results.extend(_aggregate3_raw_once(chain, calls[i : i + batch_size]))
+        results.extend(_aggregate3_raw_once(chain, calls[i : i + batch_size], block_number=block_number))
     return results
 
 

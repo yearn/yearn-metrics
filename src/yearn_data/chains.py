@@ -10,7 +10,7 @@ import requests
 from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware
 
-from .config import CHAINS, ChainConfig, get_rpc_url, normalize_chain_key
+from .config import CHAINS, ChainConfig, get_rpc_urls, normalize_chain_key
 
 
 RPC_TIMEOUT_SECONDS = 30
@@ -23,7 +23,7 @@ def chain_config(chain: str) -> ChainConfig:
 @lru_cache(maxsize=16)
 def web3_for(chain: str) -> Web3:
     cfg = chain_config(chain)
-    w3 = Web3(Web3.HTTPProvider(get_rpc_url(cfg.key), request_kwargs={"timeout": RPC_TIMEOUT_SECONDS}))
+    w3 = Web3(Web3.HTTPProvider(get_rpc_urls(cfg.key)[0], request_kwargs={"timeout": RPC_TIMEOUT_SECONDS}))
     if cfg.key != "eth":
         w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
     return w3
@@ -40,7 +40,7 @@ def block_timestamp(chain: str, block_number: int) -> int:
 
 def block_timestamps_batch(chain: str, block_numbers: list[int], batch_size: int = 100) -> dict[int, int]:
     cfg = chain_config(chain)
-    url = get_rpc_url(cfg.key)
+    url = get_rpc_urls(cfg.key)[0]
     out: dict[int, int] = {}
     request_id = 1
     for i in range(0, len(block_numbers), batch_size):

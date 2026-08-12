@@ -7,8 +7,14 @@ import os
 from pathlib import Path
 
 from .analysis import run_lifetime_yield, run_vault_fees, run_vault_volume
-from .config import CHAINS, load_environment, normalize_chain_key
+from .config import CHAINS, get_event_source, load_environment, normalize_chain_key
 from .discovery import discover
+from .envio import (
+    discover_from_envio,
+    import_flows_from_envio,
+    import_reports_from_envio,
+    index_v2_fee_mints_from_envio,
+)
 from .exports import export_analysis
 from .headline import LIFETIME_YIELD_HEADLINE_KEY, publish_lifetime_yield_headline
 from .indexing import index_all_reports, index_all_volume, index_v2_fee_mints_from_reports
@@ -132,48 +138,72 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     load_environment(args.env)
     conn = open_db(args.db)
+    event_source = get_event_source()
 
     if args.command == "init-db":
         print(f"initialized {args.db}")
         return 0
 
     if args.command == "discover":
-        count = discover(
-            conn,
-            _chains(args.chains),
-            find_deployment=args.find_deployment,
-            include_non_yearn=args.include_non_yearn,
-            skip_v2=args.skip_v2,
-        )
+        chains = _chains(args.chains)
+        if event_source == "envio":
+            if args.include_non_yearn:
+                raise ValueError("--include-non-yearn requires YEARN_DATA_EVENT_SOURCE=rpc")
+            count = discover_from_envio(conn, chains, skip_v2=args.skip_v2, progress=progress)
+        else:
+            count = discover(
+                conn,
+                chains,
+                find_deployment=args.find_deployment,
+                include_non_yearn=args.include_non_yearn,
+                skip_v2=args.skip_v2,
+            )
         print(f"discovered/upserted {count} vault rows")
         return 0
 
     if args.command == "index-events":
-        count = index_all_reports(
-            conn,
-            _chains(args.chains),
-            versions=args.versions,
-            to_block=args.to_block,
-            chunk_size=args.chunk_size,
-            progress=progress,
-        )
+        chains = _chains(args.chains)
+        if event_source == "envio":
+            count = import_reports_from_envio(
+                conn, chains, versions=args.versions, to_block=args.to_block, progress=progress
+            )
+        else:
+            count = index_all_reports(
+                conn,
+                chains,
+                versions=args.versions,
+                to_block=args.to_block,
+                chunk_size=args.chunk_size,
+                progress=progress,
+            )
         print(f"indexed {count} strategy report logs")
         return 0
 
     if args.command == "index-volume":
-        count = index_all_volume(
-            conn,
-            _chains(args.chains),
-            versions=args.versions,
-            to_block=args.to_block,
-            chunk_size=args.chunk_size,
-            progress=progress,
-        )
+        chains = _chains(args.chains)
+        if event_source == "envio":
+            count = import_flows_from_envio(
+                conn, chains, versions=args.versions, to_block=args.to_block, progress=progress
+            )
+        else:
+            count = index_all_volume(
+                conn,
+                chains,
+                versions=args.versions,
+                to_block=args.to_block,
+                chunk_size=args.chunk_size,
+                progress=progress,
+            )
         print(f"indexed {count} volume logs/rows")
         return 0
 
     if args.command == "index-fees":
-        count = index_v2_fee_mints_from_reports(conn, _chains(args.chains), progress=progress)
+        chains = _chains(args.chains)
+        count = (
+            index_v2_fee_mints_from_envio(conn, progress=progress)
+            if event_source == "envio" and "eth" in chains
+            else index_v2_fee_mints_from_reports(conn, chains, progress=progress)
+        )
         print(f"indexed {count} fee events")
         return 0
 
@@ -233,13 +263,26 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "run":
         chains = _chains(args.chains)
-        count = discover(conn, chains, find_deployment=args.find_deployment)
+        if event_source == "envio":
+            count = discover_from_envio(conn, chains, progress=progress)
+        else:
+            count = discover(conn, chains, find_deployment=args.find_deployment)
         print(f"discovered/upserted {count} vault rows")
         if args.job == "lifetime-yield":
-            count = index_all_reports(conn, chains, to_block=args.to_block, chunk_size=args.chunk_size, progress=progress)
+            if event_source == "envio":
+                count = import_reports_from_envio(conn, chains, to_block=args.to_block, progress=progress)
+            else:
+                count = index_all_reports(
+                    conn, chains, to_block=args.to_block, chunk_size=args.chunk_size, progress=progress
+                )
             print(f"indexed {count} strategy report logs")
         else:
-            count = index_all_volume(conn, chains, to_block=args.to_block, chunk_size=args.chunk_size, progress=progress)
+            if event_source == "envio":
+                count = import_flows_from_envio(conn, chains, to_block=args.to_block, progress=progress)
+            else:
+                count = index_all_volume(
+                    conn, chains, to_block=args.to_block, chunk_size=args.chunk_size, progress=progress
+                )
             print(f"indexed {count} volume logs/rows")
         if args.job == "lifetime-yield":
             count = price_unpriced_reports(

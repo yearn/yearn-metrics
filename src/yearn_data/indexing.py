@@ -14,7 +14,7 @@ from web3 import Web3
 
 from .abis import VAULT_SHARE_PRICE_ABI
 from .chains import cached_block_timestamps_many, latest_block, web3_for
-from .config import CHAINS, get_rpc_url
+from .config import CHAINS, get_rpc_urls
 from .events import (
     debt_updated_event_abis,
     debt_updated_topics,
@@ -450,7 +450,7 @@ def _batch_eth_call(
     batch_size: int = 100,
     timeout: int = 60,
 ) -> list[str | None]:
-    url = get_rpc_url(chain)
+    url = get_rpc_urls(chain)[0]
     out: list[str | None] = []
     next_id = 1
     for i in range(0, len(calls), batch_size):
@@ -539,7 +539,7 @@ def _cached_vault_share_prices_many(
     chain: str,
     vaults_by_address: dict[str, Any],
     logs: list[dict[str, Any]],
-    max_workers: int = 16,
+    share_decimals_by_address: dict[str, int] | None = None,
 ) -> dict[tuple[str, int], tuple[int, int]]:
     cfg = CHAINS[chain]
     keys = sorted(
@@ -578,9 +578,14 @@ def _cached_vault_share_prices_many(
     if not missing:
         return found
 
+    metadata_share_decimals = share_decimals_by_address or {}
+    missing_decimals = sorted({address for address, _ in missing} - set(metadata_share_decimals))
     share_decimals_by_address = {
-        address: _vault_share_decimals(chain, address, vaults_by_address[address]["asset_decimals"])
-        for address in sorted({address for address, _ in missing})
+        **metadata_share_decimals,
+        **{
+            address: _vault_share_decimals(chain, address, vaults_by_address[address]["asset_decimals"])
+            for address in missing_decimals
+        },
     }
     fetched: list[tuple[str, int, int, int, str]] = []
     for address, block, price_per_share, source in _fetch_vault_price_per_share_many(chain, missing):
