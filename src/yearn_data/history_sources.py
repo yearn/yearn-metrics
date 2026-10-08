@@ -11,6 +11,7 @@ from web3 import Web3
 from web3._utils.events import get_event_data
 
 from . import abis, envio
+from .storage import table_columns
 from .config import CHAINS, DEFAULT_CHAINS, V2_REGISTRIES_BY_CHAIN, V3_ROLE_MANAGERS
 from .coverage import Scope, find_observation, fingerprint, identity_where, insert_checked
 from .indexing import (
@@ -238,7 +239,7 @@ def write_rows(conn, table, rows, *, report_metadata=None):
     Raw event fields must still match. Metadata updates and raw evidence checks
     participate in the caller's rows-plus-coverage transaction.
     """
-    columns = [row["name"] for row in conn.execute(f"PRAGMA table_info({table})")]
+    columns = table_columns(conn, table)
     identity = ("chain_id", "tx_hash", "log_index")
     if table == "vault_inventory_events":
         identity += ("source_kind",)

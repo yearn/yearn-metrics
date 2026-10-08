@@ -1414,11 +1414,16 @@ def price_unpriced_reports(
             )
             conn.execute(
                 """
-                INSERT OR REPLACE INTO prices (
-                    chain_id, token_address, timestamp, block_number,
-                    source, price_usd, status, raw_json
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO prices (
+                        chain_id, token_address, timestamp, block_number,
+                        source, price_usd, status, raw_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(chain_id,token_address,timestamp,source) DO UPDATE SET
+                        block_number=excluded.block_number,
+                        price_usd=excluded.price_usd,
+                        status=excluded.status,
+                        raw_json=excluded.raw_json
                 """,
                 (
                     int(row["chain_id"]),
@@ -1485,11 +1490,16 @@ def price_unpriced_volume(
             )
             conn.execute(
                 """
-                INSERT OR REPLACE INTO prices (
-                    chain_id, token_address, timestamp, block_number,
-                    source, price_usd, status, raw_json
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO prices (
+                        chain_id, token_address, timestamp, block_number,
+                        source, price_usd, status, raw_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(chain_id,token_address,timestamp,source) DO UPDATE SET
+                        block_number=excluded.block_number,
+                        price_usd=excluded.price_usd,
+                        status=excluded.status,
+                        raw_json=excluded.raw_json
                 """,
                 (
                     int(row["chain_id"]),
@@ -1856,11 +1866,16 @@ def _price_rows_with_yearn_prices(conn, rows) -> tuple[int, list]:
         )
     conn.executemany(
         """
-        INSERT OR REPLACE INTO prices (
-            chain_id, token_address, timestamp, block_number,
-            source, price_usd, status, raw_json
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO prices (
+                chain_id, token_address, timestamp, block_number,
+                source, price_usd, status, raw_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(chain_id,token_address,timestamp,source) DO UPDATE SET
+                block_number=excluded.block_number,
+                price_usd=excluded.price_usd,
+                status=excluded.status,
+                raw_json=excluded.raw_json
         """,
         insert_rows,
     )
