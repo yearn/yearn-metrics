@@ -50,6 +50,25 @@ CREATE TABLE IF NOT EXISTS vaults (
     PRIMARY KEY (chain_id, address)
 );
 
+CREATE TABLE IF NOT EXISTS vault_inventory_events (
+    chain_id INTEGER NOT NULL,
+    version TEXT NOT NULL,
+    vault_address TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    action TEXT NOT NULL DEFAULT 'added',
+    source_address TEXT NOT NULL,
+    asset TEXT,
+    tx_hash TEXT NOT NULL,
+    log_index INTEGER NOT NULL,
+    block_number INTEGER NOT NULL,
+    block_timestamp INTEGER NOT NULL,
+    decoded_json TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (chain_id, tx_hash, log_index, source_kind)
+);
+
+CREATE INDEX IF NOT EXISTS vault_inventory_events_vault_idx
+ON vault_inventory_events (chain_id, version, vault_address, source_kind, block_number);
+
 CREATE TABLE IF NOT EXISTS events_raw (
     chain_id INTEGER NOT NULL,
     contract_address TEXT NOT NULL,
@@ -181,6 +200,23 @@ ON vault_fee_events (chain_id, asset, block_timestamp);
 CREATE INDEX IF NOT EXISTS vault_fee_events_vault_idx
 ON vault_fee_events (chain_id, vault_address, block_number);
 
+CREATE TABLE IF NOT EXISTS canonical_fee_reports (
+    chain_id INTEGER NOT NULL,
+    tx_hash TEXT NOT NULL,
+    report_log_index INTEGER NOT NULL,
+    event_log_index INTEGER,
+    contract_family TEXT NOT NULL,
+    api_version TEXT,
+    method_version TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('ok', 'unresolved')),
+    reason TEXT,
+    accounting_json TEXT,
+    evidence_json TEXT NOT NULL,
+    PRIMARY KEY (chain_id, tx_hash, report_log_index),
+    FOREIGN KEY (chain_id, tx_hash, report_log_index)
+        REFERENCES strategy_reports(chain_id, tx_hash, log_index) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS prices (
     chain_id INTEGER NOT NULL,
     token_address TEXT NOT NULL,
@@ -237,9 +273,80 @@ def connect(path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
 
 
 def init_db(conn: sqlite3.Connection) -> None:
+    from .coverage import SCHEMA as COVERAGE_SCHEMA
+
     conn.executescript(SCHEMA)
+    conn.executescript(COVERAGE_SCHEMA)
+    _ensure_column(conn, "vault_inventory_events", "action", "TEXT NOT NULL DEFAULT 'added'")
+    conn.execute("""CREATE TABLE IF NOT EXISTS fee_daily_prices (
+        chain_id INTEGER NOT NULL, asset TEXT NOT NULL, eod_timestamp INTEGER NOT NULL,
+        policy TEXT NOT NULL, endpoint_id TEXT NOT NULL, price_usd TEXT,
+        status TEXT NOT NULL, evidence_json TEXT NOT NULL, fetched_at INTEGER NOT NULL,
+        PRIMARY KEY(chain_id,asset,eod_timestamp,policy,endpoint_id))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS tokenized_fee_events (
+        chain_id INTEGER NOT NULL,tx_hash TEXT NOT NULL,log_index INTEGER NOT NULL,
+        event_json TEXT NOT NULL,PRIMARY KEY(chain_id,tx_hash,log_index))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS tokenized_fee_ranges (
+        chain_id INTEGER NOT NULL,vault_address TEXT NOT NULL,from_block INTEGER NOT NULL,
+        to_block INTEGER NOT NULL,before_timestamp INTEGER NOT NULL,inventory_hash TEXT NOT NULL,
+        PRIMARY KEY(chain_id,vault_address,from_block,to_block,before_timestamp,inventory_hash))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS fee_state_evidence (
+        chain_id INTEGER NOT NULL,tx_hash TEXT NOT NULL,report_log_index INTEGER NOT NULL,
+        block_hash TEXT NOT NULL,evidence_json TEXT NOT NULL,
+        PRIMARY KEY(chain_id,tx_hash,report_log_index,block_hash))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS fee_block_log_evidence (
+        chain_id INTEGER NOT NULL,vault_address TEXT NOT NULL,block_hash TEXT NOT NULL,
+        logs_json TEXT NOT NULL,PRIMARY KEY(chain_id,vault_address,block_hash))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS fee_log_acquisitions (
+        acquisition_id TEXT PRIMARY KEY,manifest_json TEXT NOT NULL)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS fee_filtered_log_evidence (
+        chain_id INTEGER NOT NULL,tx_hash TEXT NOT NULL,report_log_index INTEGER NOT NULL,
+        payload_json TEXT NOT NULL,payload_sha256 TEXT NOT NULL,
+        PRIMARY KEY(chain_id,tx_hash,report_log_index))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS fee_receipt_evidence (
+        chain_id INTEGER NOT NULL,tx_hash TEXT NOT NULL,block_number INTEGER NOT NULL,
+        block_hash TEXT NOT NULL,receipt_json TEXT NOT NULL,PRIMARY KEY(chain_id,tx_hash))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS fee_execution_traces (
+        chain_id INTEGER NOT NULL,tx_hash TEXT NOT NULL,vault_address TEXT NOT NULL,
+        block_hash TEXT NOT NULL,trace_version TEXT NOT NULL,trace_json TEXT NOT NULL,
+        PRIMARY KEY(chain_id,tx_hash,vault_address,block_hash,trace_version))""")
+    _ensure_column(conn, "tokenized_fee_ranges", "finality_policy", "TEXT NOT NULL DEFAULT 'finalized'")
     _ensure_column(conn, "vaults", "management", "TEXT NOT NULL DEFAULT 'yearn'")
     _ensure_column(conn, "vaults", "protocol", "TEXT")
+    _ensure_column(conn, "canonical_fee_reports", "candidate_json", "TEXT")
+    _ensure_column(conn, "canonical_fee_reports", "decision_json", "TEXT")
+    # Old direct-zero projections must not survive a newly corrected release rule.
+    from .fee_zero_rules import ZERO_GAIN_RELEASES
+    for row in conn.execute("""SELECT f.*,r.gain_raw FROM canonical_fee_reports f JOIN strategy_reports r
+        ON r.chain_id=f.chain_id AND r.tx_hash=f.tx_hash AND r.log_index=f.report_log_index
+        WHERE f.contract_family='yearn-v2-vault' AND f.candidate_json IS NULL
+        AND f.accounting_json IS NOT NULL AND r.gain_raw='0'""").fetchall():
+        evidence = json.loads(row['evidence_json'])
+        amounts = json.loads(row['accounting_json'])
+        if (row['api_version'] not in ZERO_GAIN_RELEASES and evidence.get('fee_log_index') is None
+                and row['event_log_index'] in (None,row['report_log_index'])
+                and amounts.get('total_fees_paid_raw') == '0'):
+            from .fee_acceptance import POLICY_VERSION
+            decision={'policy_version':POLICY_VERSION,'status':'unavailable',
+                'reason':'zero_gain_requires_fee_evidence','state_scope':None,'state_suitability':'unverified'}
+            conn.execute("""UPDATE canonical_fee_reports SET accounting_json=NULL,status='unresolved',reason=?,decision_json=?
+                WHERE chain_id=? AND tx_hash=? AND report_log_index=?""",
+                (decision['reason'],to_json(decision),row['chain_id'],row['tx_hash'],row['report_log_index']))
+    # Conservatively reassess legacy derived values without refetching evidence.
+    from .fee_acceptance import assess_candidate, normalize_candidate
+    for row in conn.execute("SELECT * FROM canonical_fee_reports WHERE candidate_json IS NULL AND accounting_json IS NOT NULL").fetchall():
+        amounts = json.loads(row['accounting_json'])
+        if amounts.get('amount_source') != 'derived-contract':
+            continue
+        evidence = json.loads(row['evidence_json'])
+        candidate = normalize_candidate(evidence.pop('reconstruction', {
+            'method': 'legacy-unverified', 'total_fees_paid_raw': amounts['total_fees_paid_raw'], 'interval': None}))
+        decision = assess_candidate(candidate, evidence)
+        accepted = decision['status'] == 'accepted'
+        conn.execute("""UPDATE canonical_fee_reports SET candidate_json=?,decision_json=?,evidence_json=?,
+            accounting_json=?,status=?,reason=? WHERE chain_id=? AND tx_hash=? AND report_log_index=?""",
+            (to_json(candidate),to_json(decision),to_json(evidence),row['accounting_json'] if accepted else None,
+             'ok' if accepted else 'unresolved',decision['reason'],row['chain_id'],row['tx_hash'],row['report_log_index']))
     conn.commit()
 
 
