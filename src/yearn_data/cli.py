@@ -3,16 +3,25 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 
 from .analysis import run_lifetime_yield, run_vault_fees, run_vault_volume
-from .config import CHAINS, load_environment, normalize_chain_key
+from .config import CHAINS, DEFAULT_CHAINS, get_event_source, load_environment, normalize_chain_key
+from .fees import index_canonical_fees, run_canonical_fees
 from .discovery import discover
+from .envio import discover_from_envio, import_reports_from_envio
 from .exports import export_analysis
 from .headline import LIFETIME_YIELD_HEADLINE_KEY, publish_lifetime_yield_headline
 from .indexing import index_all_reports, index_all_volume, index_v2_fee_mints_from_reports
-from .pricing import price_unpriced_reports, price_unpriced_volume
+from .pricing import (
+    DEFAULT_FALLBACK_PRICE_SOURCE,
+    DEFAULT_PRICE_SOURCE,
+    SUPPORTED_SOURCES,
+    price_unpriced_reports,
+    price_unpriced_volume,
+)
 from .storage import DEFAULT_DB_PATH, connect, init_db, seed_chains
 
 
@@ -22,17 +31,33 @@ def progress(message: str) -> None:
 
 def _chains(values: list[str] | None) -> list[str]:
     if not values:
-        return list(CHAINS)
+        return list(DEFAULT_CHAINS)
     return [normalize_chain_key(value) for value in values]
 
 
-def _run_analysis(conn, job: str) -> int:
+def _job_price_source(job: str, requested_source: str | None) -> str:
+    if requested_source is not None:
+        return requested_source
+    return DEFAULT_PRICE_SOURCE if job == "lifetime-yield" else "defillama"
+
+
+def _fallback_source(price_source: str) -> str | None:
+    return DEFAULT_FALLBACK_PRICE_SOURCE if price_source == DEFAULT_PRICE_SOURCE else None
+
+
+def _run_analysis(conn, job: str, price_source: str | None = None, provider_fallback: bool = True) -> int:
+    price_source = _job_price_source(job, price_source)
     if job == "lifetime-yield":
-        return run_lifetime_yield(conn)
+        return run_lifetime_yield(conn, price_source=price_source,
+                                  fallback_price_source=_fallback_source(price_source) if provider_fallback else None)
+    if price_source != "defillama":
+        raise ValueError("--price-source yearn-prices is currently supported only for lifetime-yield")
     if job == "vault-volume":
         return run_vault_volume(conn)
     if job == "vault-fees":
         return run_vault_fees(conn)
+    if job == "canonical-fees":
+        return run_canonical_fees(conn)
     raise ValueError(f"unsupported analysis job {job!r}")
 
 
@@ -51,6 +76,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("init-db")
 
+    catchup_p = sub.add_parser("catch-up", help="Acquire one bounded chain window; no pricing or analysis")
+    catchup_p.add_argument("--chain", required=True, choices=sorted(CHAINS))
+    catchup_p.add_argument("--from-block", type=int, required=True)
+    catchup_p.add_argument("--to-block", type=int, required=True)
+    catchup_p.add_argument("--chunk-size", type=int, default=50_000)
+    catchup_p.add_argument("--source", choices=["auto", "rpc", "envio"], default="auto")
+    catchup_p.add_argument("--confirmations", type=int, help="Explicit alternative to RPC finalized")
+    catchup_p.add_argument("--discover", action="store_true", help="Also scan configured inventory sources in this window")
+    catchup_p.add_argument("--include-experimental-v2", action="store_true")
+
     discover_p = sub.add_parser("discover")
     discover_p.add_argument("--chains", nargs="+", help="Chains to discover")
     discover_p.add_argument(
@@ -66,13 +101,23 @@ def build_parser() -> argparse.ArgumentParser:
     discover_p.add_argument(
         "--skip-v2",
         action="store_true",
-        help="Skip Ethereum V2 registry discovery when refreshing V3-only vault sets.",
+        help="Skip V2 registry discovery when refreshing V3-only vault sets.",
+    )
+    discover_p.add_argument("--include-retired", action="store_true", help="Retain historical V3 role-manager members without marking them active")
+    discover_p.add_argument("--to-block", type=int, help="Stop Envio inventory discovery at this block")
+    discover_p.add_argument(
+        "--include-experimental-v2",
+        action="store_true",
+        help="Include V2 experimental registry deployments (excluded by default for RPC parity).",
     )
 
     index_p = sub.add_parser("index-events")
     index_p.add_argument("--chains", nargs="+", help="Chains to index")
     index_p.add_argument("--versions", nargs="+", choices=["v2", "v3"], help="Vault versions to index")
     index_p.add_argument("--to-block", type=int, help="Stop block for every selected chain")
+    index_p.add_argument("--include-inactive", action="store_true", help="Include historical Yearn vaults in Envio report import")
+    index_p.add_argument("--from-block", type=int, help="Bounded Envio historical import; requires --to-block and preserves forward cursors")
+    index_p.add_argument("--vaults", nargs="+", help="Limit bounded Envio historical import to these addresses")
     index_p.add_argument("--chunk-size", type=int, default=50_000)
 
     volume_index_p = sub.add_parser("index-volume")
@@ -84,10 +129,26 @@ def build_parser() -> argparse.ArgumentParser:
     fee_index_p = sub.add_parser("index-fees")
     fee_index_p.add_argument("--chains", nargs="+", help="Chains to index")
 
+    fee_index_p.add_argument("--canonical", action="store_true")
+    fee_index_p.add_argument("--limit", type=int)
+    fee_index_p.add_argument("--retry-unresolved", action="store_true")
+    fee_index_p.add_argument("--version", choices=["v2", "v3"])
+
+    tokenized_p = sub.add_parser("index-tokenized-fees", help="Import bounded Tokenized Strategy fee ranges")
+    tokenized_p.add_argument("--inventory", type=Path, help="Classified inventory JSON; defaults to packaged Yearn inventory")
+    tokenized_p.add_argument("--chain", required=True, choices=sorted(CHAINS))
+    tokenized_p.add_argument("--from-block", required=True, type=int)
+    tokenized_p.add_argument("--to-block", required=True, type=int)
+    tokenized_p.add_argument("--before-timestamp", required=True, type=int)
+    tokenized_p.add_argument("--chunk-size", type=int, default=2000)
+    tokenized_p.add_argument("--max-vaults", type=int, default=10)
+    tokenized_p.add_argument("--confirmations", type=int, help="Explicit latest-minus-N finality policy instead of finalized")
+
     price_p = sub.add_parser("price")
     price_p.add_argument("--limit", type=int, help="Maximum distinct token/timestamp prices to fetch")
-    price_p.add_argument("--source", choices=["defillama"], default="defillama")
+    price_p.add_argument("--source", choices=sorted(SUPPORTED_SOURCES), default=DEFAULT_PRICE_SOURCE)
     price_p.add_argument("--retry-missing", action="store_true", help="Retry existing non-ok price rows")
+    price_p.add_argument("--no-provider-fallback", action="store_true", help="Do not use DefiLlama when Yearn Prices is unavailable")
     price_p.add_argument("--chains", nargs="+", help="Restrict report pricing to chains")
     price_p.add_argument("--no-onchain-fallbacks", action="store_true", help="Use only the selected offchain price source")
 
@@ -99,10 +160,13 @@ def build_parser() -> argparse.ArgumentParser:
     volume_price_p.add_argument("--no-onchain-fallbacks", action="store_true", help="Use only the selected offchain price source")
 
     analyze_p = sub.add_parser("analyze")
-    analyze_p.add_argument("job", choices=["lifetime-yield", "vault-volume", "vault-fees"])
+    analyze_p.add_argument("job", choices=["lifetime-yield", "vault-volume", "vault-fees", "canonical-fees"])
+
+    analyze_p.add_argument("--price-source", choices=sorted(SUPPORTED_SOURCES))
+    analyze_p.add_argument("--no-provider-fallback", action="store_true")
 
     export_p = sub.add_parser("export")
-    export_p.add_argument("job", choices=["lifetime-yield", "vault-volume", "vault-fees"])
+    export_p.add_argument("job", choices=["lifetime-yield", "vault-volume", "vault-fees", "canonical-fees"])
     export_p.add_argument("--out", default="exports")
 
     publish_p = sub.add_parser("publish")
@@ -121,7 +185,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--to-block", type=int)
     run_p.add_argument("--chunk-size", type=int, default=50_000)
     run_p.add_argument("--price-limit", type=int)
-    run_p.add_argument("--price-source", choices=["defillama"], default="defillama")
+    run_p.add_argument("--price-source", choices=sorted(SUPPORTED_SOURCES))
+    run_p.add_argument("--no-provider-fallback", action="store_true")
     run_p.add_argument("--no-onchain-fallbacks", action="store_true", help="Use only the selected offchain price source")
     run_p.add_argument("--find-deployment", action="store_true")
     run_p.add_argument("--out", default="exports")
@@ -132,31 +197,72 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     load_environment(args.env)
     conn = open_db(args.db)
+    event_source = get_event_source()
 
     if args.command == "init-db":
         print(f"initialized {args.db}")
         return 0
 
+    if args.command == "catch-up":
+        from .catchup import catch_up
+        result = catch_up(conn, args.chain, args.from_block, args.to_block,
+                          source=args.source, confirmations=args.confirmations,
+                          chunk_size=args.chunk_size, discover=args.discover,
+                          experimental=args.include_experimental_v2)
+        print(json.dumps(result, sort_keys=True))
+        return 0
+
     if args.command == "discover":
-        count = discover(
-            conn,
-            _chains(args.chains),
-            find_deployment=args.find_deployment,
-            include_non_yearn=args.include_non_yearn,
-            skip_v2=args.skip_v2,
-        )
+        if event_source == "envio":
+            if args.include_non_yearn:
+                raise ValueError("--include-non-yearn is only available with YEARN_DATA_EVENT_SOURCE=rpc")
+            count = discover_from_envio(
+                conn,
+                _chains(args.chains),
+                skip_v2=args.skip_v2,
+                include_experimental_v2=args.include_experimental_v2,
+                include_retired=args.include_retired,
+                to_block=args.to_block,
+                progress=progress,
+            )
+        else:
+            if args.include_retired:
+                raise ValueError("--include-retired requires Envio discovery")
+            if args.include_experimental_v2:
+                raise ValueError("--include-experimental-v2 is only available with YEARN_DATA_EVENT_SOURCE=envio")
+            count = discover(
+                conn,
+                _chains(args.chains),
+                find_deployment=args.find_deployment,
+                include_non_yearn=args.include_non_yearn,
+                skip_v2=args.skip_v2,
+            )
         print(f"discovered/upserted {count} vault rows")
         return 0
 
     if args.command == "index-events":
-        count = index_all_reports(
-            conn,
-            _chains(args.chains),
-            versions=args.versions,
-            to_block=args.to_block,
-            chunk_size=args.chunk_size,
-            progress=progress,
-        )
+        if event_source == "envio":
+            count = import_reports_from_envio(
+                conn,
+                _chains(args.chains),
+                versions=args.versions,
+                to_block=args.to_block,
+                progress=progress,
+                include_inactive=args.include_inactive,
+                from_block=args.from_block,
+                vault_addresses=args.vaults,
+            )
+        else:
+            if args.include_inactive or args.from_block is not None or args.vaults:
+                raise ValueError("historical selection flags require Envio import")
+            count = index_all_reports(
+                conn,
+                _chains(args.chains),
+                versions=args.versions,
+                to_block=args.to_block,
+                chunk_size=args.chunk_size,
+                progress=progress,
+            )
         print(f"indexed {count} strategy report logs")
         return 0
 
@@ -172,7 +278,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"indexed {count} volume logs/rows")
         return 0
 
+    if args.command == "index-tokenized-fees":
+        from .tokenized_fees import index_tokenized_fees, load_inventory
+        inventory = json.loads(args.inventory.read_text()) if args.inventory else load_inventory()
+        result = index_tokenized_fees(conn, inventory, args.chain, args.from_block,
+            args.to_block, args.before_timestamp, args.chunk_size, args.max_vaults,
+            confirmations=args.confirmations)
+        print(result)
+        return 0
+
     if args.command == "index-fees":
+        if args.canonical:
+            count = index_canonical_fees(conn, _chains(args.chains) if args.chains else None,
+                limit=args.limit, retry_unresolved=args.retry_unresolved, version=args.version)
+            print(f"processed {count} canonical fee reports")
+            return 0
+        if args.limit is not None or args.retry_unresolved or args.version:
+            raise ValueError("Canonical fee options require --canonical")
         count = index_v2_fee_mints_from_reports(conn, _chains(args.chains), progress=progress)
         print(f"indexed {count} fee events")
         return 0
@@ -183,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:
             conn,
             limit=args.limit,
             source=args.source,
-            fallback=None,
+            fallback=None if args.no_provider_fallback else _fallback_source(args.source),
             retry_missing=args.retry_missing,
             chain_ids=chain_ids,
             onchain_fallbacks=not args.no_onchain_fallbacks,
@@ -206,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "analyze":
-        run_id = _run_analysis(conn, args.job)
+        run_id = _run_analysis(conn, args.job, args.price_source, provider_fallback=not args.no_provider_fallback)
         print(f"analysis run {run_id} complete")
         return 0
 
@@ -232,11 +354,36 @@ def main(argv: list[str] | None = None) -> int:
         raise AssertionError(args.publish_job)
 
     if args.command == "run":
+        price_source = _job_price_source(args.job, args.price_source)
+        if args.job != "lifetime-yield" and price_source != "defillama":
+            raise ValueError("--price-source yearn-prices is currently supported only for lifetime-yield")
         chains = _chains(args.chains)
-        count = discover(conn, chains, find_deployment=args.find_deployment)
+        if args.job == "lifetime-yield" and event_source == "envio":
+            count = discover_from_envio(
+                conn,
+                chains,
+                to_block=args.to_block,
+                progress=progress,
+            )
+        else:
+            count = discover(conn, chains, find_deployment=args.find_deployment)
         print(f"discovered/upserted {count} vault rows")
         if args.job == "lifetime-yield":
-            count = index_all_reports(conn, chains, to_block=args.to_block, chunk_size=args.chunk_size, progress=progress)
+            if event_source == "envio":
+                count = import_reports_from_envio(
+                    conn,
+                    chains,
+                    to_block=args.to_block,
+                    progress=progress,
+                )
+            else:
+                count = index_all_reports(
+                    conn,
+                    chains,
+                    to_block=args.to_block,
+                    chunk_size=args.chunk_size,
+                    progress=progress,
+                )
             print(f"indexed {count} strategy report logs")
         else:
             count = index_all_volume(conn, chains, to_block=args.to_block, chunk_size=args.chunk_size, progress=progress)
@@ -245,20 +392,20 @@ def main(argv: list[str] | None = None) -> int:
             count = price_unpriced_reports(
                 conn,
                 limit=args.price_limit,
-                source=args.price_source,
-                fallback=None,
+                source=price_source,
+                fallback=None if args.no_provider_fallback else _fallback_source(price_source),
                 onchain_fallbacks=not args.no_onchain_fallbacks,
             )
         else:
             count = price_unpriced_volume(
                 conn,
                 limit=args.price_limit,
-                source=args.price_source,
+                source=price_source,
                 fallback=None,
                 onchain_fallbacks=not args.no_onchain_fallbacks,
             )
         print(f"priced/recorded {count} token timestamp rows")
-        run_id = _run_analysis(conn, args.job)
+        run_id = _run_analysis(conn, args.job, args.price_source, provider_fallback=not args.no_provider_fallback)
         print(f"analysis run {run_id} complete")
         for path in export_analysis(conn, args.job, args.out):
             print(path)

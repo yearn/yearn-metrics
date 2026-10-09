@@ -50,6 +50,25 @@ CREATE TABLE IF NOT EXISTS vaults (
     PRIMARY KEY (chain_id, address)
 );
 
+CREATE TABLE IF NOT EXISTS vault_inventory_events (
+    chain_id INTEGER NOT NULL,
+    version TEXT NOT NULL,
+    vault_address TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    action TEXT NOT NULL DEFAULT 'added',
+    source_address TEXT NOT NULL,
+    asset TEXT,
+    tx_hash TEXT NOT NULL,
+    log_index INTEGER NOT NULL,
+    block_number INTEGER NOT NULL,
+    block_timestamp INTEGER NOT NULL,
+    decoded_json TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (chain_id, tx_hash, log_index, source_kind)
+);
+
+CREATE INDEX IF NOT EXISTS vault_inventory_events_vault_idx
+ON vault_inventory_events (chain_id, version, vault_address, source_kind, block_number);
+
 CREATE TABLE IF NOT EXISTS events_raw (
     chain_id INTEGER NOT NULL,
     contract_address TEXT NOT NULL,
@@ -181,6 +200,23 @@ ON vault_fee_events (chain_id, asset, block_timestamp);
 CREATE INDEX IF NOT EXISTS vault_fee_events_vault_idx
 ON vault_fee_events (chain_id, vault_address, block_number);
 
+CREATE TABLE IF NOT EXISTS canonical_fee_reports (
+    chain_id INTEGER NOT NULL,
+    tx_hash TEXT NOT NULL,
+    report_log_index INTEGER NOT NULL,
+    event_log_index INTEGER,
+    contract_family TEXT NOT NULL,
+    api_version TEXT,
+    method_version TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('ok', 'unresolved')),
+    reason TEXT,
+    accounting_json TEXT,
+    evidence_json TEXT NOT NULL,
+    PRIMARY KEY (chain_id, tx_hash, report_log_index),
+    FOREIGN KEY (chain_id, tx_hash, report_log_index)
+        REFERENCES strategy_reports(chain_id, tx_hash, log_index) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS prices (
     chain_id INTEGER NOT NULL,
     token_address TEXT NOT NULL,
@@ -237,7 +273,19 @@ def connect(path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
 
 
 def init_db(conn: sqlite3.Connection) -> None:
+    from .coverage import SCHEMA as COVERAGE_SCHEMA
+
     conn.executescript(SCHEMA)
+    conn.executescript(COVERAGE_SCHEMA)
+    _ensure_column(conn, "vault_inventory_events", "action", "TEXT NOT NULL DEFAULT 'added'")
+    conn.execute("""CREATE TABLE IF NOT EXISTS tokenized_fee_events (
+        chain_id INTEGER NOT NULL,tx_hash TEXT NOT NULL,log_index INTEGER NOT NULL,
+        event_json TEXT NOT NULL,PRIMARY KEY(chain_id,tx_hash,log_index))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS tokenized_fee_ranges (
+        chain_id INTEGER NOT NULL,vault_address TEXT NOT NULL,from_block INTEGER NOT NULL,
+        to_block INTEGER NOT NULL,before_timestamp INTEGER NOT NULL,inventory_hash TEXT NOT NULL,
+        PRIMARY KEY(chain_id,vault_address,from_block,to_block,before_timestamp,inventory_hash))""")
+    _ensure_column(conn, "tokenized_fee_ranges", "finality_policy", "TEXT NOT NULL DEFAULT 'finalized'")
     _ensure_column(conn, "vaults", "management", "TEXT NOT NULL DEFAULT 'yearn'")
     _ensure_column(conn, "vaults", "protocol", "TEXT")
     conn.commit()
