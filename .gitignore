@@ -10,3 +10,12 @@ artifacts/
 *.sqlite-*
 *.db
 *.zst
+
+# Local RPC URLs and credentials. Keep the setup template tracked.
+.env
+.env.*
+!.env.example
+
+.vercel/
+
+build/
