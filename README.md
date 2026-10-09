@@ -4,6 +4,8 @@ Reusable Python tooling for indexing Yearn vault data and running research jobs 
 
 The first analysis job is `lifetime-yield`, which backfills Yearn V2/V3 `StrategyReported` events, prices report-time vault asset gains/losses, and exports aggregate yield totals.
 
+For pricing policy, configuration and Yearn-only commands, see [historical earnings pricing](docs/earnings-pricing.md).
+
 ## Quick Start
 
 ```bash
@@ -14,8 +16,8 @@ pip install -e '.[dev]'
 yearn-data init-db
 yearn-data discover
 yearn-data index-events
-yearn-data price
-yearn-data analyze lifetime-yield
+yearn-data price --source yearn-prices --no-provider-fallback --no-onchain-fallbacks
+yearn-data analyze lifetime-yield --price-source yearn-prices --no-provider-fallback
 yearn-data export lifetime-yield
 ```
 
@@ -80,3 +82,9 @@ DefiLlama is the only offchain pricing source. When DefiLlama cannot price a tok
 ## Backfill Efficiency
 
 Event indexing uses resumable `eth_getLogs` block chunks and dedupes logs by `(chain_id, tx_hash, log_index)`. The default chunk size is `50,000` blocks, intended for Tenderly-style archive RPCs; lower it if an RPC returns block range errors. Block timestamps are cached in the local database after first lookup.
+
+## Historical report ingestion
+
+See [the Envio ingestion guide](docs/historical-envio-ingestion.md) for retired vault discovery, metadata and bounded replay.
+
+For explicit per-chain RPC/Envio windows, including Optimism and Fantom, see [bounded report catch-up](docs/bounded-report-catchup.md).
