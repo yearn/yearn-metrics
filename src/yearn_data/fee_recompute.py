@@ -42,7 +42,10 @@ def recompute_canonical_fees(conn, mode, chains=None, limit=None, version=None, 
                     raise ValueError('allocator inputs missing or changed')
                 from .yvusd_fees import ACCOUNTANTS, applies, accounting
                 from .ybold_fees import applies as is_ybold, accounting as ybold_accounting
-                if is_ybold(dict(r)):
+                from .yeth_fees import applies as is_yeth, accounting as yeth_accounting
+                if is_yeth(dict(r)):
+                    amounts = yeth_accounting(r, evidence['yeth'])
+                elif is_ybold(dict(r)):
                     amounts = ybold_accounting(r, evidence['ybold'])
                 elif applies(dict(r)):
                     failure_reason = 'cached_distribution_evidence_missing_or_invalid'
