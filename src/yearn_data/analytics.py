@@ -133,11 +133,14 @@ def fee_stack(rows, positions, configurations):
                 node['viaStrategy']=strategy
                 children.append(node)
                 complete=complete and node['availability']['state']=='available'
-        if perf is None or mgmt is None or not cfg.get('fixedRateSupported',True):complete=False
-        return {'vault':{'address':identity[1],'chainId':identity[0],'name':row.get('name'),
+        fee_known = perf is not None and mgmt is not None and cfg.get('fixedRateSupported',True)
+        if not fee_known:complete=False
+        from .fee_views import fee_display_name
+        return {'vault':{'address':identity[1],'chainId':identity[0],'name':fee_display_name(identity[0], identity[1], row.get('name')),
                          'version':row.get('version'),'category':row.get('category'),
                          'apiVersion':cfg.get('apiVersion'),
                          'contractFamily':cfg.get('contractFamily') or (row.get('version') if row.get('version') in ('v1','v2','morpho-v1','morpho-v2','erc4626') else None)},
+                'feeAvailability':{'state':'available' if fee_known else 'unavailable'},
                 'capitalUsd':capital,'perfFee':perf,'mgmtFee':mgmt,'children':children,
                 'availability':{'state':'available' if complete else 'partial','truncatedAllocations':truncated}}
     def effective(root):
@@ -164,7 +167,8 @@ def fee_stack(rows, positions, configurations):
     # External fractions attribute the same capital only once even with nested roots.
     identities={(c['root']['vault']['chainId'],c['root']['vault']['address']) for c in chains}
     capital=money([by_key[i] for i in identities],'external_tvl_usd')
-    return {'chains':chains,'maxDepth':max((c['maxDepth'] for c in chains),default=0),
+    from .fee_views import fee_view_entries
+    return {'chains':chains,'entries':fee_view_entries(chains, rows),'maxDepth':max((c['maxDepth'] for c in chains),default=0),
             'maxEffectivePerfFee':max(rates) if rates else None,'avgEffectivePerfFee':sum(rates)/len(rates) if rates else None,
             'totalStackedCapital':capital,'availability':{'state':'available' if len(rates)==len(chains) and not issues else 'partial',
              'knownStacks':len(rates),'expectedStacks':len(chains),'unresolvedAllocations':issues}}
