@@ -18,7 +18,7 @@ from .storage import connect
 
 ADAPTER_URL='https://raw.githubusercontent.com/DefiLlama/DefiLlama-Adapters/main/projects/yearn/index.js'
 FACTORIES_URL='https://raw.githubusercontent.com/DefiLlama/DefiLlama-Adapters/main/projects/helper/curators/configs.js'
-CURATION_URL='https://raw.githubusercontent.com/DefiLlama/DefiLlama-Adapters/cf9693cdabf9b816e85e6c8ad19cd4c29190d395/projects/yearn-curating/index.js'
+CURATION_URL='https://raw.githubusercontent.com/DefiLlama/DefiLlama-Adapters/main/registries/curators.js'
 FINANCE_CHAINS={1:'ethereum',10:'optimism',137:'polygon',250:'fantom',8453:'base',42161:'arbitrum',747474:'katana'}
 CURATION_CHAINS={1:'ethereum',8453:'base',747474:'katana',42161:'arbitrum',999:'hyperliquid'}
 
@@ -59,17 +59,20 @@ def rules(source,curation):
     cross={}
     for chain,parent,strategy,child in re.findall(r"chainId:\s*(\d+),\s*parent:\s*'(0x\w+)',\s*strategy:\s*'(0x\w+)',\s*child:\s*'(0x\w+)'",source):
         cross[(int(chain),parent.lower(),strategy.lower())]=child.lower()
-    curation=re.sub(r'//[^\n]*','',curation)
+    # Chain names repeat across curators; only inspect the Yearn entry.
+    section=re.search(r'^  "yearn-curating":\s*\{([\s\S]*?)(?=^  \},?\s*$)',curation,re.MULTILINE)
+    if not section:raise ValueError('unsupported curation registry: missing yearn-curating')
+    curation=re.sub(r'//[^\n]*','',section[1])
     owners={};explicit={}
     for chain,name in CURATION_CHAINS.items():
         block=re.search(r'\b'+name+r':\s*\{([^{}]*)\}',curation)
         if not block:raise ValueError('unsupported curation configuration: missing or unparsed '+name)
         text=block[1]
         fields=set(re.findall(r'\b(\w+)\s*:',text))
-        if fields-{'morphoVaultOwners','turtleclub_erc4626'}:
+        if fields-{'morphoVaultOwners','morpho','erc4626','turtleclub_erc4626'}:
             raise ValueError('unsupported curation configuration fields: '+name)
         owners[chain]=curation_addresses(text,'morphoVaultOwners',required=True)
-        explicit[chain]=curation_addresses(text,'turtleclub_erc4626')
+        explicit[chain]=set().union(*(curation_addresses(text,field) for field in ('morpho','erc4626','turtleclub_erc4626')))
     return {'v1':js_array(source,'v1Vaults'),'blacklist':js_array(source,'blacklist')|js_array(source,'v1Vaults'),
             'cross':cross,'owners':owners,'explicit':explicit}
 
@@ -381,7 +384,7 @@ def collect(database,progress=print):
                  'curationAdapter':CURATION_URL,'curationAdapterSha256':hashlib.sha256(curation.encode()).hexdigest(),
                  'financeSource':source,'curationSource':curation,'curationFactoriesSource':factory_source,'curationFactoriesUrl':FACTORIES_URL,
                  'curationFactoriesSha256':hashlib.sha256(factory_source.encode()).hexdigest(),
-                 'curationMethod':'frozen last retained adapter revision; creation-owner evidence',
+                 'curationMethod':'current Yearn curator registry; creation-owner evidence',
                  'universe':'selected local catalogue evaluated against adapter membership rules'}
     with closing(connect(database)) as conn:
         fee_id=put_input(conn,'fee-config',{'vaults':configs,'expectedVaults':len(catalog)},'available' if len(configs)==len(catalog) and all(r['availability']=='available' for r in configs) else 'partial',now)
