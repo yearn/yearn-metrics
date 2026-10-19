@@ -13,7 +13,7 @@ from .storage import from_json, to_json
 
 
 def _usd(raw_value: str, decimals: int | None, price: float | None) -> Decimal | None:
-    if price is None:
+    if price is None or decimals is None:
         return None
     return report_amount(raw_value, decimals) * Decimal(str(price))
 
