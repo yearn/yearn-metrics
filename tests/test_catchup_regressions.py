@@ -8,9 +8,10 @@ from eth_abi import encode
 from eth_utils import event_abi_to_log_topic
 from hexbytes import HexBytes
 import pytest
+import requests
 from web3 import Web3
 
-from yearn_data import abis, catchup
+from yearn_data import abis, catchup, envio
 from yearn_data.history_sources import HistoricalSource, inventory_targets, report_scope, write_rows
 from yearn_data.storage import connect, init_db
 
@@ -193,3 +194,54 @@ def test_resume_still_checks_end_hash_fresh_at_completion(db):
     with pytest.raises(ValueError, match='hash changed'):
         catchup.catch_up(db, 'op', 10, 30, client=client)
     assert calls[30] == 3
+
+
+@pytest.mark.parametrize('status', [401, 503])
+def test_envio_catchup_inherits_http_policy_without_advancing_forward_cursor(db, monkeypatch, status):
+    seed(db, version='v3')
+    with db:
+        db.execute('UPDATE vaults SET chain_id=1')
+    envio._set_envio_cursor(db, 1, 'StrategyReported', 7)
+    cursors = [dict(row) for row in db.execute('SELECT * FROM index_state')]
+    calls, sleeps = [], []
+    node = dict(chainId=1, vaultAddress=VAULT, strategy=ASSET, blockNumber=25,
+        blockHash=HASH, blockTimestamp=1000, transactionHash=TX, logIndex=0,
+        gain='12', loss='0', current_debt='100', protocol_fees='1', total_fees='2', total_refunds='0')
+
+    def post(url, **kwargs):
+        payload = kwargs['json']
+        response = requests.Response()
+        response.status_code = 200
+        response.url = url
+        if 'chain_metadata' in payload['query']:
+            data = {'chain_metadata': [{'latest_processed_block': 90}]}
+        else:
+            variables = payload['variables']
+            assert VAULT in variables['addresses']
+            calls.append((variables['lb'], variables['li']))
+            if len(calls) == 1:
+                response.status_code = status
+            data = {'StrategyReported': [node] if calls[-1] < (25, 0) else []}
+        response._content = json.dumps({'data': data}).encode()
+        return response
+
+    monkeypatch.setattr(envio, 'get_envio_graphql_url', lambda: 'https://example.invalid/graphql')
+    monkeypatch.setattr(envio.requests, 'post', post)
+    monkeypatch.setattr(envio.time, 'sleep', sleeps.append)
+    rpc, _ = source()
+    rpc.w3.eth.chain_id = 1
+    client = HistoricalSource('eth', rpc.w3)
+    if status == 401:
+        with pytest.raises(requests.HTTPError):
+            catchup.catch_up(db, 'eth', 10, 30, client=client)
+        assert calls == [(10, -1)] and sleeps == []
+        for table in ['strategy_reports', 'events_raw', 'history_coverage']:
+            assert db.execute(f'SELECT count(*) FROM {table}').fetchone()[0] == 0
+    else:
+        result = catchup.catch_up(db, 'eth', 10, 30, client=client)
+        assert result['vaults'] == result['inserted_rows'] == result['completed_ranges'] == 1
+        assert calls == [(10, -1), (10, -1), (25, 0)] and sleeps == [1]
+        assert db.execute('SELECT count(*) FROM events_raw').fetchone()[0] == 1
+        assert db.execute('SELECT source FROM history_coverage').fetchone()[0] == 'envio'
+    assert db.execute('SELECT active FROM vaults').fetchone()[0] == 0
+    assert [dict(row) for row in db.execute('SELECT * FROM index_state')] == cursors
