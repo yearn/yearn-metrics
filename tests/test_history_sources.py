@@ -140,7 +140,8 @@ def test_envio_finds_both_producer_address_formats(stored_case):
     def gql(query, variables):
         # Hasura's _in filter is case-sensitive; a successful empty response
         # must not hide records stored under the other normal address format.
-        return {'StrategyReported': [node] if stored in variables['addresses'] else []}
+        after = (variables['lb'], variables['li'])
+        return {'StrategyReported': [node] if stored in variables['addresses'] and after < (20, 0) else []}
     source = HistoricalSource('eth', client(1), gql)
     assert list(source.envio_nodes('StrategyReported', 'chainId', 'vaultAddress', emitter.lower(), 20, 20)) == [node]
 
@@ -157,3 +158,20 @@ def test_corrected_address_policy_does_not_reuse_old_empty_coverage(tmp_path):
     old=Scope(1,ADDRESS,'reports',fingerprint(['v1','v3',ASSET.lower(),6]))
     commit_range(conn,old,0,50,source='envio',end_hash=HASH,run_id=None,write=lambda _:0)
     assert list(missing_ranges(conn,report_scope(vault),0,50,100)) == [(0,50)]
+
+
+def test_envio_pagination_follows_short_server_capped_pages():
+    nodes = [dict(chainId=1, vaultAddress=ADDRESS, blockNumber=20, logIndex=i,
+                  blockHash=HASH, blockTimestamp=1000, transactionHash=TX) for i in (1, 2, 3)]
+    calls = []
+
+    def capped(query, variables):
+        calls.append(dict(variables))
+        assert variables['n'] == 1000
+        assert variables['addresses'] == [ADDRESS]
+        remaining = [n for n in nodes if (n['blockNumber'], n['logIndex']) > (variables['lb'], variables['li'])]
+        return {'StrategyReported': remaining[:2]}
+
+    source = HistoricalSource('eth', client(1), capped)
+    assert list(source.envio_nodes('StrategyReported', 'chainId', 'vaultAddress', ADDRESS, 20, 20)) == nodes
+    assert [(c['lb'], c['li']) for c in calls] == [(20, -1), (20, 2), (20, 3)]

@@ -159,7 +159,8 @@ class HistoricalSource:
                     raise HistorySourceError("Envio block evidence mismatch")
                 cursor = position
                 yield node
-            if len(nodes) < 1000:
+            # A short page may be capped by Hasura; only an empty one is final.
+            if not nodes:
                 break
 
     def rpc_logs(self, address, event_abis, lo, hi, topics_tail=()):
