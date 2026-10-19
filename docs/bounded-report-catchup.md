@@ -88,6 +88,12 @@ together. Coverage under obsolete metadata policies is retired in that same
 transaction, so changing back to an earlier value also requires a rescan.
 Raw event conflicts still stop the scan.
 
+Envio imports name vaults and block ranges whose catalog metadata has resolved
+while stored report metadata remains missing. Use those ranges with this command;
+ordinary forward imports and `index-events` replay do not perform reconciliation.
+After repair, rerun pricing, analysis, and export as described in the
+[ingestion guide](historical-envio-ingestion.md#repair-stored-report-metadata).
+
 If a request fails:
 
 1. Read the error.
