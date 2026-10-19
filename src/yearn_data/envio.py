@@ -221,11 +221,10 @@ def _pull_window(
             if address_field and node[address_field].lower() not in selected:
                 raise ValueError("Envio address mismatch")
             cursor = position
+        # A server row cap can make a nonempty page shorter than requested.
         if not page:
             break
         nodes.extend(page)
-        if len(page) < page_limit:
-            break
         last = page[-1]
         block_number, log_index = int(last["blockNumber"]), int(last["logIndex"])
     return nodes
@@ -589,15 +588,17 @@ def _inventory_facts(
             {
                 "source_address": row["source_address"],
                 "asset": row["asset"],
-                "registration_block": int(row["block_number"]),
+                "registration_block": None,
                 "deployment_block": None,
                 "source_kinds": set(),
             },
         )
-        # Factory NewVault is creation evidence; registry and role-manager
-        # membership may occur long after deployment.
-        if row["source_kind"] == "factory" and fact["deployment_block"] is None:
+        # Factory and V2 experimental events create vaults. Endorsement and
+        # role-manager membership can occur long after deployment.
+        if row["source_kind"] in ("factory", "registry_experimental") and fact["deployment_block"] is None:
             fact["deployment_block"] = int(row["block_number"])
+        if row["source_kind"] != "factory" and fact["registration_block"] is None:
+            fact["registration_block"] = int(row["block_number"])
         fact["source_kinds"].add(row["source_kind"])
         if fact["asset"] is None and row["asset"]:
             fact["asset"] = row["asset"]
@@ -661,6 +662,13 @@ def _build_envio_vault_records(
         source_kinds=inventory_source_kinds,
         source_addresses=inventory_source_addresses,
     )
+    # Experimental creation evidence also applies to subsequently endorsed V2
+    # vaults, even when experimental-only vaults are excluded from discovery.
+    creation_inventory = inventory if inventory_source_kinds is None else _inventory_facts(
+        conn, cfg.chain_id, version, max_block=max_block,
+        source_kinds=("factory", "registry_experimental"),
+        source_addresses=inventory_source_addresses,
+    )
     normalized = [Web3.to_checksum_address(address) for address in addresses]
     metadata_targets = [
         address
@@ -675,6 +683,7 @@ def _build_envio_vault_records(
     for address in normalized:
         row = existing.get(address.lower())
         inventory_fact = inventory.get(address.lower())
+        creation_fact = creation_inventory.get(address.lower())
         metadata = metadata_by_address.get(address)
         asset = (
             metadata["asset"]
@@ -713,9 +722,9 @@ def _build_envio_vault_records(
                 api_version=api_version,
                 deployment_block=(
                     row["deployment_block"]
-                    if row
-                    else inventory_fact["deployment_block"]
-                    if inventory_fact
+                    if row and row["deployment_block"] is not None
+                    else creation_fact["deployment_block"]
+                    if creation_fact
                     else None
                 ),
                 management=row["management"] if row else "yearn",
@@ -758,6 +767,7 @@ def _upsert_envio_vaults(conn, vaults: list[VaultRecord]) -> int:
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
         ON CONFLICT(chain_id, address) DO UPDATE SET
             version=excluded.version,
+            deployment_block=COALESCE(vaults.deployment_block, excluded.deployment_block),
             asset=excluded.asset,
             asset_symbol=excluded.asset_symbol,
             asset_decimals=excluded.asset_decimals,

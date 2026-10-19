@@ -284,6 +284,7 @@ def main(argv: list[str] | None = None) -> int:
             count = discover_from_envio(
                 conn,
                 chains,
+                include_retired=True,
                 to_block=args.to_block,
                 progress=progress,
             )
@@ -295,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
                 count = import_reports_from_envio(
                     conn,
                     chains,
+                    include_inactive=True,
                     to_block=args.to_block,
                     progress=progress,
                 )

@@ -649,6 +649,7 @@ def test_inventory_distinguishes_creation_from_registration(tmp_path):
     assert facts[VAULT.lower()]['deployment_block'] is None
     _seed_inventory(conn, source_kind='factory', block=40, log_index=2)
     assert envio._inventory_facts(conn, 1, 'v3')[VAULT.lower()]['deployment_block'] == 40
+    assert envio._inventory_facts(conn, 1, 'v3')[VAULT.lower()]['registration_block'] == 80
 
 
 def test_rpc_only_historical_chains_are_explicitly_selectable_not_default():
@@ -787,7 +788,8 @@ def test_pull_window_matches_both_address_forms(monkeypatch, stored_case):
     node = {**_v3_report_node(), "vaultAddress": address if stored_case == "checksum" else address.lower()}
     def query(_query, variables):
         assert set(variables["addresses"]) == {address, address.lower()}
-        return {"StrategyReported": [node]}
+        after = (variables["lb"], variables["li"])
+        return {"StrategyReported": [node] if after < (100, 7) else []}
     monkeypatch.setattr(envio, "_gql", query)
     assert envio._pull_window("StrategyReported", envio.V3_REPORT_FIELDS, 1, 100, 100,
         address_field="vaultAddress", address_values=[address]) == [node]
@@ -977,3 +979,135 @@ def test_explicit_rpc_path_retains_non_yearn_report_ingestion(tmp_path, monkeypa
     assert cli.main(["index-events", "--chains", "eth", "--to-block", "100"]) == 0
     assert imported == [VAULT]
     assert conn.execute("SELECT COUNT(*) FROM strategy_reports").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("version", ["v2", "v3"])
+@pytest.mark.parametrize("page_size", [100, 1000, 5000])
+def test_forward_import_follows_server_capped_pages(tmp_path, monkeypatch, version, page_size):
+    conn = _db(tmp_path)
+    (_seed_v2_vault if version == "v2" else _seed_vault)(conn)
+    entity = "V2StrategyReported" if version == "v2" else "StrategyReported"
+    node_for = _v2_report_node if version == "v2" else _v3_report_node
+    nodes = [node_for(block=105, log_index=i) for i in (1, 2, 3)]
+    calls = []
+    monkeypatch.setenv("YEARN_ENVIO_PAGE_SIZE", str(page_size))
+    envio._set_envio_cursor(conn, 1, entity, 100)
+
+    def capped_server(query, variables):
+        calls.append(dict(variables))
+        assert variables["addresses"] == [VAULT]
+        remaining = [n for n in nodes if (n["blockNumber"], n["logIndex"]) > (variables["lb"], variables["li"])]
+        return {entity: remaining[:2]}
+
+    monkeypatch.setattr(envio, "_gql", capped_server)
+    assert envio.import_reports_from_envio(conn, ["eth"], versions=[version], to_block=110) == 3
+    assert conn.execute("SELECT COUNT(*) FROM strategy_reports").fetchone()[0] == 3
+    assert [(c["lb"], c["li"], c["n"]) for c in calls] == [
+        (100, -1, page_size), (105, 2, page_size), (105, 3, page_size)]
+    assert envio._get_envio_cursor(conn, 1, entity) == 110
+
+
+def test_invalid_response_after_short_page_keeps_forward_cursor(tmp_path, monkeypatch):
+    conn = _db(tmp_path)
+    _seed_vault(conn)
+    envio._set_envio_cursor(conn, 1, "StrategyReported", 90)
+    node = _v3_report_node()
+    # A repeated short page must still be checked, not accepted as completion.
+    monkeypatch.setattr(envio, "_gql", lambda *args, **kwargs: {"StrategyReported": [node]})
+    with pytest.raises(ValueError, match="pagination or range mismatch"):
+        envio.import_reports_from_envio(conn, ["eth"], versions=["v3"], to_block=110)
+    assert envio._get_envio_cursor(conn, 1, "StrategyReported") == 90
+    assert conn.execute("SELECT COUNT(*) FROM strategy_reports").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("previous_run", [False, True])
+def test_lifetime_run_keeps_retired_vault_reports(tmp_path, monkeypatch, previous_run):
+    from yearn_data import cli
+
+    conn = _db(tmp_path)
+    other = "0x" + "4" * 40
+    conn.execute("""INSERT INTO vaults
+        (chain_id, version, address, asset, asset_decimals, updated_at)
+        VALUES (1, 'v3', ?, ?, 6, 1)""", (other, ASSET))
+    _seed_inventory(conn, block=40)
+    _seed_inventory(conn, vault=other, block=40, log_index=2)
+    monkeypatch.setenv("YEARN_DATA_EVENT_SOURCE", "envio")
+    monkeypatch.setattr(cli, "open_db", lambda _path: conn)
+    monkeypatch.setattr(envio, "_import_v3_vault_inventory", lambda *args: 0)
+    monkeypatch.setattr(envio, "_import_v2_vault_inventory", lambda *args: 0)
+    monkeypatch.setattr(envio, "vault_metadata_from_kong", lambda *args: {})
+    monkeypatch.setattr(cli, "price_unpriced_reports", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(cli, "_run_analysis", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(cli, "export_analysis", lambda *args, **kwargs: [])
+    nodes = [_v3_report_node(block=90, log_index=1), _v3_report_node(block=105, log_index=2)]
+
+    def reports(entity, fields, chain_id, lo, hi, **scope):
+        return [n for n in nodes if entity == "StrategyReported"
+                and lo <= n["blockNumber"] <= hi and VAULT in scope["address_values"]]
+
+    monkeypatch.setattr(envio, "_pull_window", reports)
+    command = ["--db", str(tmp_path / "unused.sqlite"), "run", "lifetime-yield", "--chains", "eth", "--to-block"]
+    if previous_run:
+        assert cli.main(command + ["100"]) == 0
+        assert conn.execute("SELECT COUNT(*) FROM strategy_reports").fetchone()[0] == 1
+    _seed_inventory(conn, action="removed", block=110, log_index=3)
+    assert cli.main(command + ["120"]) == 0
+    assert [r[0] for r in conn.execute("SELECT block_number FROM strategy_reports ORDER BY block_number")] == [90, 105]
+    assert conn.execute("SELECT active FROM vaults WHERE address=?", (VAULT,)).fetchone()[0] == 0
+    assert envio._get_envio_cursor(conn, 1, "StrategyReported") == 120
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_factory_creation_fills_missing_deployment(tmp_path, monkeypatch, cached):
+    conn = _db(tmp_path)
+    if cached:
+        _seed_vault(conn)
+        conn.execute("UPDATE vaults SET deployment_block=NULL")
+        conn.commit()
+    monkeypatch.setattr(envio, "vault_metadata_from_kong", lambda *args: {})
+    _seed_inventory(conn, source_kind="factory", block=40)
+    _seed_inventory(conn, block=80, log_index=2)
+    records = envio._build_envio_vault_records(conn, "eth", "v3", [VAULT])
+    envio._upsert_envio_vaults(conn, records)
+    assert conn.execute("SELECT deployment_block FROM vaults").fetchone()[0] == 40
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_endorsed_v2_uses_experimental_creation_not_registration(tmp_path, monkeypatch, cached):
+    conn = _db(tmp_path)
+    if cached:
+        _seed_v2_vault(conn)
+        conn.execute("UPDATE vaults SET deployment_block=NULL")
+        conn.commit()
+    monkeypatch.setattr(envio, "vault_metadata_from_kong", lambda *args: {})
+    _seed_inventory(conn, version="v2", source_kind="registry", source_address=V2_ETH_REGISTRIES[0], block=80)
+    _seed_inventory(conn, version="v2", source_kind="registry_experimental",
+                    source_address=V2_ETH_REGISTRIES[0], block=40, log_index=2)
+    _seed_inventory(conn, version="v2", source_kind="registry_experimental",
+                    source_address="0x" + "9" * 40, block=20, log_index=3)
+    # Experimental-only discovery stays disabled, but creation evidence is usable
+    # for a vault that was subsequently endorsed by a configured registry.
+    records = envio._build_envio_vault_records(
+        conn, "eth", "v2", [VAULT], inventory_source_kinds=("registry", "registry2"),
+        inventory_source_addresses=V2_ETH_REGISTRIES, max_block=100)
+    envio._upsert_envio_vaults(conn, records)
+    assert conn.execute("SELECT deployment_block FROM vaults").fetchone()[0] == 40
+    # A historical discovery before creation cannot import future evidence.
+    conn.execute("UPDATE vaults SET deployment_block=NULL")
+    records = envio._build_envio_vault_records(
+        conn, "eth", "v2", [VAULT], inventory_source_kinds=("registry", "registry2"),
+        inventory_source_addresses=V2_ETH_REGISTRIES, max_block=30)
+    envio._upsert_envio_vaults(conn, records)
+    assert conn.execute("SELECT deployment_block FROM vaults").fetchone()[0] is None
+
+
+def test_known_deployment_is_preserved_on_metadata_refresh(tmp_path):
+    from dataclasses import replace
+
+    conn = _db(tmp_path)
+    _seed_vault(conn)
+    _seed_inventory(conn, source_kind="factory", block=40)
+    records = envio._build_envio_vault_records(conn, "eth", "v3", [VAULT])
+    assert records[0].deployment_block == 42
+    envio._upsert_envio_vaults(conn, [replace(records[0], deployment_block=40)])
+    assert conn.execute("SELECT deployment_block FROM vaults").fetchone()[0] == 42

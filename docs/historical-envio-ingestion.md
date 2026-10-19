@@ -63,6 +63,9 @@ and removals.
 Use `discover --include-experimental-v2` to include experimental V2 registrations.
 
 A registration event does not prove when a vault was deployed.
+Factory creation and V2 experimental-vault creation events can fill a missing
+deployment block, including for an already cached or subsequently endorsed vault.
+Registry endorsement and role-manager membership alone leave deployment unknown.
 The importer keeps reports that occurred before registration.
 It does not assume token decimals when asset details are missing.
 Inventory vaults absent from Kong are retained with nullable metadata. Progress
@@ -71,6 +74,10 @@ still be imported; missing decimals and the corresponding valuations stay
 unknown. Refreshing catalog metadata does not rewrite previously stored reports.
 
 Earnings analysis can use stored reports from inactive vaults.
+`run lifetime-yield` discovers retired vaults and includes their reports, so a
+vault removed between runs still contributes its final harvests. Retired vaults
+remain inactive. The separate discovery and report commands keep their explicit
+`--include-retired` and `--include-inactive` controls.
 
 ## Repeat or resume an import
 
@@ -96,5 +103,8 @@ The importer stops if a response has any of these problems:
 
 An invalid response is not treated as proof that a range has no events.
 Address filters accept both lowercase and checksum address forms.
+Pagination continues until an empty page. A nonempty short page can reflect a
+server response cap rather than the end of the range; it does not complete the
+window or advance its forward cursor on its own.
 
 Run pricing, analysis, and export as separate commands after the import.
