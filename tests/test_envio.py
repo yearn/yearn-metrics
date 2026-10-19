@@ -990,6 +990,7 @@ def test_forward_import_follows_server_capped_pages(tmp_path, monkeypatch, versi
     calls = []
     monkeypatch.setenv("YEARN_ENVIO_PAGE_SIZE", str(page_size))
     envio._set_envio_cursor(conn, 1, entity, 100)
+    envio.set_index_state(conn, 1, VAULT.lower(), envio._cursor_event(entity), 100)
 
     def capped_server(query, variables):
         calls.append(dict(variables))

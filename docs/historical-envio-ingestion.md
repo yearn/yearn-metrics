@@ -90,13 +90,17 @@ An import for a specific range leaves the normal forward cursor unchanged.
 A cursor is the saved position for later imports.
 
 Imports without a specific range use one forward cursor per chain and event entity.
+They also save completed coverage per vault and event entity. A newly discovered
+vault automatically catches up from block zero, then joins ordinary forward
+imports. Registration is not used as a deployment bound. Catch-up progress names
+each affected address, and completed windows survive retries.
+An existing database with only shared cursors replays each vault's history once
+to establish this coverage; existing report identities remain deduplicated.
 Forward `index-events` imports always include retained inactive Yearn vaults,
 matching `run lifetime-yield`. Active-only imports require an explicit block
 range and leave the shared forward cursor unchanged.
-If an older active-only run omitted reports, recover them with a bounded
-`--include-inactive` replay; changing the selection does not repair old cursors.
-That cursor does not prove that newly added vaults have complete history.
-Import an earlier block range when you add a vault that needs older reports.
+Use a bounded `--include-inactive` replay for explicit historical repairs.
+Bounded replay changes neither shared nor per-vault forward coverage.
 
 ## Handle invalid responses
 

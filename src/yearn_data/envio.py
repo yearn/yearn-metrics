@@ -356,12 +356,28 @@ def _import_report_entity(
 ) -> int:
     cfg = CHAINS[chain]
     cursor = _get_envio_cursor(conn, cfg.chain_id, entity)
-    lo = from_block if from_block is not None else cursor + 1 if cursor is not None else 0
+    # A chain cursor cannot prove coverage for a vault discovered later. Track
+    # each vault separately; legacy databases without this evidence replay once.
+    if from_block is None:
+        coverage = {row["target"]: int(row["last_block"]) for row in conn.execute(
+            "SELECT target, last_block FROM index_state WHERE chain_id=? AND event_name=?",
+            (cfg.chain_id, _cursor_event(entity)),
+        )}
+        starts = {address: coverage[address] + 1 if address in coverage else 0 for address in assets}
+    else:
+        starts = {address: from_block for address in assets}
+    lo = min(starts.values())
     if lo > hi:
         return 0
+    if from_block is None and cursor is not None and progress:
+        for address, start in starts.items():
+            if start <= min(cursor, hi):
+                progress(f"{chain} {version}: catching up {address} from block {start}; "
+                         "the shared cursor does not prove this vault's history")
 
     inserted = 0
     for window_lo, window_hi in _windows(lo, hi, _window_blocks()):
+        window_assets = {address: value for address, value in assets.items() if starts[address] <= window_hi}
         nodes = _pull_window(
             entity,
             fields,
@@ -369,10 +385,10 @@ def _import_report_entity(
             window_lo,
             window_hi,
             address_field="vaultAddress",
-            address_values=[Web3.to_checksum_address(address) for address in assets],
+            address_values=[Web3.to_checksum_address(address) for address in window_assets],
         )
         for node in nodes:
-            vault, (asset, decimals) = _required_vault_asset(node, assets, entity)
+            vault, (asset, decimals) = _required_vault_asset(node, window_assets, entity)
             # An observed report is evidence of existence, even when legacy
             # metadata incorrectly labels a later registration as deployment.
             row = normalize_strategy_report(
@@ -388,7 +404,17 @@ def _import_report_entity(
             insert_strategy_report(conn, row)
             inserted += 1
         if from_block is None:
-            _set_envio_cursor(conn, cfg.chain_id, entity, window_hi)
+            conn.executemany(
+                """
+                INSERT INTO index_state (chain_id, target, event_name, last_block, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(chain_id, target, event_name) DO UPDATE SET
+                    last_block=excluded.last_block, updated_at=excluded.updated_at
+                """,
+                [(cfg.chain_id, address, _cursor_event(entity), window_hi, int(time.time()))
+                 for address in window_assets],
+            )
+            _set_envio_cursor(conn, cfg.chain_id, entity, max(cursor if cursor is not None else 0, window_hi))
         conn.commit()
         if progress and nodes:
             progress(f"{chain} {version}: {entity} pulled through block {window_hi} (+{len(nodes)} reports)")
