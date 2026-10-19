@@ -421,6 +421,37 @@ def _import_report_entity(
     return inserted
 
 
+def _report_metadata_repairs(
+    conn,
+    chain: str,
+    assets: dict[str, tuple[str | None, int | None]],
+    versions: set[str],
+    progress: ProgressCallback,
+) -> None:
+    """Name stored observations needing the bounded catch-up reconciliation path."""
+    rows = conn.execute(
+        """
+        SELECT vault_address, version, MIN(block_number) AS first_block,
+               MAX(block_number) AS last_block, COUNT(*) AS reports
+        FROM strategy_reports
+        WHERE chain_id=? AND (asset IS NULL OR asset_decimals IS NULL)
+        GROUP BY vault_address, version
+        """,
+        (CHAINS[chain].chain_id,),
+    )
+    for row in rows:
+        metadata = assets.get(row["vault_address"].lower())
+        if row["version"] not in versions or metadata is None or None in metadata:
+            continue
+        progress(
+            f"{chain} {row['version']}: {row['vault_address']} has {row['reports']} stored reports "
+            f"with unresolved metadata in blocks {row['first_block']}-{row['last_block']}; "
+            "catalog metadata is now available. Use bounded catch-up to reconcile report metadata, "
+            "then rerun pricing and analysis. index-events replay does not repair existing metadata; "
+            "see docs/historical-envio-ingestion.md"
+        )
+
+
 def import_reports_from_envio(
     conn,
     chains: list[str],
@@ -483,6 +514,8 @@ def import_reports_from_envio(
                 progress,
                 from_block,
             )
+        if progress:
+            _report_metadata_repairs(conn, chain, assets, requested_versions, progress)
     conn.commit()
     return total
 
@@ -724,9 +757,15 @@ def _build_envio_vault_records(
             else None
         )
         asset_symbol = metadata["asset_symbol"] if metadata else row["asset_symbol"] if row else None
+        if asset_symbol is None and row and row["asset"] and asset and row["asset"].lower() == asset.lower():
+            asset_symbol = row["asset_symbol"]
         asset_decimals = metadata["asset_decimals"] if metadata else row["asset_decimals"] if row else None
-        name = metadata["name"] if metadata else row["name"] if row else None
-        api_version = metadata["api_version"] if metadata else row["api_version"] if row else None
+        name = metadata["name"] if metadata and metadata["name"] is not None else row["name"] if row else None
+        api_version = (
+            metadata["api_version"]
+            if metadata and metadata["api_version"] is not None
+            else row["api_version"] if row else None
+        )
         if progress and (asset is None or asset_decimals is None):
             progress(f"{chain} {version}: retaining {address} with unresolved asset metadata; missing values remain null")
 
@@ -798,10 +837,11 @@ def _upsert_envio_vaults(conn, vaults: list[VaultRecord]) -> int:
             version=excluded.version,
             deployment_block=COALESCE(vaults.deployment_block, excluded.deployment_block),
             asset=excluded.asset,
-            asset_symbol=excluded.asset_symbol,
+            asset_symbol=COALESCE(excluded.asset_symbol,
+                CASE WHEN lower(excluded.asset)=lower(vaults.asset) THEN vaults.asset_symbol END),
             asset_decimals=excluded.asset_decimals,
-            name=excluded.name,
-            api_version=excluded.api_version,
+            name=COALESCE(excluded.name, vaults.name),
+            api_version=COALESCE(excluded.api_version, vaults.api_version),
             updated_at=excluded.updated_at
         """,
         rows,

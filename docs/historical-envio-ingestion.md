@@ -72,12 +72,41 @@ Inventory vaults absent from Kong are retained with nullable metadata. Progress
 identifies each address with unresolved asset metadata. Their raw reports can
 still be imported; missing decimals and the corresponding valuations stay
 unknown. Refreshing catalog metadata does not rewrite previously stored reports.
+When Kong omits an optional name, asset symbol, or API version, discovery keeps
+the existing non-null cached value. A supplied non-null value can refresh it.
 
 Earnings analysis can use stored reports from inactive vaults.
 `run lifetime-yield` discovers retired vaults and includes their reports, so a
 vault removed between runs still contributes its final harvests. Retired vaults
 remain inactive. The separate discovery and report commands keep their explicit
 `--include-retired` and bounded-import `--include-inactive` controls.
+
+## Repair stored report metadata
+
+When catalog metadata resolves but stored reports still lack an asset or decimal
+scale, report imports name each affected vault and its stored block range.
+Nonzero USD amounts stay unknown until that metadata is reconciled. Repeating
+`index-events`, including a bounded replay, does not update existing report rows.
+
+Use the explicit `catch-up` command provided by the bounded report catch-up layer
+([PR #23](https://github.com/yearn/yearn-metrics/pull/23)). A checkout containing
+only this ingestion layer does not yet provide that command. Once it is available,
+set `FROM_BLOCK` and `TO_BLOCK` to cover the ranges named in the diagnostics:
+
+```bash
+yearn-data --db data/yearn.sqlite catch-up --chain eth \
+  --from-block "$FROM_BLOCK" --to-block "$TO_BLOCK"
+yearn-data --db data/yearn.sqlite price --chains eth
+yearn-data --db data/yearn.sqlite analyze lifetime-yield
+yearn-data --db data/yearn.sqlite export lifetime-yield --out exports
+```
+
+Configure the selected chain's RPC endpoint as well as Envio. Catch-up checks
+block evidence through RPC even when reports come from Envio. It reconciles
+asset/decimal metadata only when the raw report evidence agrees, commits metadata
+and coverage together, and stops on conflicting raw amounts or block evidence.
+Report identities and raw amounts are preserved. The commands above are an
+operator-run repair; ordinary discovery and forward imports do not run it.
 
 ## Repeat or resume an import
 
