@@ -59,6 +59,11 @@ It adds newly found vaults to the stored vault selection.
 Use `--include-experimental-v2` to include experimental V2 registrations in this search.
 Previously stored experimental vaults remain available on later runs.
 
+Discovery also restores cached non-Yearn classifications when the selected
+registry or role-manager facts prove membership. Factory creation alone does not
+qualify. Registration does not supply a deployment block; existing deployment
+evidence and other cached metadata are preserved.
+
 For V3 vaults, the stored active flag follows the latest recorded role-manager
 action, including actions after the requested window.
 

@@ -149,3 +149,23 @@ def test_existing_reports_deduplicate_and_conflicts_leave_no_coverage(db):
         catchup.catch_up(db, "op", 10, 30, client=client)
     assert db.execute("SELECT COUNT(*) FROM history_coverage").fetchone()[0] == 0
     assert db.execute("SELECT gain_raw FROM strategy_reports").fetchone()[0] == '13'
+
+
+@pytest.mark.parametrize('deployment', [None, 5])
+def test_discovery_promotes_cached_member_without_inventing_deployment(db, deployment):
+    seed(db, NEW, management='non_yearn')
+    unrelated = '0x' + '44' * 20
+    seed(db, unrelated, management='non_yearn')
+    with db:
+        db.execute("UPDATE vaults SET deployment_block=?,protocol='cached protocol' WHERE address=?", (deployment, NEW))
+    before = dict(db.execute('SELECT * FROM vaults WHERE address=?', (unrelated,)).fetchone())
+    client = Source()
+    result = catchup.catch_up(db, 'op', 10, 30, discover=True, client=client)
+    recovered = dict(db.execute('SELECT * FROM vaults WHERE address=?', (NEW,)).fetchone())
+    assert result['vaults'] == 2
+    assert recovered['management'] == 'yearn'
+    assert recovered['deployment_block'] == deployment
+    assert recovered['protocol'] == 'cached protocol'
+    assert dict(db.execute('SELECT * FROM vaults WHERE address=?', (unrelated,)).fetchone()) == before
+    assert db.execute('SELECT block_number FROM strategy_reports WHERE vault_address=?', (NEW,)).fetchone()[0] == 25
+    assert {address for address, _, _ in client.calls} == {VAULT, NEW}

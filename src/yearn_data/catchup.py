@@ -63,6 +63,7 @@ def materialize_inventory(conn, facts):
             arguments = json.loads(fact["decoded_json"])
             conn.execute("""INSERT INTO vaults(chain_id,version,address,source_address,asset,api_version,active,updated_at)
                 VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(chain_id,address) DO UPDATE SET
+                management='yearn',
                 active=CASE WHEN excluded.version='v2' THEN vaults.active ELSE excluded.active END,
                 asset=coalesce(vaults.asset,excluded.asset),
                 api_version=coalesce(vaults.api_version,excluded.api_version),updated_at=excluded.updated_at""",

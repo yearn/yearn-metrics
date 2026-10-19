@@ -245,3 +245,43 @@ def test_envio_catchup_inherits_http_policy_without_advancing_forward_cursor(db,
         assert db.execute('SELECT source FROM history_coverage').fetchone()[0] == 'envio'
     assert db.execute('SELECT active FROM vaults').fetchone()[0] == 0
     assert [dict(row) for row in db.execute('SELECT * FROM index_state')] == cursors
+
+
+@pytest.mark.parametrize('membership', ['trusted', 'foreign', 'future'])
+def test_bounded_discovery_recovers_only_selected_trusted_classifications(db, membership):
+    target = next(t for t in inventory_targets('eth') if t.version == 'v3' and t.action == 'added')
+    seed(db, version='v3')
+    with db:
+        db.execute("UPDATE vaults SET chain_id=1,management='non_yearn',active=1,protocol='cached protocol'")
+        # Keep a retained Yearn vault so excluded discoveries still have a valid selection.
+        db.execute("""INSERT INTO vaults(chain_id,version,address,asset,asset_decimals,
+            api_version,management,active,updated_at) VALUES(1,'v3',?,?,6,'3.0.4','yearn',0,0)""",
+            ('0x'+'45'*20, ASSET))
+        rows = [dict(chain_id=1, version='v3', vault_address=VAULT, source_kind='role_manager',
+            action=action, source_address=(target.address if membership != 'foreign' else '0x'+'99'*20),
+            asset=ASSET, tx_hash='0x'+f'{index+1:02x}'*32, log_index=0,
+            block_number=number, block_timestamp=1000, decoded_json=json.dumps(dict(vault=VAULT)))
+            for index, (action, number) in enumerate([('added', 20 if membership != 'future' else 40), ('removed', 80)])]
+        write_rows(db, 'vault_inventory_events', rows)
+    before = dict(db.execute('SELECT * FROM vaults WHERE address=?', (VAULT,)).fetchone())
+    client, _ = source([report_log('v3')])
+    client.chain = 'eth'
+    client.chain_id = client.w3.eth.chain_id = 1
+    client.inventory = lambda *args: []
+    original_reports = client.reports
+    requested = []
+    def reports(vault, *args):
+        requested.append(vault['address'])
+        return original_reports(vault, *args) if vault['address'] == VAULT else []
+    client.reports = reports
+    result = catchup.catch_up(db, 'eth', 10, 30, source='rpc', discover=True, client=client)
+    recovered = dict(db.execute('SELECT * FROM vaults WHERE address=?', (VAULT,)).fetchone())
+    if membership == 'trusted':
+        assert result['vaults'] == 2 and VAULT in requested
+        assert recovered['management'] == 'yearn' and recovered['active'] == 0
+        assert recovered['deployment_block'] is None
+        assert recovered['protocol'] == 'cached protocol'
+        assert db.execute('SELECT block_number FROM strategy_reports WHERE vault_address=?', (VAULT,)).fetchone()[0] == 25
+    else:
+        assert result['vaults'] == 1 and VAULT not in requested
+        assert recovered == before
