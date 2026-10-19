@@ -857,6 +857,8 @@ def _set_active_membership(
     addresses: set[str],
     max_block: int,
     source_addresses: tuple[str, ...],
+    *,
+    known_members: set[str] | None = None,
 ) -> None:
     """Apply membership without overwriting newer cached membership evidence."""
     address_params = sorted(address.lower() for address in addresses)
@@ -864,6 +866,28 @@ def _set_active_membership(
     source_placeholders = ",".join("?" for _ in source_addresses)
     source_kinds = ("role_manager",) if version == "v3" else ("registry", "registry2", "registry_experimental")
     kind_placeholders = ",".join("?" for _ in source_kinds)
+    member_params = sorted(address.lower() for address in (known_members if known_members is not None else addresses))
+    member_placeholders = ",".join("?" for _ in member_params) or "NULL"
+    # These addresses were selected from the configured membership sources.
+    # A factory's old non-Yearn label and active flag are not membership facts.
+    conn.execute(
+        f"""
+        UPDATE vaults
+        SET management='yearn', active=COALESCE((
+            SELECT CASE WHEN e.action='removed' THEN 0 ELSE 1 END
+            FROM vault_inventory_events e
+            WHERE e.chain_id=vaults.chain_id AND e.version=vaults.version
+              AND lower(e.vault_address)=lower(vaults.address)
+              AND lower(e.source_address) IN ({source_placeholders})
+              AND e.source_kind IN ({kind_placeholders})
+            ORDER BY e.block_number DESC,e.log_index DESC LIMIT 1
+        ), active)
+        WHERE chain_id=? AND version=? AND management<>'yearn'
+          AND lower(address) IN ({member_placeholders})
+        """,
+        (*(address.lower() for address in source_addresses), *source_kinds,
+         chain_id, version, *member_params),
+    )
     conn.execute(
         f"""
         UPDATE vaults
@@ -956,7 +980,8 @@ def discover_from_envio(
         )
         total += _upsert_envio_vaults(conn, records)
         if role_manager is not None:
-            _set_active_membership(conn, cfg.chain_id, "v3", active_v3, hi, (role_manager,))
+            _set_active_membership(conn, cfg.chain_id, "v3", active_v3, hi, (role_manager,),
+                                   known_members=v3_addresses)
         if has_v2_source:
             _set_active_membership(conn, cfg.chain_id, "v2", v2_addresses, hi, V2_REGISTRIES_BY_CHAIN[cfg.chain_id])
     return total

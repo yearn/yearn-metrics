@@ -57,6 +57,11 @@ Select the upper block limit before you run them.
 
 Discovery keeps vaults that previously belonged to Yearn.
 It does not mark retired vaults as active again.
+Membership from configured Yearn registries and role managers overrides a cached
+non-Yearn classification. This includes retired members when requested. Factory
+creation alone, events from other sources, and membership after a bounded
+discovery range do not reclassify a vault. Promotion uses the latest recorded
+trusted membership for its active flag, including cached events after that range.
 When newer membership events are already cached, discovery at an earlier block
 preserves the existing active flag for those vaults, including later additions
 and removals.
