@@ -143,15 +143,17 @@ def _gql(
             response = requests.post(get_envio_graphql_url(), json=payload, timeout=timeout)
             if response.status_code == 429 or response.status_code >= 500:
                 last_error = RuntimeError(f"envio HTTP {response.status_code}")
-                time.sleep(2**attempt)
-                continue
-            response.raise_for_status()
-            body = response.json()
-            if "errors" in body:
-                raise RuntimeError(f"envio GraphQL errors: {body['errors']}")
-            return body["data"]
+            else:
+                response.raise_for_status()
+                body = response.json()
+                if "errors" in body:
+                    raise RuntimeError(f"envio GraphQL errors: {body['errors']}")
+                return body["data"]
+        except requests.HTTPError:
+            raise
         except requests.RequestException as exc:
             last_error = exc
+        if attempt < 4:
             time.sleep(2**attempt)
     raise RuntimeError("envio GraphQL request failed after retries") from last_error
 
@@ -414,6 +416,13 @@ def import_reports_from_envio(
         cfg = CHAINS[chain]
         hi = _resolve_to_block(chain, to_block)
         assets = _vault_asset_map(conn, cfg.chain_id, include_inactive)
+        if from_block is None and not include_inactive:
+            retained = _vault_asset_map(conn, cfg.chain_id, include_inactive=True)
+            if assets.keys() != retained.keys():
+                raise ValueError(
+                    "active-only Envio imports require --from-block and --to-block; "
+                    "forward imports must include inactive vaults"
+                )
         if vault_addresses is not None:
             selected = {address.lower() for address in vault_addresses}
             missing = selected - assets.keys()
@@ -450,9 +459,6 @@ def import_reports_from_envio(
             )
     conn.commit()
     return total
-
-
-V2_FEE_TRANSFER_TX_BATCH_SIZE = 500
 
 
 def _import_vault_inventory_entities(
@@ -588,7 +594,6 @@ def _inventory_facts(
             {
                 "source_address": row["source_address"],
                 "asset": row["asset"],
-                "registration_block": None,
                 "deployment_block": None,
                 "source_kinds": set(),
             },
@@ -597,8 +602,6 @@ def _inventory_facts(
         # role-manager membership can occur long after deployment.
         if row["source_kind"] in ("factory", "registry_experimental") and fact["deployment_block"] is None:
             fact["deployment_block"] = int(row["block_number"])
-        if row["source_kind"] != "factory" and fact["registration_block"] is None:
-            fact["registration_block"] = int(row["block_number"])
         fact["source_kinds"].add(row["source_kind"])
         if fact["asset"] is None and row["asset"]:
             fact["asset"] = row["asset"]
@@ -689,7 +692,7 @@ def _build_envio_vault_records(
             metadata["asset"]
             if metadata
             else row["asset"]
-            if row
+            if row and row["asset"] is not None
             else inventory_fact["asset"]
             if inventory_fact
             else None

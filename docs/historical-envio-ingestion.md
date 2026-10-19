@@ -21,7 +21,7 @@ YEARN_DATA_EVENT_SOURCE=rpc yearn-data index-events --chains eth
 
 Continue running both RPC commands to keep the non-Yearn reporting dimension
 current. Switching report imports to Envio does not refresh those rows.
-`discover --find-deployment` also requires RPC.
+`discover --find-deployment` and `run lifetime-yield --find-deployment` require RPC.
 `discover --to-block` requires Envio; unsupported flag/source combinations fail.
 
 The default chains are Ethereum, Polygon, Base, Arbitrum, and Katana.
@@ -77,7 +77,7 @@ Earnings analysis can use stored reports from inactive vaults.
 `run lifetime-yield` discovers retired vaults and includes their reports, so a
 vault removed between runs still contributes its final harvests. Retired vaults
 remain inactive. The separate discovery and report commands keep their explicit
-`--include-retired` and `--include-inactive` controls.
+`--include-retired` and bounded-import `--include-inactive` controls.
 
 ## Repeat or resume an import
 
@@ -90,6 +90,11 @@ An import for a specific range leaves the normal forward cursor unchanged.
 A cursor is the saved position for later imports.
 
 Imports without a specific range use one forward cursor per chain and event entity.
+Forward `index-events` imports always include retained inactive Yearn vaults,
+matching `run lifetime-yield`. Active-only imports require an explicit block
+range and leave the shared forward cursor unchanged.
+If an older active-only run omitted reports, recover them with a bounded
+`--include-inactive` replay; changing the selection does not repair old cursors.
 That cursor does not prove that newly added vaults have complete history.
 Import an earlier block range when you add a vault that needs older reports.
 
@@ -103,6 +108,8 @@ The importer stops if a response has any of these problems:
 
 An invalid response is not treated as proof that a range has no events.
 Address filters accept both lowercase and checksum address forms.
+Permanent HTTP errors fail immediately. HTTP 429, server errors, and connection
+failures have at most five attempts, with no sleep after the final attempt.
 Pagination continues until an empty page. A nonempty short page can reflect a
 server response cap rather than the end of the range; it does not complete the
 window or advance its forward cursor on its own.

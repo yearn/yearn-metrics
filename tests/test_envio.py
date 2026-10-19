@@ -645,11 +645,9 @@ def test_inventory_distinguishes_creation_from_registration(tmp_path):
     conn = _db(tmp_path)
     _seed_inventory(conn, source_kind='registry', block=80)
     facts = envio._inventory_facts(conn, 1, 'v3')
-    assert facts[VAULT.lower()]['registration_block'] == 80
     assert facts[VAULT.lower()]['deployment_block'] is None
     _seed_inventory(conn, source_kind='factory', block=40, log_index=2)
     assert envio._inventory_facts(conn, 1, 'v3')[VAULT.lower()]['deployment_block'] == 40
-    assert envio._inventory_facts(conn, 1, 'v3')[VAULT.lower()]['registration_block'] == 80
 
 
 def test_rpc_only_historical_chains_are_explicitly_selectable_not_default():

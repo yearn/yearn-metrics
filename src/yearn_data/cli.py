@@ -81,7 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
     index_p.add_argument("--chains", nargs="+", help="Chains to index")
     index_p.add_argument("--versions", nargs="+", choices=["v2", "v3"], help="Vault versions to index")
     index_p.add_argument("--to-block", type=int, help="Stop block for every selected chain")
-    index_p.add_argument("--include-inactive", action="store_true", help="Include historical Yearn vaults in Envio report import")
+    index_p.add_argument("--include-inactive", action="store_true", help="Include inactive vaults in bounded imports; forward imports always include them")
     index_p.add_argument("--from-block", type=int, help="Bounded Envio historical import; requires --to-block and preserves forward cursors")
     index_p.add_argument("--vaults", nargs="+", help="Limit bounded Envio historical import to these addresses")
     index_p.add_argument("--chunk-size", type=int, default=50_000)
@@ -189,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
                 versions=args.versions,
                 to_block=args.to_block,
                 progress=progress,
-                include_inactive=args.include_inactive,
+                include_inactive=args.include_inactive or args.from_block is None,
                 from_block=args.from_block,
                 vault_addresses=args.vaults,
             )
@@ -281,6 +281,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run":
         chains = _chains(args.chains)
         if args.job == "lifetime-yield" and event_source == "envio":
+            if args.find_deployment:
+                raise ValueError("--find-deployment requires YEARN_DATA_EVENT_SOURCE=rpc")
             count = discover_from_envio(
                 conn,
                 chains,
