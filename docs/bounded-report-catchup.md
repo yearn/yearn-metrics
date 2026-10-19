@@ -59,6 +59,9 @@ It adds newly found vaults to the stored vault selection.
 Use `--include-experimental-v2` to include experimental V2 registrations in this search.
 Previously stored experimental vaults remain available on later runs.
 
+For V3 vaults, the stored active flag follows the latest recorded role-manager
+action, including actions after the requested window.
+
 This search does not prove that every historical vault has been found.
 A newly found vault can have reports before `FROM_BLOCK`.
 Fetch an earlier range if you need those reports.
@@ -77,6 +80,13 @@ Completed ranges can be reused, even if you change `--chunk-size`.
 The command checks saved block hashes before it reuses coverage.
 Matching event identities are not added again.
 Conflicting amounts or hashes cause an error.
+
+Correcting a vault's asset or decimals requires a new coverage scan. When the
+underlying report event matches, catch-up reconciles those two report metadata
+fields with the selected vault and commits the corrected report and coverage
+together. Coverage under obsolete metadata policies is retired in that same
+transaction, so changing back to an earlier value also requires a rescan.
+Raw event conflicts still stop the scan.
 
 If a request fails:
 

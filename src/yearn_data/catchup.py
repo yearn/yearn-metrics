@@ -49,12 +49,17 @@ def materialize_inventory(conn, facts):
             if old and (old["version"] != fact["version"] or (old["asset"] and fact["asset"] and old["asset"].lower() != fact["asset"].lower())):
                 raise ValueError("inventory conflicts with cached vault identity")
             active = fact["active"]
-            if old and fact["version"] == "v3" and conn.execute(
-                """SELECT 1 FROM vault_inventory_events WHERE chain_id=? AND lower(vault_address)=?
-                AND lower(source_address)=? AND source_kind='role_manager' AND block_number>? LIMIT 1""",
-                (fact["chain_id"], fact["vault_address"].lower(), fact["source_address"].lower(), fact["as_of_block"]),
-            ).fetchone():
-                active = old["active"]
+            if fact["version"] == "v3":
+                # Selection is bounded, but the shared vault row reflects the
+                # latest recorded lifecycle, including facts beyond this window.
+                latest = conn.execute(
+                    """SELECT action FROM vault_inventory_events WHERE chain_id=? AND lower(vault_address)=?
+                    AND lower(source_address)=? AND source_kind='role_manager'
+                    ORDER BY block_number DESC,log_index DESC LIMIT 1""",
+                    (fact["chain_id"], fact["vault_address"].lower(), fact["source_address"].lower()),
+                ).fetchone()
+                if latest:
+                    active = int(latest["action"] == "added")
             arguments = json.loads(fact["decoded_json"])
             conn.execute("""INSERT INTO vaults(chain_id,version,address,source_address,asset,api_version,active,updated_at)
                 VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(chain_id,address) DO UPDATE SET
@@ -115,7 +120,9 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
                    completed_ranges=0, inserted_rows=0, vaults=0,
                    discovery="bounded" if discover else "stored inventory")
 
-    def acquire(scope, fetch, table, selected_source):
+    verified_coverage = {}
+
+    def acquire(scope, fetch, table, selected_source, report_metadata=None):
         # Verify only reused coverage relevant to this request, not old unrelated
         # scans. New range rows and their coverage commit in one transaction.
         for number, block_hash in conn.execute(
@@ -124,14 +131,29 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
                AND to_block>=? AND from_block<=?""",
             (*scope.key, from_block, to_block),
         ):
-            client.verify_pin(dict(number=number, hash=block_hash))
+            key = (chain_id, number)
+            if key not in verified_coverage:
+                client.verify_pin(dict(number=number, hash=block_hash))
+                verified_coverage[key] = block_hash.lower()
+            elif verified_coverage[key] != block_hash.lower():
+                raise ValueError("conflicting saved block hashes")
         for lo, hi in list(missing_ranges(conn, scope, from_block, to_block, chunk_size)):
             rows = fetch(lo, hi)
             end_hash = _hex(client.block(hi)["hash"])
             client.verify_pin(dict(number=hi, hash=end_hash))
+
+            def persist(db):
+                count = write_rows(db, table, rows, report_metadata=report_metadata)
+                if report_metadata is not None:
+                    # Reconciliation changes shared report rows. An earlier
+                    # metadata policy must not skip replay if that value returns.
+                    db.execute("""DELETE FROM history_coverage WHERE chain_id=? AND target=?
+                        AND family=? AND policy<>?""", scope.key)
+                return count
+
             inserted = commit_range(conn, scope, lo, hi, source=selected_source,
                                     end_hash=end_hash, run_id=None,
-                                    write=lambda db: write_rows(db, table, rows))
+                                    write=persist)
             summary["completed_ranges"] += 1
             summary["inserted_rows"] += inserted
 
@@ -157,7 +179,7 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
                 "0." if vault["version"] == "v2" else "3."):
             raise ValueError(f"unsupported vault release: {vault['address']}")
         acquire(report_scope(vault), lambda lo, hi: client.reports(vault, lo, hi, report_source),
-                "strategy_reports", report_source)
+                "strategy_reports", report_source, report_metadata=vault)
         summary["vaults"] += 1
     client.verify_pin(pin)
     return summary

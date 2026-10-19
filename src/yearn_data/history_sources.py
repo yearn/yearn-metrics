@@ -232,7 +232,12 @@ class HistoricalSource:
 
 
 
-def write_rows(conn, table, rows):
+def write_rows(conn, table, rows, *, report_metadata=None):
+    """Write observations; catch-up may reconcile metadata for its selected vault.
+
+    Raw event fields must still match. Metadata updates and raw evidence checks
+    participate in the caller's rows-plus-coverage transaction.
+    """
     columns = [row["name"] for row in conn.execute(f"PRAGMA table_info({table})")]
     identity = ("chain_id", "tx_hash", "log_index")
     if table == "vault_inventory_events":
@@ -266,8 +271,24 @@ def write_rows(conn, table, rows):
                     if prior != value:
                         raise HistorySourceError("conflicting inventory arguments")
                 values = {**values, "decoded_json": old[0]}
-        enrich = ("asset", "asset_decimals") if table == "strategy_reports" else ()
-        count += insert_checked(conn, table, values, identity, enrich=enrich)
+        if table == "strategy_reports" and report_metadata is not None:
+            expected = (report_metadata["chain_id"], report_metadata["version"],
+                        report_metadata["address"].lower(), report_metadata["asset"].lower(),
+                        report_metadata["asset_decimals"])
+            actual = (values["chain_id"], values["version"], values["vault_address"].lower(),
+                      (values["asset"] or "").lower(), values["asset_decimals"])
+            if actual != expected:
+                raise HistorySourceError("report metadata conflicts with selected vault")
+            # Asset identity and decimals are derived from vault metadata, not
+            # emitted by StrategyReported. Compare every event field first.
+            observation = {key: value for key, value in values.items() if key not in {"asset", "asset_decimals"}}
+            count += insert_checked(conn, table, observation, identity)
+            conn.execute("""UPDATE strategy_reports SET asset=?,asset_decimals=?
+                WHERE chain_id=? AND tx_hash=? AND log_index=?""",
+                (values["asset"], values["asset_decimals"], *(values[key] for key in identity)))
+        else:
+            enrich = ("asset", "asset_decimals") if table == "strategy_reports" else ()
+            count += insert_checked(conn, table, values, identity, enrich=enrich)
         raw_args = None
         if table == "strategy_reports":
             raw_args = json.loads(values["extra_json"])
