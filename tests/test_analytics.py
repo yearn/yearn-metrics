@@ -71,7 +71,8 @@ def test_known_child_without_selected_fee_evidence_stays_unresolved():
         {'parent': [1, A], 'strategy': C, 'reason': 'unavailable allocation'}]
 
 
-def test_rules_extract_cross_routes_and_integer_converter_decimals():
+@pytest.mark.parametrize('reordered', [False, True])
+def test_rules_extract_cross_routes_and_integer_converter_decimals(reordered):
     from yearn_data.analytics_collect import FINANCE_CHAINS, CURATION_CHAINS
     from yearn_data.finance_membership import capped_debt
     from web3 import Web3
@@ -88,6 +89,11 @@ const blacklist = [];
       {{ chainId: 10, parent: '{A}', strategy: '{C}', child: '{B}', getter: 'vault',
          parentAsset: '{Web3.to_checksum_address(parent_asset)}', childAsset: '{Web3.to_checksum_address(child_asset)}', parentDecimals: 6, childDecimals: 18 }},
     ];"""
+    if reordered:
+        finance = finance.replace(f"parent: '{A.upper()}', strategy: '{B}', child: '{C}', getter: 'vault'",
+                                  f"getter: 'vault', child: '{C}', strategy: '{B}', parent: '{A.upper()}'")
+        finance = finance.replace(f"parent: '{A}', strategy: '{C}', child: '{B}', getter: 'vault'",
+                                  f"child: '{B}', getter: 'vault', parent: '{A}', strategy: '{C}'")
     registry = 'export default {\n  "yearn-curating": { chains: {\n' + ''.join(
         f'    {name}: {{}},\n' for name in CURATION_CHAINS.values()) + '  }\n  },\n}'
     result = rules(finance, registry)

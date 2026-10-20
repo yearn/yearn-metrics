@@ -4,6 +4,8 @@ from pathlib import Path
 
 
 VAULT_POLICIES = json.loads((Path(__file__).parent / 'inventories/tvl-vault-policy.json').read_text())
+TARGET_CORRECTIONS = [r for r in json.loads((Path(__file__).parent / 'inventories/tvl-overlaps.json').read_text())['targets']
+                      if r.get('supersededTargetVaultAddresses')]
 
 
 def classify_vault(row, policies=VAULT_POLICIES):

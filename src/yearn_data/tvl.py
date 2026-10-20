@@ -8,7 +8,7 @@ from decimal import Decimal, localcontext
 from pathlib import Path
 
 from .storage import to_json
-from .tvl_policy import VAULT_POLICIES, classify_vault
+from .tvl_policy import VAULT_POLICIES, TARGET_CORRECTIONS, classify_vault
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tvl_vaults (
@@ -158,7 +158,7 @@ def asset_units(raw, decimals):
 
 
 def account(snapshots, positions, *, include_curation=False, deduct_internal_curation=True,
-            vault_policies=VAULT_POLICIES):
+            vault_policies=VAULT_POLICIES, target_corrections=TARGET_CORRECTIONS):
     """Deduct each actual holding once, capped by parent debt and child TVL.
 
     A shared holder's balance is split among its parents by recorded debt. Several
@@ -174,20 +174,48 @@ def account(snapshots, positions, *, include_curation=False, deduct_internal_cur
     with localcontext() as ctx:
         ctx.prec = 78
         return _account(snapshots, positions, include_curation=include_curation,
-                        deduct_internal_curation=deduct_internal_curation)
+                        deduct_internal_curation=deduct_internal_curation,
+                        target_corrections=target_corrections)
 
 
-def _account(snapshots, positions, *, include_curation, deduct_internal_curation):
+def _account(snapshots, positions, *, include_curation, deduct_internal_curation, target_corrections):
     by_key = {(s['chain_id'], s['vault'].lower()): s for s in snapshots}
     adjustments = defaultdict(lambda: Decimal(0))
     edges = [dict(p, overlap_usd=None) for p in positions]
     groups = defaultdict(list)
     issues = []
+    corrections = {(r['chainId'],r['strategyAddress'].lower(),old.lower()):r['targetVaultAddress'].lower()
+                   for r in target_corrections for old in r['supersededTargetVaultAddresses']}
+
+    def dated_destination(edge):
+        return (edge.get('status') == 'ok' and edge.get('vault_getter')
+                and edge.get('block_number') is not None)
+
+    def identity(edge, child):
+        return (edge['chain_id'],edge['parent'].lower(),edge['strategy'].lower(),child,
+                edge.get('timestamp'),edge.get('block_number'))
+
+    verified = {identity(e,e['child'].lower()) for e in edges if dated_destination(e)
+                and e.get('debt_usd') is not None
+                and (e.get('owned_usd') is not None or decimal(e['debt_usd']) == 0)}
     chains = {s['chain_id'] for s in snapshots}
     for s in snapshots:
         if s.get('bridge_target_chain') in chains and decimal(s.get('tvl_usd')):
             issues.append('bridge_migration_timing_unverified')
     for edge in edges:
+        replacement = corrections.get((edge['chain_id'],edge['strategy'].lower(),edge['child'].lower()))
+        if replacement and edge.get('method') == 'service-registry' and not dated_destination(edge):
+            # Today's registry cannot disprove a dated getter observation, but
+            # an explicitly corrected, unverified mapping must not deduct forever.
+            # Keep the original identity for audit; never transfer its balances.
+            edge.update(overlap_usd='0',accounting_excluded=True,reason='superseded_registry_target',
+                        replacement_child=replacement)
+            known_zero = edge.get('status') == 'ok' and decimal(edge.get('debt_usd')) == 0
+            if (not known_zero and identity(edge,replacement) not in verified
+                    and (edge['chain_id'],edge['parent'].lower()) in by_key):
+                edge.update(status='unavailable')
+                issues.append(edge['reason'])
+            continue
         if edge.get('method') == 'strategy-allocation':
             if (edge.get('reason') == 'unresolved_adapter_mapping'
                     or (edge.get('mapping_status') == 'unresolved' and edge.get('status') != 'ok')):

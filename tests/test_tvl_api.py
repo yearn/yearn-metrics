@@ -112,6 +112,69 @@ def test_incomplete_ok_position_cannot_replace_complete_ownership(source):
     assert dataset.frames((DAY,))[0][2][0]['source_run_id'] == 4
 
 
+def test_registry_correction_applies_to_history_and_is_pinned(source, monkeypatch):
+    from yearn_data import tvl_api
+    from yearn_data.canonical_history import _stage_observations
+    import hashlib
+
+    conn,path,root = source
+    strategy = '0x'+'44'*20
+    old_child = '0x'+'55'*20
+    conn.execute("INSERT INTO tvl_vaults (chain_id,version,address,active,updated_at) VALUES (1,'v3',?,1,1)", (old_child,))
+
+    def position(number, timestamp, child, getter=None):
+        row = {'chain_id':1,'parent':PARENT,'strategy':strategy,'child':child,
+               'timestamp':timestamp,'block_number':100+timestamp,'status':'ok',
+               'method':'service-registry','debt_usd':'50','owned_usd':'80'}
+        if getter: row['vault_getter'] = getter
+        conn.execute('INSERT INTO tvl_positions VALUES (?,?,?,?,?,?,?)',
+                     (number,1,PARENT,strategy,child,timestamp,json.dumps(row)))
+        conn.commit()
+
+    for number, day in ((1,DAY),(2,DAY+86400)):
+        run(conn,number,day,[(PARENT,'100'),(CHILD,'100'),(old_child,'100')])
+        position(number,day,old_child)
+    monkeypatch.setattr(tvl_api,'TARGET_CORRECTIONS',[])
+    old = TvlStore(path,root).get()
+    assert old.summary()['totalTvl'] == 250
+
+    monkeypatch.setattr(tvl_api,'TARGET_CORRECTIONS',[
+        {'chainId':1,'strategyAddress':strategy,'targetVaultAddress':CHILD,
+         'supersededTargetVaultAddresses':[old_child]}])
+    corrected = TvlStore(path,root).get()
+    assert corrected.id != old.id
+    for _, rows, edges, diagnostics in corrected.frames(corrected.dates()):
+        assert next(r for r in rows if r['vault']==old_child)['external_tvl_usd'] == '100'
+        assert edges[0]['overlap_usd'] == '0'
+        assert diagnostics['status'] == 'incomplete'
+        assert diagnostics['external_tvl_usd'] is None
+
+    # Recollect one date. The other stays explicitly unresolved; amounts are not
+    # transferred from the old child. Failed retries cannot erase the repair.
+    run(conn,3,DAY,[])
+    position(3,DAY,CHILD,'vault()')
+    run(conn,4,DAY,[],status='incomplete')
+    position(4,DAY,CHILD,'vault()')
+    failed = json.loads(conn.execute('SELECT data_json FROM tvl_positions WHERE run_id=4').fetchone()[0])
+    failed.update(status='unavailable',owned_usd=None)
+    conn.execute('UPDATE tvl_positions SET data_json=? WHERE run_id=4',(json.dumps(failed),))
+    conn.commit()
+    repaired = TvlStore(path,root).get()
+    _, rows, edges, diagnostics = repaired.frames((DAY,))[0]
+    assert diagnostics['status'] == 'complete'
+    assert diagnostics['external_tvl_usd'] == '250'
+    assert {r['vault']:r['external_tvl_usd'] for r in rows} == {PARENT:'100',CHILD:'50',old_child:'100'}
+    assert next(e for e in edges if e['child']==CHILD)['source_run_id'] == 3
+    assert repaired.frames((DAY+86400,))[0][3]['status'] == 'incomplete'
+
+    conn.create_function('canonical_sha256',1,lambda value: hashlib.sha256(value.encode()).hexdigest())
+    _stage_observations(conn,'tvl_positions',repaired.run_ids)
+    assert {r[0] for r in conn.execute('SELECT DISTINCT run_id FROM canonical_keep_tvl_positions')} == {1,2,3}
+    # Raw observations and publications made with the old policy stay auditable.
+    assert json.loads(conn.execute('SELECT data_json FROM tvl_positions WHERE run_id=1').fetchone()[0])['owned_usd'] == '80'
+    assert TvlStore(path,root).get(old.id).summary()['totalTvl'] == 250
+
+
 def test_complete_position_from_different_block_is_not_applied(source):
     conn,path,root = source
     run(conn,1,DAY,[(PARENT,'100'),(CHILD,'100')],[(CHILD,'50')])
