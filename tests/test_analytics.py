@@ -37,6 +37,20 @@ def test_cycle_is_not_complete():
     assert result['availability']['state']=='partial'
 
 
+def test_fee_stack_follows_cross_chain_child_identity():
+    points = rows()
+    points[1]['chain_id'] = 747474
+    configuration = configs()
+    configuration['vaults'][1]['chainId'] = 747474
+    positions = [{'chain_id': 1, 'parent': A, 'strategy': C, 'child': B,
+                  'child_chain_id': 747474, 'debt_usd': '60', 'status': 'ok'}]
+    result = fee_stack(points, positions, configuration)
+    assert len(result['chains']) == 1
+    chain = result['chains'][0]
+    assert chain['root']['children'][0]['vault']['chainId'] == 747474
+    assert chain['effectivePerfFee'] == pytest.approx(1540)
+
+
 def test_membership_unknown_is_neither_missing_nor_included():
     r=rows();r[1]['external_tvl_usd']='60'
     membership={'vaults':[{'chainId':1,'address':A.upper(),'included':False}]}
