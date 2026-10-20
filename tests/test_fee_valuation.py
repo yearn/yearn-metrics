@@ -192,6 +192,24 @@ def test_deferred_manifest_preserves_unknown_and_rejects_stale_scope(db,tmp_path
     assert outputs(db,run,'fee_usd_by_family')[0]['deferred_accounting_events']==1
     path.write_text(json.dumps([{**entry,'vault':ASSET}]))
     with pytest.raises(ValueError,match='conflicts'):valuation.run_fee_usd(db,before_timestamp=CUTOFF,deferred_manifest=path)
+    failed = db.execute('SELECT * FROM analysis_runs ORDER BY id DESC LIMIT 1').fetchone()
+    assert failed['status'] == 'failed' and failed['completed_at'] is not None
+    assert outputs(db, failed['id'], 'fee_usd_events') == []
+
+
+def test_failed_valuation_discards_partial_outputs(db,tmp_path):
+    seed(db,1)
+    entry={'chain_id':1,'tx':'0x'+f'{2:064x}','log_index':0,'vault':OTHER,'asset':ASSET,
+           'asset_decimals':6,'timestamp':DAY+100,'accepted':False,'fee_value_raw':None,
+           'disposition':'deferred_execution_evidence','reason':'legacy_execution_unavailable'}
+    path=tmp_path/'deferred.json';path.write_text(json.dumps([entry]))
+    with pytest.raises(ValueError,match='absent'):
+        valuation.run_fee_usd(db,before_timestamp=CUTOFF,deferred_manifest=path)
+    failed = db.execute('SELECT * FROM analysis_runs ORDER BY id DESC LIMIT 1').fetchone()
+    assert failed['status'] == 'failed' and failed['completed_at'] is not None
+    assert db.execute('SELECT COUNT(*) FROM analysis_outputs WHERE run_id=?',(failed['id'],)).fetchone()[0] == 0
+    run = valuation.run_fee_usd(db,before_timestamp=CUTOFF)
+    assert len(outputs(db,run,'fee_usd_events')) == 1
 
 
 def test_zero_fee_still_prices_nonzero_gain_and_tracks_component_gaps(db,monkeypatch):

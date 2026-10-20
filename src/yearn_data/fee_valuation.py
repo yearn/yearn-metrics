@@ -216,10 +216,21 @@ def run_fee_usd(conn, *, before_timestamp=None, deferred_manifest=None):
     cutoff = closed_cutoff(before_timestamp)
     cache = cached_prices(conn)
     deferrals, manifest_hash = read_deferrals(deferred_manifest)
-    seen_deferrals = set()
     run_id = create_analysis_run(conn, 'fee-usd', {'policy':POLICY, 'before_timestamp':cutoff,
         'provider':'yearn-prices', 'endpoint_id':endpoint_identity(),
         'deferred_manifest_sha256':manifest_hash, 'scope':'stored_reports_and_tokenized_events_only', 'historical_discovery_complete':False})
+    try:
+        _write_fee_usd_outputs(conn, run_id, cutoff, cache, deferrals, manifest_hash)
+        complete_analysis_run(conn, run_id)
+    except BaseException:
+        conn.rollback()
+        complete_analysis_run(conn, run_id, status='failed')
+        raise
+    return run_id
+
+
+def _write_fee_usd_outputs(conn, run_id, cutoff, cache, deferrals, manifest_hash):
+    seen_deferrals = set()
     groups = {name:{} for name in ('family','day','vault','asset','chain')}
     with localcontext() as ctx:
         ctx.prec = 400
@@ -285,5 +296,3 @@ def run_fee_usd(conn, *, before_timestamp=None, deferred_manifest=None):
                     output[usd+'_known_events'] = known[field]
                     output[usd+'_unknown_events'] = bucket['events']-known[field]
                 write_output(conn, run_id, 'fee_usd_by_'+name, output)
-    complete_analysis_run(conn, run_id)
-    return run_id
