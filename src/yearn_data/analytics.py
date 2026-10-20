@@ -16,7 +16,7 @@ from .tvl_api import CHAINS, encoded, key, money
 
 DAY = 86400
 YEAR = 365 * DAY
-VERSION = 'powerglove-analytics-5'
+VERSION = 'powerglove-analytics-6'
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS analytics_inputs (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, observed_at INTEGER NOT NULL,
@@ -91,7 +91,8 @@ def fee_stack(rows, positions, configurations):
     for edge in positions:
         parent = (edge['chain_id'],edge['parent'].lower())
         if edge.get('accounting_excluded'):continue
-        child = (edge['chain_id'],(edge.get('child') or edge['strategy']).lower())
+        child = (edge.get('child_chain_id', edge['chain_id']),
+                 (edge.get('child') or edge['strategy']).lower())
         value = edge.get('debt_usd',edge.get('allocated_usd'))
         if edge.get('status')!='ok' or value is None:
             issues.append({'parent':list(parent),'strategy':edge['strategy'],'reason':'unavailable allocation'})
