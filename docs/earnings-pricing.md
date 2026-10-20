@@ -32,6 +32,8 @@ This also prevents analysis from using an existing DefiLlama price in the databa
 The local onchain adapters also depend on DefiLlama quotes. When acquiring Yearn
 Prices without provider fallback, both flags are required; enabling the local
 onchain adapters in that mode is rejected before any price requests.
+The combined `run lifetime-yield` command checks this policy before discovery or
+event indexing starts.
 
 These commands do not fetch onchain events again.
 Volume and legacy fee analyses keep their existing DefiLlama policy.
@@ -44,8 +46,9 @@ The client checks the asset, timestamp, and positive price value.
 If a successful batch response omits a target, the client makes an exact historical request for that target.
 Network failures remain eligible for retry.
 An authentication failure stops the run.
-Malformed batch evidence is rejected and its targets are checked through exact
-requests. A malformed exact response is saved as `invalid`, remains eligible for
+Malformed or duplicate batch points are omitted and checked through exact
+requests, while valid points in the same batch remain usable. A malformed exact
+response is saved as `invalid`, remains eligible for
 `--retry-missing`, and can use the configured provider fallback.
 
 Saved price records include these details:
@@ -53,6 +56,11 @@ Saved price records include these details:
 - The requested timestamp and the selected end-of-day timestamp.
 - The upstream source and confidence value.
 - The adapter used to obtain the price.
+
+In report rows, `price_source` is the selected provider and `primary_price_source`
+is the requested first choice. Summary rows use `primary_price_source` for the
+requested policy; they omit `price_source` because the aggregate can use multiple
+providers. `fallback_price_source` records the permitted fallback in both outputs.
 
 An adapter is the code path that obtains or calculates a price.
 Use `--retry-missing` to retry targets with unsuccessful saved results.

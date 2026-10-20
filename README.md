@@ -77,7 +77,7 @@ yearn-data price-volume --source defillama
 yearn-data price --source defillama --no-onchain-fallbacks
 ```
 
-DefiLlama is the only offchain pricing source. When DefiLlama cannot price a token directly, the default pricing path can apply local deterministic fallbacks for canonical stablecoins, canonical wrapped/native equivalents, selected Curve/CRV derivative tokens, exchange-rate wrappers, and Aave aTokens. Use `--no-onchain-fallbacks` to record only direct DefiLlama results. All source/status rows are stored in SQLite.
+Yearn Prices is the default earnings pricing source, with optional DefiLlama fallback; see [historical earnings pricing](docs/earnings-pricing.md). Volume and legacy fee analyses retain their DefiLlama policy. When DefiLlama cannot price a token directly, its pricing path can apply local deterministic fallbacks for canonical stablecoins, canonical wrapped/native equivalents, selected Curve/CRV derivative tokens, exchange-rate wrappers, and Aave aTokens. Use `--source defillama --no-onchain-fallbacks` to record only direct DefiLlama results. All source/status rows are stored in SQLite.
 
 ## Backfill Efficiency
 

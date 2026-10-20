@@ -20,6 +20,7 @@ from .pricing import (
     SUPPORTED_SOURCES,
     price_unpriced_reports,
     price_unpriced_volume,
+    validate_report_pricing_policy,
 )
 from .storage import DEFAULT_DB_PATH, connect, init_db, seed_chains
 
@@ -327,6 +328,12 @@ def main(argv: list[str] | None = None) -> int:
         price_source = _job_price_source(args.job, args.price_source)
         if args.job != "lifetime-yield" and price_source != "defillama":
             raise ValueError("--price-source yearn-prices is currently supported only for lifetime-yield")
+        if args.job == "lifetime-yield":
+            validate_report_pricing_policy(
+                price_source,
+                None if args.no_provider_fallback else _fallback_source(price_source),
+                not args.no_onchain_fallbacks,
+            )
         chains = _chains(args.chains)
         if args.job == "lifetime-yield" and event_source == "envio":
             if args.find_deployment:

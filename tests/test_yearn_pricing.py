@@ -293,8 +293,7 @@ def test_yearn_batch_rejects_invalid_evidence(monkeypatch, problem):
     if problem == 'invalid_price': raw['price'] = True
     if problem == 'missing_source': raw.pop('source')
     monkeypatch.setattr('yearn_data.pricing._yearn_prices_get', lambda *a, **kw: {'coins': {key: {'prices': points}}})
-    with pytest.raises(ValueError):
-        fetch_yearn_prices_batch([(1, asset, 100)])
+    assert fetch_yearn_prices_batch([(1, asset, 100)]) == {}
 
 
 @pytest.mark.parametrize('status', [401, 403])
@@ -430,3 +429,93 @@ def test_response_error_recovery_preserves_fatal_authentication_and_configuratio
     with pytest.raises(expected_error, match=message):
         pricing._price_rows_with_yearn_prices(conn, [row])
     assert conn.execute("SELECT count(*) FROM prices").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("problem", ["invalid_price", "duplicate", "wrong_day", "missing_source", "malformed_point"])
+def test_default_batch_preserves_valid_points_and_only_verifies_invalid_target(monkeypatch, tmp_path, problem):
+    from yearn_data import pricing
+
+    conn = connect(tmp_path / "test.sqlite")
+    init_db(conn)
+    first, second = "0x" + "2" * 40, "0x" + "4" * 40
+    rows = [{"chain_id": 1, "asset": asset, "block_timestamp": timestamp, "block_number": 10}
+            for asset, timestamp in [(first, 100), (first, 90000), (second, 100)]]
+    monkeypatch.delenv("YEARN_PRICE_BATCH_TOKENS", raising=False)
+    batch_calls, exact_calls = [], []
+
+    def fake_get(path, *, params=None, **kwargs):
+        if params is not None:
+            batch_calls.append(json.loads(params["coins"]))
+            bad_point = {"timestamp": 86399, "price": True, "source": "oracle"}
+            bad_points = [bad_point]
+            if problem == "duplicate":
+                bad_points = [{**bad_point, "price": 1.0}, {**bad_point, "price": 0}]
+            elif problem == "wrong_day":
+                bad_point["timestamp"] = 259199
+            elif problem == "missing_source":
+                bad_point.update(price=1.0)
+                bad_point.pop("source")
+            elif problem == "malformed_point":
+                bad_points = [None]
+            return {"coins": {
+                "ethereum:" + first: {"prices": bad_points + [
+                    {"timestamp": 172799, "price": 4.0, "source": "oracle"}]},
+                "ethereum:" + second: {"prices": [
+                    {"timestamp": 86399, "price": 2.0, "source": "oracle"}]},
+            }}
+        _, timestamp, token_key = path.rsplit("/", 2)
+        exact_calls.append((token_key, int(timestamp)))
+        return {"coins": {token_key: {"timestamp": int(timestamp), "price": 9.0, "source": "oracle"}}}
+
+    monkeypatch.setattr(pricing, "_yearn_prices_get", fake_get)
+    count, unresolved = pricing._price_rows_with_yearn_prices(conn, rows)
+    assert count == 3
+    assert unresolved == []
+    assert len(batch_calls) == 1 and len(batch_calls[0]) == 2
+    assert exact_calls == [("ethereum:" + first, 86399)]
+    saved = {(row["token_address"], row["timestamp"]): row for row in conn.execute("SELECT * FROM prices")}
+    assert saved[first, 90000]["price_usd"] == 4.0
+    assert from_json(saved[first, 90000]["raw_json"])["adapter"] == "batchHistorical"
+    assert saved[second, 100]["price_usd"] == 2.0
+
+
+@pytest.mark.parametrize("boolean_price", [False, True])
+def test_boolean_prices_are_invalid_in_batch_and_exact_paths(monkeypatch, boolean_price):
+    from yearn_data import pricing
+
+    asset = "0x" + "2" * 40
+    point = {"timestamp": 86399, "price": boolean_price, "source": "oracle"}
+    def fake_get(path, **kwargs):
+        return {"coins": {"ethereum:" + asset: {"prices": [point]} if path.endswith("batchHistorical") else point}}
+    monkeypatch.setattr(pricing, "_yearn_prices_get", fake_get)
+    assert pricing.fetch_yearn_prices_batch([(1, asset, 100)]) == {}
+    price, status, evidence = pricing.fetch_yearn_price(1, asset, 100)
+    assert price is None
+    assert status == evidence["failure_class"] == "invalid"
+
+
+@pytest.mark.parametrize("numeric_zero", [0, 0.0])
+def test_numeric_zero_price_still_means_missing_instead_of_a_usable_zero_price(monkeypatch, numeric_zero):
+    from yearn_data import pricing
+
+    asset = "0x" + "2" * 40
+    point = {"timestamp": 86399, "price": numeric_zero, "source": "oracle"}
+    def fake_get(path, **kwargs):
+        return {"coins": {"ethereum:" + asset: {"prices": [point]} if path.endswith("batchHistorical") else point}}
+    monkeypatch.setattr(pricing, "_yearn_prices_get", fake_get)
+    assert pricing.fetch_yearn_prices_batch([(1, asset, 100)]) == {}
+    price, status, evidence = pricing.fetch_yearn_price(1, asset, 100)
+    assert price is None
+    assert status == "missing"
+    assert evidence["failure_class"] == "not-found"
+
+
+@pytest.mark.parametrize("event_source", ["rpc", "envio"])
+def test_run_rejects_unsupported_fallback_flags_before_discovery_or_indexing(monkeypatch, tmp_path, event_source):
+    from yearn_data import cli
+
+    monkeypatch.setattr(cli, "get_event_source", lambda: event_source)
+    for name in ["discover", "discover_from_envio", "index_all_reports", "import_reports_from_envio"]:
+        monkeypatch.setattr(cli, name, lambda *_args, **_kwargs: pytest.fail("Must reject before writes"))
+    with pytest.raises(ValueError, match="onchain.*DefiLlama"):
+        cli.main(["--db", str(tmp_path / "test.sqlite"), "run", "lifetime-yield", "--no-provider-fallback"])

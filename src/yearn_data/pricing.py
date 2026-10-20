@@ -205,7 +205,7 @@ def _parse_yearn_price_point(
     if not isinstance(raw_point, dict):
         raise YearnPricesResponseError("Yearn Prices returned a malformed price point")
     price = raw_point.get("price")
-    if price == 0:
+    if price == 0 and not isinstance(price, bool):
         return None
     if (
         raw_point.get("timestamp") != expected_timestamp
@@ -271,25 +271,32 @@ def fetch_yearn_prices_batch(
     seen_targets: set[tuple[int, str, int]] = set()
     for raw_token_key, raw_coin in raw_coins.items():
         if not isinstance(raw_token_key, str) or not isinstance(raw_coin, dict):
-            raise YearnPricesResponseError("Yearn Prices returned a malformed batch coin")
+            continue
         token_key = raw_token_key.lower()
         prices = raw_coin.get("prices")
         if not isinstance(prices, list):
-            raise YearnPricesResponseError("Yearn Prices returned malformed batch prices")
+            continue
         for raw_point in prices:
             if not isinstance(raw_point, dict) or not isinstance(raw_point.get("timestamp"), int):
-                raise YearnPricesResponseError("Yearn Prices returned a malformed batch price point")
+                continue
             lookup = (token_key, raw_point["timestamp"])
             target = target_by_key.get(lookup)
-            if target is None or target in seen_targets:
-                raise YearnPricesResponseError("Yearn Prices returned an unexpected or duplicate batch price point")
+            if target is None:
+                continue
+            if target in seen_targets:
+                # Neither copy is authoritative, even if one is a valid price.
+                output.pop(target, None)
+                continue
             seen_targets.add(target)
-            parsed = _parse_yearn_price_point(
-                raw_point,
-                expected_timestamp=target[2],
-                symbol=raw_coin.get("symbol"),
-                adapter="batchHistorical",
-            )
+            try:
+                parsed = _parse_yearn_price_point(
+                    raw_point,
+                    expected_timestamp=target[2],
+                    symbol=raw_coin.get("symbol"),
+                    adapter="batchHistorical",
+                )
+            except YearnPricesResponseError:
+                continue
             if parsed is not None:
                 output[target] = parsed
     return output
@@ -881,15 +888,7 @@ def _fetch_price(source: str, chain_id: int, token_address: str, timestamp: int,
     raise ValueError(f"unsupported price source {source!r}; expected {sorted(SUPPORTED_SOURCES)}")
 
 
-def price_unpriced_reports(
-    conn,
-    limit: int | None = None,
-    source: str = DEFAULT_PRICE_SOURCE,
-    fallback: str | None = DEFAULT_FALLBACK_PRICE_SOURCE,
-    retry_missing: bool = False,
-    chain_ids: set[int] | None = None,
-    onchain_fallbacks: bool = True,
-) -> int:
+def validate_report_pricing_policy(source: str, fallback: str | None, onchain_fallbacks: bool) -> None:
     if source not in SUPPORTED_SOURCES:
         raise ValueError(f"unsupported price source {source!r}")
     if fallback is not None and fallback not in SUPPORTED_SOURCES:
@@ -899,6 +898,18 @@ def price_unpriced_reports(
             "onchain fallbacks require DefiLlama provider fallback; "
             "use --no-onchain-fallbacks with --no-provider-fallback"
         )
+
+
+def price_unpriced_reports(
+    conn,
+    limit: int | None = None,
+    source: str = DEFAULT_PRICE_SOURCE,
+    fallback: str | None = DEFAULT_FALLBACK_PRICE_SOURCE,
+    retry_missing: bool = False,
+    chain_ids: set[int] | None = None,
+    onchain_fallbacks: bool = True,
+) -> int:
+    validate_report_pricing_policy(source, fallback, onchain_fallbacks)
     chain_filter = ""
     chain_params: list[int] = []
     if chain_ids:
