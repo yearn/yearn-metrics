@@ -49,6 +49,28 @@ def test_price_omissions_verified_and_persisted(monkeypatch):
     assert c.execute('select status from tvl_prices').fetchone()[0]=='missing'
 
 
+@pytest.mark.parametrize('stage', ['batch', 'exact'])
+@pytest.mark.parametrize('failure', ['authentication', 'configuration'])
+def test_backfill_stops_on_operator_price_errors(monkeypatch, stage, failure):
+    from yearn_data import pricing
+    conn = sqlite3.connect(':memory:'); conn.row_factory = sqlite3.Row
+    conn.execute('CREATE TABLE tvl_prices(chain_id,token_address,timestamp,block_number,source,price_usd,status,raw_json, '
+                 'PRIMARY KEY(chain_id,token_address,timestamp,source))')
+    monkeypatch.delenv('YEARN_PRICE_PROD_KEY', raising=False)
+    def fail(*args, **kwargs):
+        if failure == 'authentication':
+            raise pricing.YearnPricesAuthenticationError('rejected credential')
+        return pricing._yearn_prices_config()
+    monkeypatch.setattr(b, 'fetch_yearn_prices_batch', fail if stage == 'batch' else lambda *a, **k: {})
+    exact = Mock(side_effect=fail); monkeypatch.setattr(b, 'fetch_yearn_price', exact)
+    expected = pricing.YearnPricesAuthenticationError if failure == 'authentication' else ValueError
+    with pytest.raises(expected):
+        b.Prices(conn).prime([(1, '0x' + '11' * 20, ts('2020-03-01'))])
+    assert conn.execute('SELECT COUNT(*) FROM tvl_prices').fetchone()[0] == 0
+    if stage == 'batch':
+        exact.assert_not_called()
+
+
 def test_birth_hint_checked_against_previous_block():
     r=Mock();r.head={'number':10}
     r.exists.side_effect=lambda _a,n:n>=4

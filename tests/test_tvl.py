@@ -14,6 +14,29 @@ def address(n):
     return '0x'+f'{n:040x}'
 
 
+@pytest.mark.parametrize('failure', ['authentication', 'configuration'])
+def test_collection_stops_on_operator_price_errors(tmp_path, monkeypatch, failure):
+    from unittest.mock import Mock
+    from yearn_data import pricing, tvl_sources
+    conn = connect(tmp_path / 'operator-error.sqlite'); init_db(conn)
+    conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at) "
+                 "VALUES (1,'v3',?,?,18,1)", (address(1), address(2))); conn.commit()
+    reader = Mock(); reader.block_at.return_value = 1
+    reader.exists.return_value = True; reader.uint.return_value = 10
+    monkeypatch.delenv('YEARN_PRICE_PROD_KEY', raising=False)
+    def fail(*args, **kwargs):
+        if failure == 'authentication':
+            raise pricing.YearnPricesAuthenticationError('rejected credential')
+        return pricing._yearn_prices_config()
+    monkeypatch.setattr(tvl_sources, 'fetch_yearn_price', fail)
+    expected = pricing.YearnPricesAuthenticationError if failure == 'authentication' else ValueError
+    with pytest.raises(expected):
+        collect_tvl(conn, 86399, 86399, reader_factory=lambda _: reader)
+    assert conn.execute('SELECT status FROM tvl_runs').fetchone()[0] == 'failed'
+    assert conn.execute('SELECT COUNT(*) FROM tvl_snapshots').fetchone()[0] == 0
+    conn.close()
+
+
 def snapshot(n,value,version='v3',chain=1):
     return {'chain_id':chain,'vault':address(n),'timestamp':100,'tvl_usd':value,'version':version}
 

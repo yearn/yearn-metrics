@@ -127,13 +127,17 @@ def yearn_prices_token_key(chain_id: int, token_address: str) -> str:
     return f"{cfg.defillama_slug}:{token_address.lower()}"
 
 
+class YearnPricesConfigurationError(ValueError):
+    """Operator configuration prevents requesting usable price evidence."""
+
+
 def _yearn_prices_config() -> tuple[str, str]:
     api_key = os.environ.get("YEARN_PRICE_PROD_KEY", "").strip()
     if not api_key:
-        raise ValueError("missing Yearn Prices API key; set YEARN_PRICE_PROD_KEY")
+        raise YearnPricesConfigurationError("missing Yearn Prices API key; set YEARN_PRICE_PROD_KEY")
     base_url = os.environ.get("YEARN_PRICE_PROD_BASE_URL", YEARN_PRICES_DEFAULT_BASE).strip().rstrip("/")
     if not base_url.startswith(("http://", "https://")):
-        raise ValueError("YEARN_PRICE_PROD_BASE_URL must be an absolute HTTP(S) URL")
+        raise YearnPricesConfigurationError("YEARN_PRICE_PROD_BASE_URL must be an absolute HTTP(S) URL")
     return base_url, api_key
 
 
@@ -159,8 +163,11 @@ def _yearn_prices_get(
     allow_not_found: bool = False,
 ) -> dict[str, Any] | None:
     base_url, api_key = _yearn_prices_config()
-    attempts = max(1, int(os.environ.get("YEARN_PRICE_HTTP_ATTEMPTS", "3")))
-    retry_base = max(0.0, float(os.environ.get("YEARN_PRICE_HTTP_RETRY_BASE_SECONDS", "0.25")))
+    try:
+        attempts = max(1, int(os.environ.get("YEARN_PRICE_HTTP_ATTEMPTS", "3")))
+        retry_base = max(0.0, float(os.environ.get("YEARN_PRICE_HTTP_RETRY_BASE_SECONDS", "0.25")))
+    except ValueError as error:
+        raise YearnPricesConfigurationError("invalid Yearn Prices HTTP retry configuration") from error
     last_error: Exception | None = None
     last_retryable = True
 

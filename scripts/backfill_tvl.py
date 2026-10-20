@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from yearn_data.config import load_environment, TVL_EXCLUDED_CHAIN_IDS
 from yearn_data.multicall import MULTICALL3, MULTICALL3_ABI
 from yearn_data.pricing import fetch_yearn_price, fetch_yearn_prices_batch, yearn_prices_token_key
+from yearn_data.pricing import YearnPricesAuthenticationError, YearnPricesConfigurationError
 from yearn_data.storage import connect, init_db
 from yearn_data.tvl import export_tvl, BACKFILL_SCHEMA
 from yearn_data import tvl_sources as sources
@@ -67,6 +68,8 @@ class Prices:
         def batch(chunk):
             try:
                 return fetch_yearn_prices_batch(chunk, timeout=30)
+            except (YearnPricesAuthenticationError, YearnPricesConfigurationError):
+                raise
             except Exception:
                 return {}  # Exact lookup still verifies every omitted target.
         with ThreadPoolExecutor(max_workers=4) as pool:
@@ -76,6 +79,8 @@ class Prices:
             def exact(key):
                 try:
                     return key, fetch_yearn_price(*key, timeout=30)
+                except (YearnPricesAuthenticationError, YearnPricesConfigurationError):
+                    raise
                 except Exception as exc:
                     return key, (None, 'unavailable', {'failure_class':type(exc).__name__,
                         'failure_reason':str(exc) if isinstance(exc,ValueError) else type(exc).__name__})

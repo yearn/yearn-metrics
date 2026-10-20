@@ -5,6 +5,18 @@ from yearn_data.config import CHAINS
 from yearn_data.pricing import _yearn_prices_batches, fetch_yearn_price, normalize_yearn_price_timestamp, price_unpriced_reports
 from yearn_data.storage import connect, from_json, init_db, seed_chains
 
+
+@pytest.mark.parametrize('setting', ['YEARN_PRICE_HTTP_ATTEMPTS', 'YEARN_PRICE_HTTP_RETRY_BASE_SECONDS'])
+def test_invalid_retry_configuration_stops_before_http(monkeypatch, setting):
+    from yearn_data import pricing
+    monkeypatch.setenv('YEARN_PRICE_PROD_KEY', 'test-only')
+    monkeypatch.setenv(setting, 'invalid')
+    def unexpected(*args, **kwargs):
+        pytest.fail('invalid local configuration must not make an HTTP request')
+    monkeypatch.setattr(pricing.requests, 'get', unexpected)
+    with pytest.raises(pricing.YearnPricesConfigurationError, match='retry configuration'):
+        pricing.fetch_yearn_price(1, '0x'+'1'*40, 86399)
+
 def test_yearn_prices_batches_normalize_and_respect_route_limits():
     first = "0x0000000000000000000000000000000000000001"
     second = "0x0000000000000000000000000000000000000002"

@@ -12,6 +12,7 @@ from web3 import Web3
 
 from .config import get_rpc_url_by_chain_id, TVL_EXCLUDED_CHAIN_IDS
 from .pricing import fetch_yearn_price, fetch_defillama_price
+from .pricing import YearnPricesAuthenticationError, YearnPricesConfigurationError
 from .storage import to_json
 from .tvl import asset_units, decimal
 
@@ -277,6 +278,8 @@ def _snapshot(vault,timestamp,reader,price_cache,price_source):
             with localcontext() as ctx:
                 ctx.prec = 78
                 data.update(price_usd=str(decimal(price)),tvl_usd=str(units*decimal(price)),status='ok')
+    except (YearnPricesAuthenticationError, YearnPricesConfigurationError):
+        raise
     except Exception as exc:
         # Do not retain fabricated success after a partial read or pricing failure.
         data.update(tvl_usd=None,status='unavailable',reason=type(exc).__name__)
