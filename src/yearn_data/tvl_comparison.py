@@ -2,6 +2,30 @@
 from decimal import Decimal
 
 
+def finance_replay_routes(replays):
+    """Only complete replay contributions can support an overlap verdict."""
+    recognized = set()
+    for replay in replays:
+        known = {row['address'] for row in replay['records'] if row.get('adjustedRaw') is not None}
+        for edge in replay['edges']:
+            if edge['parent'] not in known or edge.get('contributionVault', edge['parent']) not in known:
+                continue
+            recognized.add((replay['chainId'], edge['parent'], edge.get('strategy'),
+                            edge.get('childChainId', replay['chainId']), edge['child'], edge['method']))
+    return recognized
+
+
+def finance_overlap_status(position, recognized):
+    """Match a stored position to dated Finance deduction evidence."""
+    identity = (position['chain_id'], position['parent'],
+                position.get('child_chain_id', position['chain_id']), position['child'])
+    if any((chain, parent, child_chain, child) == identity
+           and (strategy == position['strategy'] or method == 'vault-asset')
+           for chain, parent, strategy, child_chain, child, method in recognized):
+        return 'handled'
+    return None
+
+
 def discrepancy_details(rows, evidence, dataset_id):
     """Do not mix inventory/adapter evidence from another published dataset."""
     if not evidence or evidence.get('tvlDatasetId') != dataset_id:

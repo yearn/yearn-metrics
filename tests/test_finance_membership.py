@@ -181,5 +181,48 @@ def test_ethereum_remote_deduction_and_failed_evidence(monkeypatch, sender_prese
     if failure:
         assert remote_edges == []
     else:
-        assert remote_edges == [{'parent': target, 'strategy': sender, 'child': child, 'childChainId': 747474,
+        assert remote_edges == [{'parent': parent, 'contributionVault': target, 'strategy': sender, 'child': child, 'childChainId': 747474,
                                  'method': 'cross-chain-shares', 'deduction': '60', 'remoteBlock': 200}]
+        from yearn_data.tvl_comparison import finance_overlap_status, finance_replay_routes
+        replay = {'chainId': 1, 'edges': edges,
+                  'records': [{'address': a, 'adjustedRaw': value} for a, value in net.items()]}
+        recognized = finance_replay_routes([replay])
+        position = {'chain_id': 1, 'parent': parent, 'strategy': sender, 'child_chain_id': 747474, 'child': child}
+        assert finance_overlap_status(position, recognized) == 'handled'
+
+
+def test_later_failed_route_discards_earlier_parent_evidence():
+    from yearn_data.finance_membership import contributions
+
+    active = {a: {'asset': {'address': ASSET}} for a in (PARENT, CHILD, OTHER)}
+    reader = FixtureReader({(a, 'asset()'): (ASSET,) for a in active})
+    rules = policy()
+    key = (10, PARENT, STRATEGY)
+    rules['cross'][key] = OTHER
+    rules['routes'][key] = {'getter': 'vault'}
+    # First debt is valid, but the later route read is unavailable.
+    debts = {PARENT: [(CHILD, 20), (STRATEGY, 30)], CHILD: [], OTHER: []}
+    net, edges = contributions(reader, 10, active, {a: (100,) for a in active}, debts, rules)
+    assert net == {PARENT: None, CHILD: 100, OTHER: 100}
+    assert edges == []
+
+
+@pytest.mark.parametrize('missing', ['parentAsset', 'childAsset', 'parentDecimals', 'childDecimals'])
+def test_partial_converter_definition_only_invalidates_its_parent(missing):
+    from yearn_data.finance_membership import contributions
+
+    active = {a: {'asset': {'address': ASSET}} for a in (PARENT, CHILD, OTHER)}
+    values = {(a, 'asset()'): (ASSET,) for a in active}
+    values.update({(STRATEGY, 'vault()'): (CHILD,), (CHILD, 'balanceOf(address)'): (5,),
+                   (CHILD, 'totalSupply()'): (10,)})
+    route = {'getter': 'vault', 'parentAsset': ASSET, 'childAsset': ASSET,
+             'parentDecimals': 6, 'childDecimals': 6}
+    del route[missing]
+    rules = policy()
+    key = (10, PARENT, STRATEGY)
+    rules['cross'][key] = CHILD
+    rules['routes'][key] = route
+    net, edges = contributions(FixtureReader(values), 10, active, {a: (100,) for a in active},
+                               {PARENT: [(STRATEGY, 60)], CHILD: [], OTHER: []}, rules)
+    assert net == {PARENT: None, CHILD: 100, OTHER: 100}
+    assert edges == []

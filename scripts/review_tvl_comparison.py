@@ -9,6 +9,7 @@ from pathlib import Path
 from decimal import Decimal as D
 from concurrent.futures import ThreadPoolExecutor
 from yearn_data.analytics_collect import js_array,rules,FINANCE_CHAINS,CURATION_CHAINS
+from yearn_data.tvl_comparison import finance_overlap_status, finance_replay_routes
 parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('artifacts',type=Path);args=parser.parse_args();p=args.artifacts;f=json.loads((p/'frame.json').read_text());ts=f['timestamp'];rows={(r['chain_id'],r['vault'].lower()):r for r in f['rows']};catalog={(r['chain_id'],r['address'].lower()):r for r in f['catalog']};positions=f['positions'];kong=json.loads((p/'kong.json').read_text());finance={(int(c),r['address'].lower()) for c,vs in kong.items() for r in vs};source=(p/'projects_yearn_index.js').read_text();finance|={(1,a) for a in js_array(source,'v1Vaults')};cross={(int(c),a.lower(),s.lower()):v.lower() for c,a,s,v in re.findall(r"chainId:\s*(\d+),\s*parent:\s*'(0x\w+)',\s*strategy:\s*'(0x\w+)',\s*child:\s*'(0x\w+)'",source)}
 
 SUPPORTED_SOURCE_HASHES={'projects_yearn_index.js': '1aba4b2c0de82565cdf75a060290596ef2a06c1156f0225e3a45e58ed28b76f9', 'projects_helper_curators_index.js': 'afa2e23eb42b674f35ef602d81106cdd3a5577945ee3497b93ae61a6a7df9131', 'registries_curators.js': '7f23eeb5c4c7e58c158efb12a5ed1afb7a2df305f9d2c0a4e35794b7b3dd291c', 'projects_helper_curators_configs.js': '4cd5d467119a176f1100b30f951428309fc16333133dc676e1b92649c122d4d8', 'morpho-bad-debt.cjs': 'da44a880194a8f576c0914acddb4428feed673fb9d72abee558fc6756d9979df'}
@@ -21,7 +22,7 @@ policy=rules(source,(p/'registries_curators.js').read_text())
 finance_replay=json.loads((p/'finance-replay.json').read_text()) if current else []
 assert all(v['timestamp']==ts for v in finance_replay), 'Finance replay timestamp mismatch'
 net={(v['chainId'],r['address']):r['adjustedRaw'] for v in finance_replay for r in v['records']}
-recognized={(v['chainId'],e['parent'],e.get('strategy'),e.get('childChainId',v['chainId']),e['child'],e['method']) for v in finance_replay for e in v['edges']}
+recognized=finance_replay_routes(finance_replay)
 
 assert all(r['timestamp']==ts for r in rows.values()), 'Mixed snapshot timestamps'
 discovery=json.loads((p/'independent-discovery.json').read_text());cur={(v['chain'],v['address'].lower()) for scan in discovery for v in scan.get('vaults',[])}
@@ -87,8 +88,8 @@ for v in positions:
   elif method=='vault-asset':status='missed';reason='Vault holds another vault’s shares as its asset; the adapter has no ownership deduction for this wrapper'
   elif method=='cross-chain-shares':status='missed';reason='Cross-chain ownership is outside the adapter’s same-chain nested-debt detection'
  if current and protocol=='yearn-finance' and parent in finance and child in finance:
-  matched=any((c,a,cc,ch)==(parent[0],parent[1],child[0],child[1]) and (st==strategy or kind=='vault-asset') for c,a,st,cc,ch,kind in recognized)
-  if matched:status='handled';reason='Verified by the current adapter route, ownership cap, wrapper or remote deduction'
+  matched=finance_overlap_status(v,recognized)
+  if matched:status=matched;reason='Verified by the current adapter route, ownership cap, wrapper or remote deduction'
   elif registered or direct or method in ('vault-asset','cross-chain-shares'):
    status='unverified';reason='Current adapter supports this route type; dated deduction was not verified'
  if protocol=='yearn-curating' and parent in cur and child in cur and (parent[0],parent[1],strategy,child[1]) in cur_checks:status='handled';reason='Curator helper resolves this adapter and subtracts its converted shares'

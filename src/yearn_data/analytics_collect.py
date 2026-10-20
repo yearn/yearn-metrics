@@ -54,8 +54,9 @@ def rules(source,curation):
     curation=re.sub(r'//[^\n]*','',section[1])
     owners={};explicit={}
     for chain,name in CURATION_CHAINS.items():
-        block=re.search(r'\b'+name+r':\s*\{([\s\S]*?)\n\s*\}',curation)
-        text=block[1] if block else ''
+        block=re.search(r'\b'+name+r':\s*\{([^{}]*)\}',curation)
+        if not block:raise ValueError('unsupported curation registry: missing or unparsed '+name)
+        text=block[1]
         owner=re.search(r'morphoVaultOwners:\s*\[([\s\S]*?)\]',text)
         vaults=re.findall(r'\b(?:morpho|erc4626|turtleclub_erc4626):\s*\[([^]]*)\]',text)
         owners[chain]=set(a.lower() for a in re.findall(r'0x[0-9a-fA-F]{40}',owner[1] if owner else ''))
