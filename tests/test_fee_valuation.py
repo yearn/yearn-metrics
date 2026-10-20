@@ -233,3 +233,27 @@ def test_sync_target_scope_and_retry_order_do_not_starve_new_days(db, monkeypatc
     calls.clear()
     valuation.price_fees(db, before_timestamp=CUTOFF, retry_missing=True, targets={second})
     assert calls == []
+
+
+@pytest.mark.parametrize('failure', ['retryable', 'missing', 'invalid'])
+def test_failed_fee_refresh_preserves_accepted_quote_and_usd(db, monkeypatch, failure):
+    seed(db, 1)
+    target = (1, ASSET, CUTOFF-1)
+    valuation.save_price(db, target, point(target))
+    before = dict(db.execute('SELECT * FROM fee_daily_prices').fetchone())
+    monkeypatch.setattr(pricing, 'fetch_yearn_prices_batch', lambda targets: {
+        t: (None, failure, {'provider': 'yearn-prices', 'normalized_timestamp': t[2]}) for t in targets})
+    assert valuation.price_fees(db, before_timestamp=CUTOFF, refresh=True)['results'] == {failure: 1}
+    assert dict(db.execute('SELECT * FROM fee_daily_prices').fetchone()) == before
+    run = valuation.run_fee_usd(db, before_timestamp=CUTOFF)
+    assert outputs(db, run, 'fee_usd_events')[0]['total_fees_paid_usd'] == '2.5'
+
+
+def test_fee_pricing_propagates_http_configuration_errors(db, monkeypatch):
+    seed(db, 1)
+    monkeypatch.setenv('YEARN_PRICE_PROD_KEY', 'test-only')
+    monkeypatch.setenv('YEARN_PRICE_HTTP_ATTEMPTS', 'not-an-integer')
+    monkeypatch.setattr(pricing.requests, 'get', lambda *a, **k: pytest.fail('network before configuration'))
+    with pytest.raises(ValueError):
+        valuation.price_fees(db, before_timestamp=CUTOFF)
+    assert db.execute('SELECT COUNT(*) FROM fee_daily_prices').fetchone()[0] == 0

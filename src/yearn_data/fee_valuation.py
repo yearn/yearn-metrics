@@ -79,9 +79,17 @@ def save_price(conn, target, result):
         price = format(value, 'f')
     else:
         price = None
-    conn.execute('''INSERT OR REPLACE INTO fee_daily_prices
+    conn.execute("""
+        INSERT INTO fee_daily_prices
         (chain_id,asset,eod_timestamp,policy,endpoint_id,price_usd,status,evidence_json,fetched_at)
-        VALUES (?,?,?,?,?,?,?,?,?)''', (*target, POLICY, endpoint_identity(), price, status,
+        VALUES (?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(chain_id,asset,eod_timestamp,policy,endpoint_id) DO UPDATE SET
+            price_usd=excluded.price_usd,
+            status=excluded.status,
+            evidence_json=excluded.evidence_json,
+            fetched_at=excluded.fetched_at
+        WHERE fee_daily_prices.status != 'ok' OR excluded.status = 'ok'
+    """, (*target, POLICY, endpoint_identity(), price, status,
                                       json.dumps(evidence, sort_keys=True), int(time.time())))
 
 
@@ -121,21 +129,14 @@ def price_fees(conn, *, before_timestamp=None, limit=500, retry_missing=False, r
                 results = {target: (None, status, {'provider':'yearn-prices',
                     'normalized_timestamp':target[2], 'adapter':'batchHistorical',
                     'failure_class':status}) for target in chunk}
-            except ValueError:
-                # Configuration/authentication errors must stop the run, not become missing prices.
-                pricing._yearn_prices_config()
+            except pricing.YearnPricesResponseError:
                 results = {target: (None, 'invalid', {'provider':'yearn-prices',
                     'normalized_timestamp':target[2], 'adapter':'batchHistorical',
                     'failure_class':'invalid_response'}) for target in chunk}
             for target in chunk:
                 result = results.get(target)
                 if result is None:
-                    try:
-                        result = pricing.fetch_yearn_price(*target)
-                    except ValueError:
-                        result = (None, 'invalid', {'provider':'yearn-prices',
-                            'normalized_timestamp':target[2], 'adapter':'historical',
-                            'failure_class':'invalid_response'})
+                    result = pricing.fetch_yearn_price(*target)
                 save_price(conn, target, result)
                 counts[result[1]] += 1
             conn.commit()  # Resume completed chunks without repeating acquisition.
