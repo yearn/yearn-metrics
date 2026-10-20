@@ -15,6 +15,7 @@ from web3 import Web3
 from .abis import VAULT_SHARE_PRICE_ABI
 from .chains import cached_block_timestamps_many, latest_block, web3_for
 from .config import CHAINS, get_rpc_url
+from .coverage import find_observation
 from .events import (
     debt_updated_event_abis,
     debt_updated_topics,
@@ -39,8 +40,10 @@ GET_PRICE_PER_FULL_SHARE_SELECTOR = "0x" + function_signature_to_4byte_selector(
 def _hex(value: Any) -> str:
     if hasattr(value, "hex"):
         text = value.hex()
-        return text if text.startswith("0x") else f"0x{text}"
-    return str(value)
+        text = text if text.startswith("0x") else f"0x{text}"
+    else:
+        text = str(value)
+    return text.lower() if text.startswith("0x") else text
 
 
 def _jsonable_args(args: dict[str, Any]) -> dict[str, Any]:
@@ -133,6 +136,9 @@ def insert_raw_event(
     block_ts: int,
     args: dict[str, Any],
 ) -> None:
+    key = dict(chain_id=chain_id, tx_hash=_hex(log["transactionHash"]), log_index=int(log["logIndex"]))
+    if find_observation(conn, "events_raw", key, tuple(key)) is not None:
+        return
     conn.execute(
         """
         INSERT OR IGNORE INTO events_raw (
@@ -326,6 +332,10 @@ def insert_vault_fee_event(conn, row: tuple[Any, ...]) -> int:
 
 
 def insert_strategy_report(conn, row: tuple[Any, ...]) -> None:
+    row = (*row[:4], _hex(row[4]), *row[5:])
+    key = dict(chain_id=row[0], tx_hash=row[4], log_index=row[5])
+    if find_observation(conn, "strategy_reports", key, tuple(key)) is not None:
+        return
     conn.execute(
         """
         INSERT OR IGNORE INTO strategy_reports (

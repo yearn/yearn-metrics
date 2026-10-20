@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS vault_inventory_events (
 
 CREATE INDEX IF NOT EXISTS vault_inventory_events_vault_idx
 ON vault_inventory_events (chain_id, version, vault_address, source_kind, block_number);
+CREATE INDEX IF NOT EXISTS vault_inventory_events_hash_identity_idx
+ON vault_inventory_events (chain_id, lower(tx_hash), log_index, source_kind);
 
 CREATE TABLE IF NOT EXISTS events_raw (
     chain_id INTEGER NOT NULL,
@@ -83,6 +85,8 @@ CREATE TABLE IF NOT EXISTS events_raw (
 
 CREATE INDEX IF NOT EXISTS events_raw_contract_idx
 ON events_raw (chain_id, contract_address, event_name, block_number);
+CREATE INDEX IF NOT EXISTS events_raw_hash_identity_idx
+ON events_raw (chain_id, lower(tx_hash), log_index);
 
 CREATE TABLE IF NOT EXISTS strategy_reports (
     chain_id INTEGER NOT NULL,
@@ -108,6 +112,8 @@ CREATE TABLE IF NOT EXISTS strategy_reports (
 
 CREATE INDEX IF NOT EXISTS strategy_reports_asset_idx
 ON strategy_reports (chain_id, asset, block_timestamp);
+CREATE INDEX IF NOT EXISTS strategy_reports_hash_identity_idx
+ON strategy_reports (chain_id, lower(tx_hash), log_index);
 
 CREATE TABLE IF NOT EXISTS vault_flows (
     chain_id INTEGER NOT NULL,
@@ -256,7 +262,10 @@ def connect(path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
 
 
 def init_db(conn: sqlite3.Connection) -> None:
+    from .coverage import SCHEMA as COVERAGE_SCHEMA
+
     conn.executescript(SCHEMA)
+    conn.executescript(COVERAGE_SCHEMA)
     _ensure_column(conn, "vault_inventory_events", "action", "TEXT NOT NULL DEFAULT 'added'")
     _ensure_column(conn, "vaults", "management", "TEXT NOT NULL DEFAULT 'yearn'")
     _ensure_column(conn, "vaults", "protocol", "TEXT")
