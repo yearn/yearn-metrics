@@ -1,6 +1,6 @@
 # Powerglove and Neon branch stack
 
-Updated October 16, 2026. Source branches live in `yearn/yearn-metrics`.
+Updated October 20, 2026. Source branches live in `yearn/yearn-metrics`.
 A PR's **head/source** contains its changes; its **base/target** receives them.
 
 ## Current review order
@@ -10,8 +10,9 @@ A PR's **head/source** contains its changes; its **base/target** receives them.
 | [#38](https://github.com/yearn/yearn-metrics/pull/38) | `ross/powerglove-hosted-api` | `ross/pr-19-yvusd-fees` (#37) | Open draft; hosted API and integrated backend foundation |
 | [#43](https://github.com/yearn/yearn-metrics/pull/43) | `ross/tvl-comparison-followup` | `ross/powerglove-hosted-api` (#38) | Service retirement, current adapter comparison, mapping corrections and complete-position selection |
 
-Review from #22 through #38, then #43. Each PR targets its immediate
-predecessor; only #22 targets `main`. The earlier layers are listed below.
+PRs #22 and #23 have merged. Review from #24 through #38, then #43.
+Each open PR targets its immediate predecessor; only #24 targets `main`.
+The earlier open layers are listed below.
 
 PRs [#40](https://github.com/yearn/yearn-metrics/pull/40),
 [#42](https://github.com/yearn/yearn-metrics/pull/42), and
@@ -62,16 +63,13 @@ The original working tip is retained at
 
 ## Earlier PRs
 
-PRs #23–#37 now target their immediate predecessor branches. Their source
-commits are unchanged. Local branch numbering does not match their current
-GitHub PR numbers. The replacement PRs use branches in `yearn/yearn-metrics`,
+PR #24 targets `main`; PRs #25–#37 target their immediate predecessor
+branches. Local branch numbering does not match their current GitHub PR numbers. The replacement PRs use branches in `yearn/yearn-metrics`,
 not the earlier fork PRs:
 
 | Branch | Current PR | Base / target branch |
 | --- | --- | --- |
-| `ross/pr-01-envio-history` | [#22](https://github.com/yearn/yearn-metrics/pull/22) | `main` |
-| `ross/pr-02-bounded-catchup` | [#23](https://github.com/yearn/yearn-metrics/pull/23) | `ross/pr-01-envio-history` |
-| `ross/pr-03-yearn-pricing` | [#24](https://github.com/yearn/yearn-metrics/pull/24) | `ross/pr-02-bounded-catchup` |
+| `ross/pr-03-yearn-pricing` | [#24](https://github.com/yearn/yearn-metrics/pull/24) | `main` |
 | `ross/pr-04-canonical-fees` | [#25](https://github.com/yearn/yearn-metrics/pull/25) | `ross/pr-03-yearn-pricing` |
 | `ross/pr-05-verified-fee-recovery` | [#26](https://github.com/yearn/yearn-metrics/pull/26) | `ross/pr-04-canonical-fees` |
 | `ross/pr-06-closed-day-exports` | [#27](https://github.com/yearn/yearn-metrics/pull/27) | `ross/pr-05-verified-fee-recovery` |
@@ -86,7 +84,35 @@ not the earlier fork PRs:
 | `ross/pr-18-powerglove-analytics` | [#36](https://github.com/yearn/yearn-metrics/pull/36) | `ross/pr-17-tvl-price-repairs` |
 | `ross/pr-19-yvusd-fees` | [#37](https://github.com/yearn/yearn-metrics/pull/37) | `ross/pr-18-powerglove-analytics` |
 
-These earlier branches were not rewritten by the recent-stack repair.
+The October 20 pricing review carried #24's four review-fix commits through all
+16 open PRs and restored the missing #32 ancestry in #33, retaining the newer
+bounded-catch-up and hash-identity safeguards.
+
+The integrated pricing findings were placed in their owning layers:
+
+- #24 derives report-chain eligibility from the Yearn client mapping.
+- #27 preserves accepted fee quotes after failed refreshes and propagates
+  configuration errors instead of recording invalid prices.
+- #28 preserves pending-day retry selection and cached-price protection while
+  using parallel fallback adapters; exhausted individual provider requests remain
+  retryable without aborting other targets.
+- #33 preserves the conditional writes and tests both writers on PostgreSQL.
+
+The integrated code passed 877 tests, with 7 execution-dependent skips, including
+disposable local PostgreSQL schemas. #24 independently passed 294 tests, with
+12 skips. These are local checks; the integrated review did not request a new
+upstream bot review or claim remote CI approval.
+
+Out-of-scope follow-ups are tracked separately: [zero-decimal scaling](https://github.com/yearn/yearn-metrics/issues/45),
+[direct-provider versus synthetic estimates](https://github.com/yearn/yearn-metrics/issues/46),
+and [pricing-client/result extraction](https://github.com/yearn/yearn-metrics/issues/47).
+Each is recommended for a separate PR. No historical data or selected publication
+was changed by the review.
+
+Pre-review heads are retained under `refs/archive/pricing-stack-review-20261020/`
+and in `artifacts/pricing-stack-review-20261020/before.bundle`. The original
+checkout and its four uncommitted files were preserved. Older recovery notes
+below describe their dated operations, not the current open-PR base layout.
 
 ## October 16 ancestry reconciliation
 
