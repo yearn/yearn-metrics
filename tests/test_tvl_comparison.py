@@ -33,6 +33,14 @@ def test_unverified_external_prices_are_not_reported_as_priced_discrepancies():
     assert len(result['categories'][0]['unresolvedVaults'])==1
 
 
+def test_unavailable_external_contribution_remains_in_unresolved_scope():
+    observation = external('unpriced', None) | {'units': None}
+    result = discrepancy_details([row('unpriced', None, None)],
+        evidence([observation]), 'dataset')['categories'][0]
+    assert result['theirsOnly'] == []
+    assert [r['vaultAddress'] for r in result['unresolvedVaults']] == ['unpriced']
+
+
 def test_checks_separate_missed_from_handled_and_unverified():
     checks=[dict(protocol='yearn-finance',status=s,ourDeductionUsd='10') for s in ['missed','handled','unverified']]
     result=discrepancy_details([],evidence(checks=checks),'dataset')['categories'][0]

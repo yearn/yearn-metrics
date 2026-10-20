@@ -29,14 +29,15 @@ def discrepancy_details(rows, evidence, dataset_id):
             else:
                 ours_only.append(record | {'defillamaUsd': 0, 'reason': 'Outside the independently checked adapter scope'})
         for (target, chain, address), observation in external.items():
-            if target != protocol or Decimal(observation.get('units') or '0') <= 0:
+            units = observation.get('units')
+            if target != protocol or (units is not None and Decimal(units) <= 0):
                 continue
             row = local.get((chain, address))
             # A zero net contribution is not a scope exclusion: the parent and child
             # attribution differs between the two implementations.
             if row is not None and row.get('tvl_usd') is not None:
                 continue
-            amount = value(observation.get('replayTvlUsd'))
+            amount = value(observation.get('replayTvlUsd')) if units is not None else None
             record = {'chainId': chain, 'vaultAddress': address, 'name': observation.get('name'),
                       'category': observation.get('category'), 'oursUsd': None if row else 0,
                       'defillamaUsd': amount,
