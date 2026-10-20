@@ -1293,7 +1293,13 @@ def _price_rows_with_yearn_prices(conn, rows) -> tuple[int, list]:
         for chain_id, token_address, timestamp in report_targets
     }
     results: dict[tuple[int, str, int], tuple[float | None, str, dict[str, Any]]] = {}
-    supported_chains = {cfg.chain_id for cfg in CHAINS.values()} | {100}
+    supported_chains = set()
+    for chain_id in {target[0] for target in normalized_targets}:
+        try:
+            yearn_prices_token_key(chain_id, ZERO_ADDRESS)
+        except ValueError:
+            continue
+        supported_chains.add(chain_id)
     day_start = int(time.time()) // 86_400 * 86_400
     for target in normalized_targets:
         if target[0] not in supported_chains:

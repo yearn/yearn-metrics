@@ -709,3 +709,26 @@ def test_run_checks_yearn_credentials_before_discovery_and_allows_configured_run
     else:
         assert cli.main(command) == 0
         assert calls[-1] == "price_unpriced_reports"
+
+
+def test_report_pricing_uses_the_client_chain_capability(monkeypatch, tmp_path):
+    from yearn_data import pricing
+    conn = connect(tmp_path / 'chain-capability.sqlite')
+    init_db(conn)
+    asset = '0x' + '2' * 40
+    conn.execute("""INSERT INTO strategy_reports (
+        chain_id,version,vault_address,strategy_address,tx_hash,log_index,
+        block_number,block_timestamp,asset,asset_decimals,gain_raw,loss_raw,net_raw)
+        VALUES (12345,'v3',?,?,'tx',0,1,100,?,6,'1','0','1')""", (asset, asset, asset))
+    original_key = pricing.yearn_prices_token_key
+    def extended_key(chain, token):
+        return 'new-chain:' + token.lower() if chain == 12345 else original_key(chain, token)
+    monkeypatch.setattr(pricing, 'yearn_prices_token_key', extended_key)
+    calls = []
+    def batch(targets):
+        calls.extend(targets)
+        return {t: (2.0, 'ok', {'provider': 'yearn-prices', 'normalized_timestamp': t[2]}) for t in targets}
+    monkeypatch.setattr(pricing, 'fetch_yearn_prices_batch', batch)
+    pricing.price_unpriced_reports(conn, fallback=None, onchain_fallbacks=False)
+    assert calls == [(12345, asset, 86399)]
+    assert tuple(conn.execute('SELECT price_usd,status FROM prices').fetchone()) == (2.0, 'ok')
