@@ -186,6 +186,48 @@ def test_existing_discovery_and_collection_on_postgres(pg,tmp_path,monkeypatch,c
     fn(**{name:available[name] for name in inspect.signature(fn).parameters})
 
 
+def test_legacy_tvl_catalog_import_on_postgres(pg,tmp_path):
+    import sqlite3
+    from yearn_data.tvl_sources import import_service_catalog
+    conn, _ = pg
+    init_db(conn)
+    path = tmp_path/'legacy.sqlite'
+    with sqlite3.connect(path) as source:
+        source.executescript('''CREATE TABLE vaults(id INTEGER,chain_id INTEGER,address TEXT,category TEXT,
+            asset_address TEXT,asset_symbol TEXT,asset_decimals INTEGER,name TEXT,api_version TEXT,is_retired INTEGER);
+            CREATE TABLE strategies(chain_id INTEGER,address TEXT,vault_id INTEGER,name TEXT);''')
+        for number, retired in ((1, 0), (2, 1)):
+            source.execute('INSERT INTO vaults VALUES (?,?,?,?,?,?,?,?,?,?)',
+                (number, 999, '0x'+str(number)*40, 'v3', '0x'+'8'*40, 'USD', 6, 'name', None, retired))
+    assert import_service_catalog(conn, path) == 2
+    assert import_service_catalog(conn, path) == 2
+    assert [r[0] for r in conn.execute('SELECT active FROM tvl_vaults ORDER BY address')] == [1, 0]
+
+
+@pytest.mark.parametrize('job', ['canonical', 'usd'])
+def test_failed_fee_export_rolls_back_on_postgres(pg,monkeypatch,job):
+    from yearn_data import fees, fee_valuation
+    from test_fee_valuation import seed, CUTOFF
+    conn, _ = pg
+    init_db(conn)
+    seed(conn,1)
+    module = fees if job == 'canonical' else fee_valuation
+    export = fees.run_canonical_fees if job == 'canonical' else lambda c: fee_valuation.run_fee_usd(c,before_timestamp=CUTOFF)
+    original = module.write_output
+    def interrupted(conn, run_id, name, row):
+        original(conn, run_id, name, row)
+        raise RuntimeError('injected export interruption')
+    monkeypatch.setattr(module, 'write_output', interrupted)
+    with pytest.raises(RuntimeError, match='interruption'):
+        export(conn)
+    run = conn.execute('SELECT * FROM analysis_runs ORDER BY id DESC LIMIT 1').fetchone()
+    assert run['status'] == 'failed' and run['completed_at'] is not None
+    assert conn.execute('SELECT COUNT(*) FROM analysis_outputs WHERE run_id=?', (run['id'],)).fetchone()[0] == 0
+    monkeypatch.setattr(module, 'write_output', original)
+    completed = export(conn)
+    assert conn.execute('SELECT status FROM analysis_runs WHERE id=?', (completed,)).fetchone()[0] == 'complete'
+
+
 def test_existing_lifetime_yield_analysis_on_postgres(pg,tmp_path,monkeypatch):
     import test_analysis as cases
     from yearn_data.storage import seed_chains

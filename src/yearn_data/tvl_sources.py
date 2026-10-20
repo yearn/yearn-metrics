@@ -51,7 +51,7 @@ def import_service_catalog(conn, path):
                     asset_symbol=COALESCE(excluded.asset_symbol,tvl_vaults.asset_symbol),name=excluded.name''',
                     (row['chain_id'],row['category'],address,asset,row['asset_symbol'],row['asset_decimals'],
                      row['name'],row['api_version'],'yearn','curation' if row['category']=='curation' else None,
-                     not row['is_retired'],now))
+                     int(not row['is_retired']),now))
                 conn.execute('UPDATE tvl_vaults SET tvl_category=? WHERE chain_id=? AND address=?',
                              (row['category'],row['chain_id'],address))
                 count += 1
