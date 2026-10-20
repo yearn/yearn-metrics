@@ -8,6 +8,9 @@ For pricing policy, configuration and Yearn-only commands, see [historical earni
 
 ## Quick Start
 
+Copy `.env.example` to `.env` and configure `YEARN_PRICE_PROD_KEY` before running
+the Yearn Prices commands below, along with the ingestion/RPC settings you need.
+
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
@@ -39,6 +42,7 @@ ETHERSCAN_API_KEY=
 ```bash
 yearn-data --db data/yearn.sqlite discover --chains eth arb kat
 yearn-data index-events --to-block 25400000 --chunk-size 5000
+# Requires YEARN_PRICE_PROD_KEY in .env; use --price-source defillama without it.
 yearn-data run lifetime-yield
 yearn-data run vault-volume
 ```

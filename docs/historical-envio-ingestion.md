@@ -101,8 +101,8 @@ set `FROM_BLOCK` and `TO_BLOCK` to cover the ranges named in the diagnostics:
 ```bash
 yearn-data --db data/yearn.sqlite catch-up --chain eth \
   --from-block "$FROM_BLOCK" --to-block "$TO_BLOCK"
-yearn-data --db data/yearn.sqlite price --chains eth
-yearn-data --db data/yearn.sqlite analyze lifetime-yield
+yearn-data --db data/yearn.sqlite price --source defillama --chains eth
+yearn-data --db data/yearn.sqlite analyze lifetime-yield --price-source defillama
 yearn-data --db data/yearn.sqlite export lifetime-yield --out exports
 ```
 
@@ -112,6 +112,9 @@ asset/decimal metadata only when the raw report evidence agrees, commits metadat
 and coverage together, and stops on conflicting raw amounts or block evidence.
 Report identities and raw amounts are preserved. The commands above are an
 operator-run repair; ordinary discovery and forward imports do not run it.
+This repair example explicitly selects DefiLlama pricing, so it does not require
+`YEARN_PRICE_PROD_KEY`. For authenticated Yearn Prices, use the commands and
+configuration in [historical earnings pricing](earnings-pricing.md).
 
 ## Repeat or resume an import
 

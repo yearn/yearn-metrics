@@ -608,3 +608,46 @@ def test_vault_fees_counts_refund_and_protocol_only_events_by_all_components(
             assert value is None
         else:
             assert Decimal(value) == Decimal("2")
+
+
+@pytest.mark.parametrize("version", ["v2", "v3"])
+@pytest.mark.parametrize("defillama_price", [None, 2.0])
+def test_vault_fees_never_silently_uses_yearn_prices(tmp_path, version, defillama_price):
+    conn = connect(tmp_path / "test.sqlite")
+    init_db(conn)
+    seed_chains(conn, CHAINS)
+    asset = "0x" + "2" * 40
+    if version == "v3":
+        conn.execute(
+            """INSERT INTO strategy_reports (
+                chain_id, version, vault_address, strategy_address, tx_hash, log_index, block_number,
+                block_timestamp, asset, asset_decimals, gain_raw, loss_raw, net_raw, total_fees_raw
+            ) VALUES (1, 'v3', '0x0000000000000000000000000000000000000001',
+                      '0x0000000000000000000000000000000000000003',
+                      '0xfee', 0, 10, 100, ?, 6, '0', '0', '0', '1000000')""", (asset,),
+        )
+    else:
+        conn.execute(
+            """INSERT INTO vault_fee_events (
+                chain_id, version, source, vault_address, tx_hash, log_index, block_number,
+                block_timestamp, asset, asset_decimals, fee_raw
+            ) VALUES (1, 'v2', 'v2_harvest_share_mint', '0x0000000000000000000000000000000000000001',
+                      '0xfee', 0, 10, 100, ?, 6, '1000000')""", (asset,),
+        )
+    conn.execute("""INSERT INTO prices (chain_id, token_address, timestamp, source, price_usd, status)
+                    VALUES (1, ?, 100, 'yearn-prices', 3.0, 'ok')""", (asset,))
+    if defillama_price is not None:
+        conn.execute("""INSERT INTO prices (chain_id, token_address, timestamp, source, price_usd, status)
+                        VALUES (1, ?, 100, 'defillama', ?, 'ok')""", (asset, defillama_price))
+    conn.commit()
+    run_id = run_vault_fees(conn)
+    outputs = {row["name"]: from_json(row["row_json"]) for row in conn.execute(
+        "SELECT name, row_json FROM analysis_outputs WHERE run_id=?", (run_id,))}
+    assert outputs["fee_events"]["price_usd"] == defillama_price
+    assert outputs["fee_summary"]["priced_events"] == int(defillama_price is not None)
+    assert outputs["fee_summary"]["unpriced_events"] == int(defillama_price is None)
+    value = outputs["fee_events"]["total_fees_usd"]
+    if defillama_price is None:
+        assert value is None
+    else:
+        assert Decimal(value) == Decimal("2")

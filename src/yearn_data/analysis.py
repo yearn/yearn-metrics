@@ -265,25 +265,6 @@ def run_lifetime_yield(
     return run_id
 
 
-def _selected_report_price_join(table_alias: str) -> str:
-    return f"""
-        LEFT JOIN prices p
-          ON p.chain_id = {table_alias}.chain_id
-         AND p.token_address = {table_alias}.asset
-         AND p.timestamp = {table_alias}.block_timestamp
-         AND p.source = (
-            SELECT p2.source
-            FROM prices p2
-            WHERE p2.chain_id = {table_alias}.chain_id
-              AND p2.token_address = {table_alias}.asset
-              AND p2.timestamp = {table_alias}.block_timestamp
-              AND p2.status = 'ok'
-            ORDER BY CASE p2.source WHEN 'defillama' THEN 0 ELSE 1 END
-            LIMIT 1
-         )
-    """
-
-
 def _empty_fee_bucket(dimension: str, key: str, row: dict[str, Any]) -> dict[str, Any]:
     return {
         "dimension": dimension,
@@ -409,7 +390,7 @@ def run_vault_fees(conn) -> int:
         FROM strategy_reports r
         LEFT JOIN vaults v
           ON v.chain_id = r.chain_id AND v.address = r.vault_address
-        {_selected_report_price_join("r")}
+        {_selected_price_join("r")}
         WHERE r.version='v3'
           AND (
             CAST(COALESCE(r.protocol_fees_raw, '0') AS INTEGER) > 0
@@ -471,7 +452,7 @@ def run_vault_fees(conn) -> int:
         FROM vault_fee_events fe
         LEFT JOIN vaults v
           ON v.chain_id = fe.chain_id AND v.address = fe.vault_address
-        {_selected_report_price_join("fe")}
+        {_selected_price_join("fe")}
         WHERE fe.version='v2'
           AND CAST(fe.fee_raw AS INTEGER) > 0
         ORDER BY fe.chain_id, fe.block_number, fe.log_index

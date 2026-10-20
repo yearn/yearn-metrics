@@ -519,3 +519,53 @@ def test_run_rejects_unsupported_fallback_flags_before_discovery_or_indexing(mon
         monkeypatch.setattr(cli, name, lambda *_args, **_kwargs: pytest.fail("Must reject before writes"))
     with pytest.raises(ValueError, match="onchain.*DefiLlama"):
         cli.main(["--db", str(tmp_path / "test.sqlite"), "run", "lifetime-yield", "--no-provider-fallback"])
+
+
+@pytest.mark.parametrize("fallback_status", ["missing", "retryable", "invalid", "ok"])
+def test_yearn_fallback_does_not_replace_good_stored_prices_with_failures(monkeypatch, tmp_path, fallback_status):
+    from yearn_data import pricing
+    from yearn_data.analysis import run_lifetime_yield
+
+    conn = connect(tmp_path / "test.sqlite")
+    init_db(conn)
+    seed_chains(conn, CHAINS)
+    assets = ["0x" + digit * 40 for digit in ["2", "4", "6"]]
+    for index, asset in enumerate(assets):
+        conn.execute(
+            """INSERT INTO strategy_reports (
+                chain_id, version, vault_address, strategy_address, tx_hash, log_index,
+                block_number, block_timestamp, asset, asset_decimals, gain_raw, loss_raw,
+                net_raw, extra_json
+            ) VALUES (1, 'v3', '0x0000000000000000000000000000000000000001',
+                      '0x0000000000000000000000000000000000000003', ?, 0,
+                      10, 100, ?, 6, '1000000', '0', '1000000', '{}')""", (f"0x{index}", asset),
+        )
+    conn.execute("""INSERT INTO prices (chain_id, token_address, timestamp, block_number,
+                    source, price_usd, status, raw_json)
+                    VALUES (1, ?, 100, 1, 'defillama', 5.0, 'ok', '{"source":"existing-adapter"}')""",
+                 (assets[0],))
+    conn.execute("""INSERT INTO prices (chain_id, token_address, timestamp, source, status)
+                    VALUES (1, ?, 100, 'defillama', 'missing')""", (assets[2],))
+    conn.commit()
+    monkeypatch.setattr(pricing, "fetch_yearn_prices_batch", lambda _: {})
+    monkeypatch.setattr(pricing, "fetch_yearn_price", lambda *_: (None, "missing", {}))
+
+    def fallback(targets):
+        return {target: ((9.0 if fallback_status == "ok" else None), fallback_status, {"source": "fetched"})
+                if target[1] == assets[0] else (7.0, "ok", {"source": "fetched"}) for target in targets}
+    monkeypatch.setattr(pricing, "fetch_defillama_prices_batch", fallback)
+    count = price_unpriced_reports(conn, onchain_fallbacks=False)
+    saved = {row["token_address"]: row for row in conn.execute("SELECT * FROM prices WHERE source='defillama'")}
+    assert saved[assets[0]]["status"] == "ok"
+    expected = 9.0 if fallback_status == "ok" else 5.0
+    assert saved[assets[0]]["price_usd"] == expected
+    if fallback_status != "ok":
+        assert saved[assets[0]]["block_number"] == 1
+        assert from_json(saved[assets[0]]["raw_json"]) == {"source": "existing-adapter"}
+    assert count == (6 if fallback_status == "ok" else 5)
+    assert saved[assets[1]]["price_usd"] == saved[assets[2]]["price_usd"] == 7.0
+    run_id = run_lifetime_yield(conn)
+    summary = from_json(conn.execute("SELECT row_json FROM analysis_outputs WHERE run_id=? AND name='total_yield_summary'",
+                                    (run_id,)).fetchone()[0])
+    assert summary["unpriced_reports"] == 0
+    assert float(summary["net_yield_usd"]) == expected + 14

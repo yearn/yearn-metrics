@@ -37,6 +37,8 @@ event indexing starts.
 
 These commands do not fetch onchain events again.
 Volume and legacy fee analyses keep their existing DefiLlama policy.
+Legacy fee analysis uses only successful stored DefiLlama prices; Yearn Prices
+rows are not substituted when a DefiLlama valuation is absent.
 
 ## Understand price requests
 
@@ -50,6 +52,8 @@ Malformed or duplicate batch points are omitted and checked through exact
 requests, while valid points in the same batch remain usable. A malformed exact
 response is saved as `invalid`, remains eligible for
 `--retry-missing`, and can use the configured provider fallback.
+An unsuccessful DefiLlama fallback fetch preserves an existing successful price
+and its evidence; it can still insert a new result or refresh an unsuccessful row.
 
 Saved price records include these details:
 

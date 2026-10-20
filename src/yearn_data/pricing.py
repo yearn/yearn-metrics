@@ -1181,13 +1181,19 @@ def _write_defillama_price_row(
         )
         if fallback_status == "ok":
             price, status, payload = fallback_price, fallback_status, fallback_payload
-    conn.execute(
+    cursor = conn.execute(
         """
-        INSERT OR REPLACE INTO prices (
+        INSERT INTO prices (
             chain_id, token_address, timestamp, block_number,
             source, price_usd, status, raw_json
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (chain_id, token_address, timestamp, source) DO UPDATE SET
+            block_number = excluded.block_number,
+            price_usd = excluded.price_usd,
+            status = excluded.status,
+            raw_json = excluded.raw_json
+        WHERE prices.status != 'ok' OR excluded.status = 'ok'
         """,
         (
             chain_id,
@@ -1200,7 +1206,7 @@ def _write_defillama_price_row(
             to_json(payload),
         ),
     )
-    return 1
+    return cursor.rowcount
 
 
 def _defillama_coin_batches(rows, max_timestamps: int = 400):
