@@ -71,6 +71,44 @@ def test_absent_contract_does_not_block_other_vaults_or_certify_coverage(db, mon
     assert not any(method == 'eth_call' for method, _ in provider.calls)
 
 
+@pytest.mark.parametrize('kong_failure', [False, True])
+def test_batched_metadata_keeps_per_vault_fallback(db, monkeypatch, kong_failure):
+    provider = MetadataProvider()
+    client, middle, after = seed_metadata_case(db, monkeypatch, provider)
+    with db:
+        db.execute('UPDATE vaults SET asset_decimals=NULL WHERE address=?', (after,))
+    calls = []
+
+    def metadata(chain_id, addresses):
+        calls.append((chain_id, addresses))
+        if kong_failure:
+            raise RuntimeError('Kong unavailable')
+        return {after: dict(asset=helpers.ASSET, asset_decimals=6, api_version='3.0.4')}
+
+    monkeypatch.setattr(catchup, 'vault_metadata_from_kong', metadata)
+    result = catchup.catch_up(db, 'eth', 10, 30, source='rpc', client=client)
+    assert calls == [(1, [middle, after])]
+    skipped = [middle, after] if kong_failure else [middle]
+    assert [vault['address'] for vault in result['skipped_vaults']] == skipped
+    assert {r[0] for r in db.execute('SELECT DISTINCT target FROM history_coverage')} == (
+        {helpers.VAULT} if kong_failure else {helpers.VAULT, after})
+    code_calls = [params for method, params in provider.calls if method == 'eth_getCode']
+    assert [params[0] for params in code_calls] == skipped
+    assert all(int(params[1], 16) == 30 for params in code_calls)
+
+
+def test_batched_metadata_conflict_stops_before_scanning_vault(db, monkeypatch):
+    provider = MetadataProvider()
+    client, middle, after = seed_metadata_case(db, monkeypatch, provider)
+    monkeypatch.setattr(catchup, 'vault_metadata_from_kong', lambda *args: {
+        middle: dict(asset=after, asset_decimals=6, api_version='3.0.4')})
+    with pytest.raises(ValueError, match=f'{middle}.*30') as error:
+        catchup.catch_up(db, 'eth', 10, 30, source='rpc', client=client)
+    assert 'metadata conflicts with inventory asset' in str(error.value.__cause__)
+    assert {r[0] for r in db.execute('SELECT DISTINCT target FROM history_coverage')} == {helpers.VAULT}
+    assert db.execute('SELECT asset_decimals FROM vaults WHERE address=?', (middle,)).fetchone()[0] is None
+
+
 @pytest.mark.parametrize('provider', [MetadataProvider(failure=RuntimeError('archive unavailable')),
                                      MetadataProvider(code='0x6000')])
 def test_unavailable_archive_or_unreadable_contract_still_fails_with_context(db, monkeypatch, provider):

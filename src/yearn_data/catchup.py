@@ -72,13 +72,9 @@ def materialize_inventory(conn, facts):
                  active, int(time.time())))
 
 
-def enrich_metadata(conn, client, vault, block):
+def enrich_metadata(conn, client, vault, block, metadata):
     """Fill required metadata, or return False for proven absent contract code."""
     address = vault["address"]
-    try:
-        metadata = vault_metadata_from_kong(client.chain_id, [address]).get(Web3.to_checksum_address(address))
-    except Exception:
-        metadata = None
     if not metadata or metadata.get("asset_decimals") is None or not metadata.get("api_version"):
         if not client.w3.eth.get_code(Web3.to_checksum_address(address), block_identifier=block):
             return False
@@ -183,11 +179,18 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
         "SELECT * FROM vaults WHERE chain_id=? AND management='yearn' ORDER BY address", (chain_id,))]
     if not vaults:
         raise ValueError("no retained Yearn vaults; discover or import classified inventory first")
+    metadata_targets = [vault["address"] for vault in vaults
+                        if not vault["asset"] or vault["asset_decimals"] is None or not vault["api_version"]]
+    try:
+        metadata_by_address = vault_metadata_from_kong(chain_id, metadata_targets) if metadata_targets else {}
+    except Exception:
+        metadata_by_address = {}
     for vault in vaults:
         check_release(vault)
         if not vault["asset"] or vault["asset_decimals"] is None or not vault["api_version"]:
             try:
-                enriched = enrich_metadata(conn, client, vault, to_block)
+                enriched = enrich_metadata(conn, client, vault, to_block,
+                                           metadata_by_address.get(Web3.to_checksum_address(vault["address"])))
             except Exception as exc:
                 raise ValueError(f"metadata unavailable for vault {vault['address']} at block {to_block}") from exc
             if not enriched:

@@ -7,7 +7,7 @@ from hexbytes import HexBytes
 import pytest
 from web3 import Web3
 
-from yearn_data import catchup, cli
+from yearn_data import catchup, cli, kong
 from yearn_data.history_sources import HistoricalSource, inventory_targets
 from yearn_data.indexing import normalize_strategy_report
 from yearn_data.storage import connect, init_db
@@ -80,6 +80,46 @@ def test_discovery_unions_retained_inactive_vaults_and_resumes(db, monkeypatch):
     repeated = catchup.catch_up(db, 'op', 10, 30, discover=True, chunk_size=7, client=client)
     assert repeated['completed_ranges'] == repeated['inserted_rows'] == 0
     assert client.calls == []
+
+
+def test_discovery_batches_missing_metadata_and_reuses_cached_values(db, monkeypatch):
+    addresses = [Web3.to_checksum_address(f'0x{0xabcdef000 + i:040x}') for i in range(205)]
+    external = '0x' + '44' * 20
+    seed(db, external, management='external')
+    with db:
+        db.execute('UPDATE vaults SET asset_decimals=NULL WHERE address=?', (external,))
+    cached = dict(db.execute('SELECT * FROM vaults WHERE address=?', (VAULT,)).fetchone())
+    client = Source()
+
+    def inventory(target, lo, hi, source):
+        rows = Source.inventory(client, target, lo, hi, source)
+        return [{**row, 'vault_address': address, 'log_index': index,
+                 'decoded_json': json.dumps(dict(token=ASSET, vault=address, api_version='0.4.6', vault_id=index))}
+                for row in rows for index, address in enumerate(addresses)]
+
+    requests = []
+
+    def post(url, json, timeout):
+        variables = json['variables']
+        requests.append(variables)
+        vaults = [dict(address=address.lower(), apiVersion='0.4.6',
+                       asset=dict(address=ASSET, decimals=6)) for address in variables['addresses']]
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: dict(data=dict(vaults=vaults)))
+
+    monkeypatch.setattr(client, 'inventory', inventory)
+    monkeypatch.setattr(kong.requests, 'post', post)
+    result = catchup.catch_up(db, 'op', 10, 20, discover=True, client=client)
+    assert result['vaults'] == 206 and result['skipped_vaults'] == []
+    assert [len(request['addresses']) for request in requests] == [100, 100, 5]
+    assert all(request['chainId'] == 10 for request in requests)
+    assert {address for request in requests for address in request['addresses']} == set(addresses)
+    assert dict(db.execute('SELECT * FROM vaults WHERE address=?', (VAULT,)).fetchone()) == cached
+    assert db.execute('SELECT asset_decimals FROM vaults WHERE address=?', (external,)).fetchone()[0] is None
+
+    requests.clear()
+    repeated = catchup.catch_up(db, 'op', 10, 20, discover=True, client=client)
+    assert repeated['vaults'] == 206 and repeated['completed_ranges'] == 0
+    assert requests == []
 
 
 def test_failure_keeps_only_completed_ranges_then_resumes(db):
