@@ -249,3 +249,15 @@ def test_good_fallback_quote_survives_failed_refresh_on_postgres(pg):
     refreshed = {key: (3.0, 'ok', {'evidence': 'new valid quote'})}
     assert _write_defillama_price_row(conn, row, refreshed, None, onchain_fallbacks=False) == 1
     assert conn.execute('SELECT price_usd FROM prices').fetchone()[0] == 3.0
+
+
+def test_failed_fee_refresh_preserves_quote_on_postgres(pg):
+    from yearn_data.fee_valuation import save_price
+    conn, _ = pg
+    init_db(conn)
+    target = (1, '0x' + '2' * 40, 86399)
+    good = (2.5, 'ok', {'provider': 'yearn-prices', 'normalized_timestamp': target[2]})
+    save_price(conn, target, good)
+    before = dict(conn.execute('SELECT * FROM fee_daily_prices').fetchone())
+    save_price(conn, target, (None, 'retryable', {'provider': 'yearn-prices'}))
+    assert dict(conn.execute('SELECT * FROM fee_daily_prices').fetchone()) == before
