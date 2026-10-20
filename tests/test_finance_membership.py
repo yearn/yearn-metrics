@@ -151,11 +151,13 @@ def test_ethereum_remote_deduction_and_failed_evidence(monkeypatch, sender_prese
     child = '0x80c34bd3a3569e126e7055831036aa7b212cb159'
     local_asset = '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48'
     remote_asset = '0x203a662b0bd271a6ed5a60edfbd04bfce608fd36'
-    active = {a: {'asset': {'address': local_asset}} for a in [parent, OTHER] + ([sender] if sender_present else [])}
+    active = {a: {'chainId': 1, 'address': a, 'asset': {'address': local_asset}}
+              for a in [parent, OTHER] + ([sender] if sender_present else [])}
     balances = {a: (100,) for a in active}
     debts = {a: [] for a in active}
     debts[parent] = [(sender, 100)]
     values = {(a, 'asset()'): (local_asset,) for a in active}
+    values.update({(a, 'totalAssets()'): (100,) for a in active})
     values.update({(sender, 'REMOTE_CHAIN_ID()'): (747474,), (sender, 'REMOTE_COUNTERPART()'): (holder,),
                    (parent, 'strategies(address)'): (0, 0, 100, 0)})
     remote = FixtureReader({(holder, 'REMOTE_COUNTERPART()'): (sender,),
@@ -164,6 +166,8 @@ def test_ethereum_remote_deduction_and_failed_evidence(monkeypatch, sender_prese
                             (child, 'totalSupply()'): (5,),
                             (child, 'totalAssets()'): None if failure == 'unavailable' else (100,)})
     def remote_reader(chain):
+        if chain == 1:
+            return FixtureReader(values)
         assert chain == 747474
         return remote
     def block_at(timestamp):
@@ -189,6 +193,20 @@ def test_ethereum_remote_deduction_and_failed_evidence(monkeypatch, sender_prese
         recognized = finance_replay_routes([replay])
         position = {'chain_id': 1, 'parent': parent, 'strategy': sender, 'child_chain_id': 747474, 'child': child}
         assert finance_overlap_status(position, recognized) == 'handled'
+
+    monkeypatch.setattr(analytics_collect, 'default_debts', lambda *args: debts)
+    rules = policy()
+    rules['explicit'][1] = set()
+    rules['owners'][1] = set()
+    members = analytics_collect.membership_chain(1, list(active.values()), list(active.values()), rules, {})
+    observed = {row['address']: row for row in members}
+    assert 'separate replay' not in observed[target]['reason']
+    if failure:
+        assert observed[target]['included'] is None
+        assert 'unavailable' in observed[target]['reason']
+    else:
+        assert 'cross-chain deductions' in observed[target]['reason']
+    assert 'cross-chain' not in observed[OTHER]['reason']
 
 
 def test_later_failed_route_discards_earlier_parent_evidence():

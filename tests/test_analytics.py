@@ -73,6 +73,10 @@ def test_known_child_without_selected_fee_evidence_stays_unresolved():
 
 def test_rules_extract_cross_routes_and_integer_converter_decimals():
     from yearn_data.analytics_collect import FINANCE_CHAINS, CURATION_CHAINS
+    from yearn_data.finance_membership import capped_debt
+    from web3 import Web3
+
+    parent_asset, child_asset = '0x' + 'ab' * 20, '0x' + 'cd' * 20
 
     finance = """buildNestedDebtByVault subtractNestedDebt get_default_queue withdrawalQueue
 list/vaults/${api.chainId}?origin=yearn
@@ -82,7 +86,7 @@ const blacklist = [];
     finance += f"""const routes = [
       {{ chainId: 1, parent: '{A.upper()}', strategy: '{B}', child: '{C}', getter: 'vault' }},
       {{ chainId: 10, parent: '{A}', strategy: '{C}', child: '{B}', getter: 'vault',
-         parentAsset: '{A}', childAsset: '{B}', parentDecimals: 6, childDecimals: 18 }},
+         parentAsset: '{Web3.to_checksum_address(parent_asset)}', childAsset: '{Web3.to_checksum_address(child_asset)}', parentDecimals: 6, childDecimals: 18 }},
     ];"""
     registry = 'export default {\n  "yearn-curating": { chains: {\n' + ''.join(
         f'    {name}: {{}},\n' for name in CURATION_CHAINS.values()) + '  }\n  },\n}'
@@ -91,13 +95,44 @@ const blacklist = [];
     assert result['routes'][(1, A, B)]['getter'] == 'vault'
     route = result['routes'][(10, A, C)]
     assert route == {'parent': A, 'strategy': C, 'child': B, 'getter': 'vault',
-                     'parentAsset': A, 'childAsset': B, 'parentDecimals': 6, 'childDecimals': 18}
+                     'parentAsset': parent_asset, 'childAsset': child_asset, 'parentDecimals': 6, 'childDecimals': 18}
+    assert capped_debt(100 * 10**6, 200 * 10**18, 1, 4, route, parent_asset, child_asset) == 50 * 10**6
     assert type(route['parentDecimals']) is int
     assert type(route['childDecimals']) is int
     assert all(not owners for owners in result['owners'].values())
     assert all(not vaults for vaults in result['explicit'].values())
     with pytest.raises(ValueError, match='curation.*ethereum'):
         rules(finance, registry.replace('ethereum:', 'ethereum_v2:'))
+
+
+@pytest.mark.parametrize('snapshot', ['legacy', 'current'])
+def test_captured_curator_registry_preserves_verified_hyperevm_scope(snapshot):
+    from pathlib import Path
+    import hashlib
+    from yearn_data.analytics_collect import FINANCE_CHAINS
+
+    fixture = json.loads((Path(__file__).parent / 'fixtures/finance/curator-registry-snapshots.json').read_text())
+    capture = fixture['snapshots'][snapshot]
+    assert capture['sourceSha256'] == {
+        'legacy': '7f23eeb5c4c7e58c158efb12a5ed1afb7a2df305f9d2c0a4e35794b7b3dd291c',
+        'current': 'ba341896a16f189846fd315983b052c22bb19c0d65693bedd63634238bc1b67c',
+    }[snapshot]
+    assert hashlib.sha256(capture['yearnEntry'].encode()).hexdigest() == capture['yearnEntrySha256']
+    finance = """buildNestedDebtByVault subtractNestedDebt get_default_queue withdrawalQueue
+list/vaults/${api.chainId}?origin=yearn
+const v1Vaults = [];
+const blacklist = [];
+""" + 'const chains = [' + ','.join(repr(name) for name in FINANCE_CHAINS.values()) + '];'
+    result = rules(finance, capture['yearnEntry'])
+    common = {'0xfc5f89d29ccaa86e5410a7ad9d9d280d4455c12b',
+              '0x50b75d586929ab2f75dc15f07e1b921b7c4ba8fa',
+              '0x75a1253432356f90611546a487b5350cef08780d'}
+    assert result['owners'][999] == result['owners'][8453] == result['owners'][42161] == common
+    assert result['owners'][747474] == common | {'0x518c21dc88d9780c0a1be566433c571461a70149'}
+    assert result['owners'][1] == common | ({'0x0dca0fdc170baa4ca9c1dcd37ffe01f97bcfd504'} if snapshot == 'current' else set())
+    admitted = {r['address'] for r in fixture['verifiedHyperEvm'] if r['owner'] in result['owners'][999]}
+    assert admitted == {'0x0fb7e41a0a85eb0bca55172b73942cc6685e2b2e',
+                        '0x7bdb0f32cee4847407bfd391594e19b23f5519d0'}
 
 
 def test_membership_unknown_is_neither_missing_nor_included():
