@@ -260,6 +260,17 @@ def index_canonical_fees(conn, chains=None, limit=None, retry_unresolved=False, 
 def run_canonical_fees(conn) -> int:
     """Export raw canonical fees and coverage of the stored report universe."""
     run_id = create_analysis_run(conn,'canonical-fees',{'method_version':METHOD_VERSION,'valuation':'raw-assets-only'})
+    try:
+        _write_canonical_outputs(conn, run_id)
+        complete_analysis_run(conn, run_id)
+    except BaseException:
+        conn.rollback()
+        complete_analysis_run(conn, run_id, status='failed')
+        raise
+    return run_id
+
+
+def _write_canonical_outputs(conn, run_id):
     coverage, by_asset = {}, {}
     rows = conn.execute('''SELECT r.*,f.contract_family,f.status,f.reason,f.event_log_index,
         f.accounting_json,f.evidence_json,f.api_version,f.method_version FROM strategy_reports r LEFT JOIN canonical_fee_reports f
@@ -304,5 +315,3 @@ def run_canonical_fees(conn) -> int:
         write_output(conn,run_id,'canonical_fees_by_asset',bucket)
     from .tokenized_fees import write_tokenized_outputs
     write_tokenized_outputs(conn,run_id)
-    complete_analysis_run(conn,run_id)
-    return run_id

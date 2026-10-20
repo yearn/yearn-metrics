@@ -67,6 +67,25 @@ def db(tmp_path):
     yield c
     c.close()
 
+
+def test_failed_canonical_export_rolls_back_partial_outputs(db, monkeypatch):
+    from yearn_data import fees
+    seed(db)
+    original = fees.write_output
+    def interrupted(conn, run_id, name, row):
+        original(conn, run_id, name, row)
+        raise RuntimeError('injected export interruption')
+    monkeypatch.setattr(fees, 'write_output', interrupted)
+    with pytest.raises(RuntimeError, match='interruption'):
+        run_canonical_fees(db)
+    run = db.execute('SELECT * FROM analysis_runs ORDER BY id DESC LIMIT 1').fetchone()
+    assert run['status'] == 'failed' and run['completed_at'] is not None
+    assert db.execute('SELECT COUNT(*) FROM analysis_outputs WHERE run_id=?', (run['id'],)).fetchone()[0] == 0
+    monkeypatch.setattr(fees, 'write_output', original)
+    completed = run_canonical_fees(db)
+    assert db.execute('SELECT status FROM analysis_runs WHERE id=?', (completed,)).fetchone()[0] == 'complete'
+
+
 @pytest.mark.parametrize('case',DIRECT,ids=lambda c:str(c['event']['id']))
 def test_direct_amounts_match_pinned_reference(case):
     e,a = case['event'],case['raw_log']['args']
