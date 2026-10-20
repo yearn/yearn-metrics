@@ -492,6 +492,7 @@ def test_cli_routes_experimental_v2_option_to_envio_discovery(tmp_path, monkeypa
 
 
 def test_cli_combined_lifetime_yield_uses_envio(tmp_path, monkeypatch):
+    monkeypatch.setenv("YEARN_PRICE_PROD_KEY", "test-only")
     from yearn_data import cli
 
     conn = _db(tmp_path)
@@ -550,8 +551,8 @@ def test_cli_combined_lifetime_yield_uses_envio(tmp_path, monkeypatch):
     ]
     assert calls[0][1]["to_block"] == 100
     assert calls[1][1]["to_block"] == 100
-    assert calls[2][1]["source"] == "defillama"
-    assert calls[2][1]["fallback"] is None
+    assert calls[2][1]["source"] == "yearn-prices"
+    assert calls[2][1]["fallback"] == "defillama"
 
 
 def test_cli_combined_volume_keeps_rpc_path_when_envio_is_selected(tmp_path, monkeypatch):
@@ -1046,6 +1047,7 @@ def test_lifetime_run_keeps_retired_vault_reports(tmp_path, monkeypatch, previou
 
     monkeypatch.setattr(envio, "_pull_window", reports)
     command = ["--db", str(tmp_path / "unused.sqlite"), "run", "lifetime-yield", "--chains", "eth", "--to-block"]
+    monkeypatch.setenv("YEARN_PRICE_PROD_KEY", "test-only")
     if previous_run:
         assert cli.main(command + ["100"]) == 0
         assert conn.execute("SELECT COUNT(*) FROM strategy_reports").fetchone()[0] == 1

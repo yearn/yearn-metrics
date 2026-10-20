@@ -4,7 +4,12 @@ Reusable Python tooling for indexing Yearn vault data and running research jobs 
 
 The first analysis job is `lifetime-yield`, which backfills Yearn V2/V3 `StrategyReported` events, prices report-time vault asset gains/losses, and exports aggregate yield totals.
 
+For pricing policy, configuration and Yearn-only commands, see [historical earnings pricing](docs/earnings-pricing.md).
+
 ## Quick Start
+
+Copy `.env.example` to `.env` and configure `YEARN_PRICE_PROD_KEY` before running
+the Yearn Prices commands below, along with the ingestion/RPC settings you need.
 
 ```bash
 python3 -m venv .venv
@@ -14,8 +19,8 @@ pip install -e '.[dev]'
 yearn-data init-db
 yearn-data discover
 yearn-data index-events
-yearn-data price
-yearn-data analyze lifetime-yield
+yearn-data price --source yearn-prices --no-provider-fallback --no-onchain-fallbacks
+yearn-data analyze lifetime-yield --price-source yearn-prices --no-provider-fallback
 yearn-data export lifetime-yield
 ```
 
@@ -37,6 +42,7 @@ ETHERSCAN_API_KEY=
 ```bash
 yearn-data --db data/yearn.sqlite discover --chains eth arb kat
 yearn-data index-events --to-block 25400000 --chunk-size 5000
+# Requires YEARN_PRICE_PROD_KEY in .env; use --price-source defillama without it.
 yearn-data run lifetime-yield
 yearn-data run vault-volume
 ```
@@ -75,7 +81,7 @@ yearn-data price-volume --source defillama
 yearn-data price --source defillama --no-onchain-fallbacks
 ```
 
-DefiLlama is the only offchain pricing source. When DefiLlama cannot price a token directly, the default pricing path can apply local deterministic fallbacks for canonical stablecoins, canonical wrapped/native equivalents, selected Curve/CRV derivative tokens, exchange-rate wrappers, and Aave aTokens. Use `--no-onchain-fallbacks` to record only direct DefiLlama results. All source/status rows are stored in SQLite.
+Yearn Prices is the default earnings pricing source, with optional DefiLlama fallback; see [historical earnings pricing](docs/earnings-pricing.md). Volume and legacy fee analyses retain their DefiLlama policy. When DefiLlama cannot price a token directly, its pricing path can apply local deterministic fallbacks for canonical stablecoins, canonical wrapped/native equivalents, selected Curve/CRV derivative tokens, exchange-rate wrappers, and Aave aTokens. Use `--source defillama --no-onchain-fallbacks` to record only direct DefiLlama results. All source/status rows are stored in SQLite.
 
 ## Backfill Efficiency
 
