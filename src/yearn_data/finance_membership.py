@@ -29,9 +29,10 @@ def contributions(reader, chain, active, balances, debts, policy):
     token = reader.call([call(a,'token()',outputs=('address',)) for a in addresses])
     asset = reader.call([call(a,'asset()',outputs=('address',)) for a in addresses])
     tokens = {a:(x or y)[0].lower() if x or y else None for a,x,y in zip(addresses,token,asset)}
+    assets = {a:((row.get('asset') or {}).get('address') or '').lower() for a,row in active.items()}
     counted = {a for a in addresses if tokens[a]}
     for parent in addresses:
-        if not tokens[parent] or debts.get(parent) is None:
+        if not tokens[parent] or not assets[parent] or debts.get(parent) is None:
             result[parent] = None
             continue
         if tokens[parent] != parent and tokens[parent] in counted:
@@ -43,8 +44,9 @@ def contributions(reader, chain, active, balances, debts, policy):
             key=(chain,parent,strategy); child=policy['cross'].get(key,strategy)
             if child not in active:continue
             route=policy.get('routes',{}).get(key,{})
-            pa=(active[parent].get('asset') or {}).get('address','').lower()
-            ca=(active[child].get('asset') or {}).get('address','').lower()
+            pa,ca=assets[parent],assets[child]
+            if not ca:
+                total=None;break
             if pa != ca and key not in policy['cross']:continue
             if route.get('getter'):
                 values=reader.call([call(strategy,route['getter']+'()',outputs=('address',)),
@@ -52,8 +54,11 @@ def contributions(reader, chain, active, balances, debts, policy):
                 if any(v is None for v in values):
                     total=None;break
                 destination,shares,supply=(v[0] for v in values)
-                if destination.lower()!=child:raise ValueError('router destination changed')
-                debt=capped_debt(debt,balances[child][0],shares,supply,route,pa,ca)
+                try:
+                    if destination.lower()!=child:raise ValueError('router destination changed')
+                    debt=capped_debt(debt,balances[child][0],shares,supply,route,pa,ca)
+                except ValueError:
+                    total=None;break
             total+=debt
             evidence.append(dict(parent=parent,strategy=strategy,child=child,method='registered' if route else 'direct',deduction=str(debt)))
         result[parent]=max(0,balances[parent][0]-total) if total is not None else None

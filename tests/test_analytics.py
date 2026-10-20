@@ -51,6 +51,50 @@ def test_fee_stack_follows_cross_chain_child_identity():
     assert chain['effectivePerfFee'] == pytest.approx(1540)
 
 
+def test_known_child_without_selected_fee_evidence_stays_unresolved():
+    # A known nested fee layer must not disappear just because its row is absent.
+    points = rows()
+    positions = [{'chain_id': 1, 'parent': A, 'strategy': C, 'child': C,
+                  'child_chain_id': 747474, 'debt_usd': '60', 'owned_usd': None,
+                  'status': 'unavailable', 'mapping_status': 'child_outside_selection',
+                  'reason': 'child_outside_selection'}]
+    result = fee_stack(points, positions, configs())
+    parent = next(entry for entry in result['entries'] if entry['vault']['address'] == A)
+    assert parent['roots'][0]['perfFee'] == 1000
+    assert parent['roots'][0]['mgmtFee'] == 100
+    assert parent['performanceFee'] is None
+    assert parent['managementFee'] is None
+    other = next(entry for entry in result['entries'] if entry['vault']['address'] == B)
+    assert other['performanceFee'] == 1000
+    assert other['managementFee'] == 0
+    assert result['availability']['unresolvedAllocations'] == [
+        {'parent': [1, A], 'strategy': C, 'reason': 'unavailable allocation'}]
+
+
+def test_rules_extract_cross_routes_and_integer_converter_decimals():
+    from yearn_data.analytics_collect import FINANCE_CHAINS
+
+    finance = """buildNestedDebtByVault subtractNestedDebt get_default_queue withdrawalQueue
+list/vaults/${api.chainId}?origin=yearn
+const v1Vaults = [];
+const blacklist = [];
+""" + 'const chains = [' + ','.join(repr(name) for name in FINANCE_CHAINS.values()) + '];\n'
+    finance += f"""const routes = [
+      {{ chainId: 1, parent: '{A.upper()}', strategy: '{B}', child: '{C}', getter: 'vault' }},
+      {{ chainId: 10, parent: '{A}', strategy: '{C}', child: '{B}', getter: 'vault',
+         parentAsset: '{A}', childAsset: '{B}', parentDecimals: 6, childDecimals: 18 }},
+    ];"""
+    registry = 'export default {\n  "yearn-curating": { chains: {}\n  },\n}'
+    result = rules(finance, registry)
+    assert result['cross'] == {(1, A, B): C, (10, A, C): B}
+    assert result['routes'][(1, A, B)]['getter'] == 'vault'
+    route = result['routes'][(10, A, C)]
+    assert route == {'parent': A, 'strategy': C, 'child': B, 'getter': 'vault',
+                     'parentAsset': A, 'childAsset': B, 'parentDecimals': 6, 'childDecimals': 18}
+    assert type(route['parentDecimals']) is int
+    assert type(route['childDecimals']) is int
+
+
 def test_membership_unknown_is_neither_missing_nor_included():
     r=rows();r[1]['external_tvl_usd']='60'
     membership={'vaults':[{'chainId':1,'address':A.upper(),'included':False}]}
