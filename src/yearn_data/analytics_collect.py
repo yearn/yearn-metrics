@@ -44,6 +44,8 @@ def rules(source,curation):
     for entry in re.findall(r'\{\s*chainId:\s*\d+,[^}]+\}',source):
         fields=dict(re.findall(r"(\w+):\s*'([^']*)'",entry))
         if not all(k in fields for k in ('parent','strategy','child')):continue
+        for field in ('parent','strategy','child','parentAsset','childAsset'):
+            if field in fields:fields[field]=fields[field].lower()
         key=(int(re.search(r'chainId:\s*(\d+)',entry)[1]),fields['parent'].lower(),fields['strategy'].lower())
         cross[key]=fields['child'].lower()
         fields.update({k:int(v) for k,v in re.findall(r'(parentDecimals|childDecimals):\s*(\d+)',entry)})
@@ -129,7 +131,8 @@ def membership_chain(chain,local,candidates,policy,creation):
     active={a:r for a,r in finance.items() if balances[a] and balances[a][0]>0}
     debts=default_debts(reader,active)
     from .finance_membership import contributions
-    net,_=contributions(reader,chain,active,balances,debts,policy)
+    net,deductions=contributions(reader,chain,active,balances,debts,policy)
+    remote_targets={e.get('contributionVault',e['parent']) for e in deductions if e['method']=='cross-chain-shares'}
     def finance_included(address):
         if chain not in FINANCE_CHAINS:return False,'chain outside finance adapter'
         if chain==1 and address in policy['v1']:
@@ -140,7 +143,10 @@ def membership_chain(chain,local,candidates,policy,creation):
         if balance is None:return None,'totalAssets read unavailable'
         if balance[0]==0:return False,'zero assets'
         value=net.get(address)
-        return (value>0 if value is not None else None),'adapter contribution after verified nested deductions; remote deductions require separate replay'
+        if value is None:return None,'adapter contribution unavailable after nested or applicable remote checks'
+        reason=('adapter contribution after verified nested and cross-chain deductions' if address in remote_targets
+                else 'adapter contribution after verified nested deductions')
+        return value>0,reason
     for row,address in zip(local,addresses):
         finance_state,reason=finance_included(address)
         curation_state=False
