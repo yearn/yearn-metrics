@@ -71,7 +71,7 @@ def rules(source,curation):
     owners={};explicit={}
     for chain,name in CURATION_CHAINS.items():
         block=re.search(r'\b'+name+r':\s*\{([^{}]*)\}',curation)
-        if not block:raise ValueError('unsupported curation configuration: missing or unparsed '+name)
+        if not block:raise ValueError('unsupported curation registry: missing or unparsed '+name)
         text=block[1]
         fields=set(re.findall(r'\b(\w+)\s*:',text))
         if fields-{'morphoVaultOwners','morpho','erc4626','turtleclub_erc4626'}:

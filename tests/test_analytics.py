@@ -72,7 +72,7 @@ def test_known_child_without_selected_fee_evidence_stays_unresolved():
 
 
 def test_rules_extract_cross_routes_and_integer_converter_decimals():
-    from yearn_data.analytics_collect import FINANCE_CHAINS
+    from yearn_data.analytics_collect import FINANCE_CHAINS, CURATION_CHAINS
 
     finance = """buildNestedDebtByVault subtractNestedDebt get_default_queue withdrawalQueue
 list/vaults/${api.chainId}?origin=yearn
@@ -84,7 +84,8 @@ const blacklist = [];
       {{ chainId: 10, parent: '{A}', strategy: '{C}', child: '{B}', getter: 'vault',
          parentAsset: '{A}', childAsset: '{B}', parentDecimals: 6, childDecimals: 18 }},
     ];"""
-    registry = 'export default {\n  "yearn-curating": { chains: {}\n  },\n}'
+    registry = 'export default {\n  "yearn-curating": { chains: {\n' + ''.join(
+        f'    {name}: {{}},\n' for name in CURATION_CHAINS.values()) + '  }\n  },\n}'
     result = rules(finance, registry)
     assert result['cross'] == {(1, A, B): C, (10, A, C): B}
     assert result['routes'][(1, A, B)]['getter'] == 'vault'
@@ -93,6 +94,10 @@ const blacklist = [];
                      'parentAsset': A, 'childAsset': B, 'parentDecimals': 6, 'childDecimals': 18}
     assert type(route['parentDecimals']) is int
     assert type(route['childDecimals']) is int
+    assert all(not owners for owners in result['owners'].values())
+    assert all(not vaults for vaults in result['explicit'].values())
+    with pytest.raises(ValueError, match='curation.*ethereum'):
+        rules(finance, registry.replace('ethereum:', 'ethereum_v2:'))
 
 
 def test_membership_unknown_is_neither_missing_nor_included():
@@ -252,6 +257,9 @@ def test_current_curator_registry_is_scoped_to_yearn():
       base: {
         morphoVaultOwners: ["BASE"],
       },
+      katana: {},
+      arbitrum: {},
+      hyperliquid: {},
     } }
   },
 }'''.replace('OTHER',A).replace('OWNER',owner).replace('VAULT',B).replace('BASE',C)

@@ -48,6 +48,21 @@ def test_unavailable_external_contribution_does_not_prove_ours_only():
     assert result['theirsOnly'] == []
 
 
+def test_saved_partial_replay_edges_cannot_mark_an_overlap_handled():
+    from yearn_data.tvl_comparison import finance_overlap_status, finance_replay_routes
+
+    position = {'chain_id': 1, 'parent': 'parent', 'strategy': 'sender', 'child': 'child', 'child_chain_id': 10}
+    replay = {'chainId': 1, 'records': [{'address': 'parent', 'adjustedRaw': None},
+                                       {'address': 'sender', 'adjustedRaw': '40'}],
+              'edges': [{'parent': 'parent', 'contributionVault': 'sender', 'strategy': 'sender',
+                         'child': 'child', 'childChainId': 10, 'method': 'cross-chain-shares'}]}
+    assert finance_overlap_status(position, finance_replay_routes([replay])) is None
+    replay['records'][0]['adjustedRaw'] = '0'
+    assert finance_overlap_status(position, finance_replay_routes([replay])) == 'handled'
+    replay['records'][1]['adjustedRaw'] = None
+    assert finance_overlap_status(position, finance_replay_routes([replay])) is None
+
+
 def test_checks_separate_missed_from_handled_and_unverified():
     checks=[dict(protocol='yearn-finance',status=s,ourDeductionUsd='10') for s in ['missed','handled','unverified']]
     result=discrepancy_details([],evidence(checks=checks),'dataset')['categories'][0]

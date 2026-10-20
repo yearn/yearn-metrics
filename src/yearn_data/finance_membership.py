@@ -13,7 +13,12 @@ def capped_debt(debt, assets, shares, supply, route, parent_asset, child_asset):
     if shares > supply:
         raise ValueError('invalid router ownership')
     owned = assets * shares // supply if supply else 0
-    if route.get('parentAsset'):
+    converter_fields=('parentAsset','childAsset','parentDecimals','childDecimals')
+    if any(field in route for field in converter_fields):
+        if (not route.get('parentAsset') or not route.get('childAsset') or
+            any(type(route.get(field)) is not int or not 0 <= route[field] <= 255
+                for field in ('parentDecimals','childDecimals'))):
+            raise ValueError('incomplete converter route')
         if parent_asset != route['parentAsset'] or child_asset != route['childAsset']:
             raise ValueError('converter assets changed')
         owned = owned * 10 ** route['parentDecimals'] // 10 ** route['childDecimals']
@@ -92,8 +97,12 @@ def contributions(reader, chain, active, balances, debts, policy):
                     owed=balances[sender][0] if sender in active else local[3][2]
                     deduction=capped_debt(owed,values[5][0],values[3][0],values[4][0],{},'usdc','usdc')
                     if result.get(target) is not None:result[target]=max(0,result[target]-deduction)
-                    evidence.append(dict(parent=target,strategy=sender,child=child,childChainId=747474,
+                    evidence.append(dict(parent=parent,contributionVault=target,strategy=sender,child=child,childChainId=747474,
                         method='cross-chain-shares',deduction=str(deduction),remoteBlock=int(remote.block['number'])))
             except Exception:
                 result[target]=None
+    # A verified earlier edge cannot establish a complete parent deduction if a
+    # later route (including the remote route) left its contribution unknown.
+    evidence=[edge for edge in evidence if result.get(edge['parent']) is not None
+              and result.get(edge.get('contributionVault',edge['parent'])) is not None]
     return result,evidence
