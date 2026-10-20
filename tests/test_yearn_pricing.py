@@ -569,3 +569,143 @@ def test_yearn_fallback_does_not_replace_good_stored_prices_with_failures(monkey
                                     (run_id,)).fetchone()[0])
     assert summary["unpriced_reports"] == 0
     assert float(summary["net_yield_usd"]) == expected + 14
+
+
+@pytest.mark.parametrize("fallback", [None, "defillama"])
+@pytest.mark.parametrize("ordinary_invocation", ["price", "run"])
+def test_open_day_prices_wait_until_close_and_retry_on_an_ordinary_run(
+    monkeypatch, tmp_path, fallback, ordinary_invocation
+):
+    from yearn_data import pricing
+    from yearn_data.analysis import run_lifetime_yield
+
+    conn = connect(tmp_path / "test.sqlite")
+    init_db(conn)
+    seed_chains(conn, CHAINS)
+    asset = "0x" + "2" * 40
+    day = 20000 * 86400
+    timestamp = day + 1200
+    clock = [day + 3600]
+    monkeypatch.setattr(pricing.time, "time", lambda: clock[0])
+    conn.execute("""INSERT INTO strategy_reports (
+        chain_id, version, vault_address, strategy_address, tx_hash, log_index,
+        block_number, block_timestamp, asset, asset_decimals, gain_raw, loss_raw, net_raw
+    ) VALUES (1, 'v3', '0x0000000000000000000000000000000000000001',
+              '0x0000000000000000000000000000000000000003', '0xtoday', 0,
+              10, ?, ?, 6, '1000000', '0', '1000000')""", (timestamp, asset))
+    conn.commit()
+    calls = []
+
+    def batch(targets):
+        calls.extend(targets)
+        return {target: (2.0, "ok", {"normalized_timestamp": target[2], "provider": "yearn-prices"})
+                for target in targets if target[2] < clock[0]}
+    monkeypatch.setattr(pricing, "fetch_yearn_prices_batch", batch)
+    monkeypatch.setattr(pricing, "fetch_yearn_price", lambda *_: (None, "missing", {}))
+    monkeypatch.setattr(pricing, "fetch_defillama_prices_batch",
+                        lambda targets: {t: (1.0, "ok", {}) for t in targets})
+    price_unpriced_reports(conn, fallback=fallback, onchain_fallbacks=False)
+    assert calls == []
+    row = conn.execute("SELECT * FROM prices WHERE source='yearn-prices'").fetchone()
+    assert row["status"] == "pending"
+    assert row["price_usd"] is None
+    assert from_json(row["raw_json"])["failure_class"] == "day-not-closed"
+    assert price_unpriced_reports(conn, fallback=fallback, onchain_fallbacks=False) == 0
+    clock[0] = day + 86400 + 3600
+    if ordinary_invocation == "price":
+        assert price_unpriced_reports(conn, fallback=fallback, onchain_fallbacks=False) == 1
+    else:
+        from yearn_data import cli
+        monkeypatch.setenv("YEARN_PRICE_PROD_KEY", "test-only")
+        monkeypatch.setattr(cli, "load_environment", lambda *_: None)
+        monkeypatch.setattr(cli, "open_db", lambda *_: conn)
+        monkeypatch.setattr(cli, "get_event_source", lambda: "rpc")
+        monkeypatch.setattr(cli, "discover", lambda *_args, **_kwargs: 0)
+        monkeypatch.setattr(cli, "index_all_reports", lambda *_args, **_kwargs: 0)
+        monkeypatch.setattr(cli, "export_analysis", lambda *_args, **_kwargs: [])
+        command = ["run", "lifetime-yield", "--no-onchain-fallbacks"]
+        if fallback is None:
+            command.append("--no-provider-fallback")
+        assert cli.main(command) == 0
+    assert calls == [(1, asset, day + 86399)]
+    row = conn.execute("SELECT * FROM prices WHERE source='yearn-prices'").fetchone()
+    assert row["status"] == "ok" and row["price_usd"] == 2.0
+    run_id = run_lifetime_yield(conn, fallback_price_source=fallback)
+    report = from_json(conn.execute("SELECT row_json FROM analysis_outputs WHERE run_id=? AND name='reports'",
+                                   (run_id,)).fetchone()[0])
+    assert report["price_source"] == "yearn-prices"
+    assert report["net_yield_usd"] == "2.0"
+
+
+@pytest.mark.parametrize("unsupported_chain", [100, 999999])
+def test_unsupported_chain_stays_unpriced_without_aborting_configured_chains(monkeypatch, tmp_path, unsupported_chain):
+    from yearn_data import pricing
+
+    conn = connect(tmp_path / "test.sqlite")
+    init_db(conn)
+    seed_chains(conn, CHAINS)
+    asset = "0x" + "2" * 40
+    for chain_id in [1, unsupported_chain]:
+        conn.execute("""INSERT INTO strategy_reports (
+            chain_id, version, vault_address, strategy_address, tx_hash, log_index,
+            block_number, block_timestamp, asset, asset_decimals, gain_raw, loss_raw, net_raw
+        ) VALUES (?, 'v3', '0x0000000000000000000000000000000000000001',
+                  '0x0000000000000000000000000000000000000003', '0xchain', 0,
+                  10, 100, ?, 6, '1000000', '0', '1000000')""", (chain_id, asset))
+    conn.commit()
+    monkeypatch.setattr(pricing, "fetch_yearn_prices_batch", lambda _: {})
+    monkeypatch.setattr(pricing, "fetch_yearn_price", lambda *_: (None, "missing", {}))
+    calls = []
+    def defillama(targets):
+        assert all(t[0] == 1 for t in targets)
+        calls.extend(targets)
+        return {t: (3.0, "ok", {}) for t in targets}
+    monkeypatch.setattr(pricing, "fetch_defillama_prices_batch", defillama)
+    monkeypatch.setattr(pricing, "fetch_defillama_price", lambda *_: pytest.fail("No unsupported exact fallback"))
+    monkeypatch.setattr(pricing, "_row_level_fallback_price",
+                        lambda *_: pytest.fail("Unsupported chains cannot use onchain adapters"))
+    assert price_unpriced_reports(conn) == 4
+    rows = {(row["chain_id"], row["source"]): row for row in conn.execute("SELECT * FROM prices")}
+    assert calls == [(1, asset, 100)]
+    assert rows[1, "defillama"]["status"] == "ok"
+    row = rows[unsupported_chain, "defillama"]
+    assert row["price_usd"] is None and row["status"] == "missing"
+    evidence = from_json(row["raw_json"])
+    assert evidence["failure_class"] == "unsupported-chain"
+    assert str(unsupported_chain) in evidence["failure_reason"]
+
+
+@pytest.mark.parametrize("source,has_key", [("yearn-prices", False), ("yearn-prices", True), ("defillama", False)])
+@pytest.mark.parametrize("event_source", ["envio", "rpc"])
+def test_run_checks_yearn_credentials_before_discovery_and_allows_configured_runs(
+    monkeypatch, tmp_path, source, has_key, event_source
+):
+    from yearn_data import cli
+
+    monkeypatch.setattr(cli, "load_environment", lambda *_: None)
+    monkeypatch.setattr(cli, "get_event_source", lambda: event_source)
+    monkeypatch.setenv("YEARN_PRICE_PROD_BASE_URL", "https://prices.yearn.dev")
+    if has_key:
+        monkeypatch.setenv("YEARN_PRICE_PROD_KEY", "test-only")
+    else:
+        monkeypatch.delenv("YEARN_PRICE_PROD_KEY", raising=False)
+    calls = []
+    def stage(name):
+        def run(*args, **kwargs):
+            calls.append(name)
+            return 0
+        return run
+    for name in ["discover", "discover_from_envio", "index_all_reports", "import_reports_from_envio", "price_unpriced_reports"]:
+        monkeypatch.setattr(cli, name, stage(name))
+    monkeypatch.setattr(cli, "_run_analysis", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr(cli, "export_analysis", lambda *_args, **_kwargs: [])
+    command = ["--db", str(tmp_path / "test.sqlite"), "run", "lifetime-yield"]
+    if source == "defillama":
+        command.extend(["--price-source", source])
+    if source == "yearn-prices" and not has_key:
+        with pytest.raises(ValueError, match="missing Yearn Prices API key"):
+            cli.main(command)
+        assert calls == []
+    else:
+        assert cli.main(command) == 0
+        assert calls[-1] == "price_unpriced_reports"

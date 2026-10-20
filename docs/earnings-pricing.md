@@ -32,8 +32,8 @@ This also prevents analysis from using an existing DefiLlama price in the databa
 The local onchain adapters also depend on DefiLlama quotes. When acquiring Yearn
 Prices without provider fallback, both flags are required; enabling the local
 onchain adapters in that mode is rejected before any price requests.
-The combined `run lifetime-yield` command checks this policy before discovery or
-event indexing starts.
+The combined `run lifetime-yield` command checks this policy and required Yearn
+Prices credential configuration before discovery or event indexing starts.
 
 These commands do not fetch onchain events again.
 Volume and legacy fee analyses keep their existing DefiLlama policy.
@@ -44,6 +44,10 @@ rows are not substituted when a DefiLlama valuation is absent.
 
 The requested price time is 23:59:59 UTC on the report day.
 The client checks the asset, timestamp, and positive price value.
+Reports from an open UTC day are saved as `pending` without requesting a future
+end-of-day point. Once the day closes, an ordinary `price` or `run lifetime-yield`
+invocation retries them automatically; `--retry-missing` is not required. The
+configured DefiLlama fallback can still supply an interim valuation.
 
 If a successful batch response omits a target, the client makes an exact historical request for that target.
 Network failures remain eligible for retry.
@@ -54,6 +58,9 @@ response is saved as `invalid`, remains eligible for
 `--retry-missing`, and can use the configured provider fallback.
 An unsuccessful DefiLlama fallback fetch preserves an existing successful price
 and its evidence; it can still insert a new result or refresh an unsuccessful row.
+An unsupported provider/chain combination is saved as missing with an
+`unsupported-chain` reason in its evidence. It does not stop pricing other chains
+or invoke onchain adapters for an unconfigured chain.
 
 Saved price records include these details:
 

@@ -43,6 +43,7 @@ def report_endpoint(monkeypatch, nodes, version="v3"):
 
 
 def finish_run(monkeypatch):
+    monkeypatch.setenv("YEARN_PRICE_PROD_KEY", "test-only")
     monkeypatch.setattr(cli, "price_unpriced_reports", lambda *args, **kwargs: 0)
     monkeypatch.setattr(cli, "price_unpriced_volume", lambda *args, **kwargs: 0)
     monkeypatch.setattr(cli, "_run_analysis", lambda *args, **kwargs: 1)

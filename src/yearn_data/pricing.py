@@ -888,7 +888,9 @@ def _fetch_price(source: str, chain_id: int, token_address: str, timestamp: int,
     raise ValueError(f"unsupported price source {source!r}; expected {sorted(SUPPORTED_SOURCES)}")
 
 
-def validate_report_pricing_policy(source: str, fallback: str | None, onchain_fallbacks: bool) -> None:
+def validate_report_pricing_policy(
+    source: str, fallback: str | None, onchain_fallbacks: bool, *, require_credentials: bool = False
+) -> None:
     if source not in SUPPORTED_SOURCES:
         raise ValueError(f"unsupported price source {source!r}")
     if fallback is not None and fallback not in SUPPORTED_SOURCES:
@@ -898,6 +900,8 @@ def validate_report_pricing_policy(source: str, fallback: str | None, onchain_fa
             "onchain fallbacks require DefiLlama provider fallback; "
             "use --no-onchain-fallbacks with --no-provider-fallback"
         )
+    if require_credentials and source == "yearn-prices":
+        _yearn_prices_config()
 
 
 def price_unpriced_reports(
@@ -916,8 +920,13 @@ def price_unpriced_reports(
         chain_filter = f"AND r.chain_id IN ({','.join('?' for _ in chain_ids)})"
         chain_params = sorted(chain_ids)
     price_filter = "AND p.token_address IS NULL"
+    price_params: list[int] = []
+    if source == "yearn-prices":
+        price_filter = "AND (p.token_address IS NULL OR (p.status = 'pending' AND r.block_timestamp < ?))"
+        price_params = [int(time.time()) // 86_400 * 86_400]
     if retry_missing:
         price_filter = "AND (p.token_address IS NULL OR p.status != 'ok')"
+        price_params = []
     sql = f"""
     SELECT
         r.chain_id,
@@ -938,7 +947,7 @@ def price_unpriced_reports(
     """
     if limit:
         sql += f" LIMIT {int(limit)}"
-    rows = conn.execute(sql, (source, *chain_params)).fetchall()
+    rows = conn.execute(sql, (source, *chain_params, *price_params)).fetchall()
     count = 0
     if source == "defillama":
         count += _price_unpriced_reports_defillama_batched(conn, rows, fallback, onchain_fallbacks=onchain_fallbacks)
@@ -1142,19 +1151,32 @@ def _price_unpriced_reports_defillama_batched(
     return count
 
 
+def _unsupported_chain_price(chain_id: int, source: str) -> tuple[None, str, dict[str, Any]]:
+    return None, "missing", {
+        "provider": source,
+        "failure_class": "unsupported-chain",
+        "failure_reason": f"{source} has no configured pricing namespace for chain {chain_id}",
+    }
+
+
 def _fetch_defillama_batch(batch):
     requests_ = [
         (int(row["chain_id"]), row["asset"], int(row["block_timestamp"]))
         for row in batch
     ]
+    configured_chains = {cfg.chain_id for cfg in CHAINS.values()}
+    results = {target: _unsupported_chain_price(target[0], "defillama")
+               for target in requests_ if target[0] not in configured_chains}
+    supported_requests = [target for target in requests_ if target[0] in configured_chains]
+    if not supported_requests:
+        return batch, results
     try:
-        return batch, fetch_defillama_prices_batch(requests_)
+        results.update(fetch_defillama_prices_batch(supported_requests))
     except Exception:
-        results = {}
-        for chain_id, token_address, timestamp in requests_:
+        for chain_id, token_address, timestamp in supported_requests:
             price, status, payload = fetch_defillama_price(chain_id, token_address, timestamp)
             results[(chain_id, token_address, timestamp)] = (price, status, payload)
-        return batch, results
+    return batch, results
 
 
 def _write_defillama_price_row(
@@ -1172,7 +1194,7 @@ def _write_defillama_price_row(
         (chain_id, token_address, timestamp),
         (None, "missing", {"timestamp": timestamp}),
     )
-    if status != "ok" and onchain_fallbacks:
+    if status != "ok" and onchain_fallbacks and payload.get("failure_class") != "unsupported-chain":
         fallback_price, fallback_status, fallback_payload = _row_level_fallback_price(
             chain_id,
             token_address,
@@ -1271,7 +1293,19 @@ def _price_rows_with_yearn_prices(conn, rows) -> tuple[int, list]:
         for chain_id, token_address, timestamp in report_targets
     }
     results: dict[tuple[int, str, int], tuple[float | None, str, dict[str, Any]]] = {}
-    batches = _yearn_prices_batches(list(normalized_targets))
+    supported_chains = {cfg.chain_id for cfg in CHAINS.values()} | {100}
+    day_start = int(time.time()) // 86_400 * 86_400
+    for target in normalized_targets:
+        if target[0] not in supported_chains:
+            results[target] = _unsupported_chain_price(target[0], "yearn-prices")
+        elif target[2] >= day_start:
+            results[target] = (None, "pending", {
+                "provider": "yearn-prices",
+                "normalized_timestamp": target[2],
+                "failure_class": "day-not-closed",
+                "failure_reason": "UTC day is still open; an ordinary pricing run will retry after day-end",
+            })
+    batches = _yearn_prices_batches(list(normalized_targets - results.keys()))
     batch_workers = max(1, int(os.environ.get("YEARN_DATA_PRICE_WORKERS", "8")))
     with ThreadPoolExecutor(max_workers=batch_workers) as executor:
         futures = [executor.submit(fetch_yearn_prices_batch, batch) for batch in batches]
@@ -1309,6 +1343,7 @@ def _price_rows_with_yearn_prices(conn, rows) -> tuple[int, list]:
             unresolved_rows.append(row)
         payload = dict(result_payload)
         payload["requested_timestamp"] = report_timestamp
+        payload.setdefault("normalized_timestamp", normalized_timestamp)
         insert_rows.append(
             (
                 chain_id,
