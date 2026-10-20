@@ -17,10 +17,11 @@ import requests
 from web3 import Web3
 
 from .config import CHAINS, V2_REGISTRIES_BY_CHAIN, V3_ROLE_MANAGERS, get_envio_graphql_url
+from .coverage import find_observation
 from .discovery import VaultRecord
 from .kong import vault_metadata_from_kong
 from .indexing import (
-    ProgressCallback, get_index_state, insert_strategy_report,
+    ProgressCallback, _hex, get_index_state, insert_strategy_report,
     normalize_strategy_report, set_index_state,
 )
 
@@ -539,6 +540,10 @@ def _import_vault_inventory_entities(
         for window_lo, window_hi in _windows(lo, hi, _window_blocks()):
             nodes = _pull_window(entity, fields, cfg.chain_id, window_lo, window_hi)
             for node in nodes:
+                key = dict(chain_id=cfg.chain_id, tx_hash=_hex(node["transactionHash"]),
+                           log_index=int(node["logIndex"]), source_kind=source_kind)
+                if find_observation(conn, "vault_inventory_events", key, tuple(key)) is not None:
+                    continue
                 asset = node.get(asset_field) if asset_field else None
                 cur = conn.execute(
                     """
@@ -556,7 +561,7 @@ def _import_vault_inventory_entities(
                         Web3.to_checksum_address(node[source_field]),
                         action,
                         Web3.to_checksum_address(asset) if asset else None,
-                        node["transactionHash"],
+                        key["tx_hash"],
                         int(node["logIndex"]),
                         int(node["blockNumber"]),
                         int(node["blockTimestamp"]),

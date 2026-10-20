@@ -74,6 +74,10 @@ Fetch an earlier range if you need those reports.
 The command asks Kong for missing asset details.
 If necessary, it then requests historical details through RPC at the selected block.
 It stops if required details remain missing or the vault release is unsupported.
+When the RPC fallback confirms no contract code at `TO_BLOCK`, the command lists
+that vault in `skipped_vaults` with its address, block and reason, then scans the
+other vaults. It does not certify report coverage for the skipped vault. An RPC
+failure is not proof of absence; it stops with the vault and block in the error.
 
 ## Resume after a failure
 
@@ -85,6 +89,10 @@ Completed ranges can be reused, even if you change `--chunk-size`.
 The command checks saved block hashes before it reuses coverage.
 Matching event identities are not added again.
 Conflicting amounts or hashes cause an error.
+New transaction hashes use lowercase. Replay also recognizes legacy mixed-case
+hashes without renaming keys that other tables may reference. If existing rows
+already duplicate one identity under different spellings, the command stops and
+requests explicit reconciliation; it does not choose or delete those rows.
 
 Correcting a vault's asset or decimals requires a new coverage scan. When the
 underlying report event matches, catch-up reconciles those two report metadata

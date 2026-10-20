@@ -88,15 +88,30 @@ def commit_range(conn, scope: Scope, start: int, end: int, *, source: str,
     return count
 
 
+def identity_where(identity):
+    return " AND ".join("lower(tx_hash)=?" if key == "tx_hash" else f"{key}=?" for key in identity)
+
+
+def find_observation(conn, table, values, identity):
+    """Match legacy hash spellings without rewriting referenced primary keys."""
+    rows = conn.execute(
+        f"SELECT * FROM {table} WHERE " + identity_where(identity),
+        tuple(values[key].lower() if key == "tx_hash" else values[key] for key in identity),
+    ).fetchmany(2)
+    if len(rows) > 1:
+        raise ValueError(f"duplicate observation identity in {table}: {values.get('tx_hash')}; "
+                         "reconcile existing hash variants before replay")
+    return rows[0] if rows else None
+
+
 def insert_checked(conn, table: str, values: dict, identity: tuple[str, ...], enrich=()):
     """Reuse identical observations, reject conflicts instead of silently ignoring them.
 
     Table/column names come exclusively from in-process adapters, never user input.
     """
-    old = conn.execute(
-        f"SELECT * FROM {table} WHERE " + " AND ".join(f"{key}=?" for key in identity),
-        tuple(values[key] for key in identity),
-    ).fetchone()
+    if "tx_hash" in identity:
+        values = {**values, "tx_hash": values["tx_hash"].lower()}
+    old = find_observation(conn, table, values, identity)
     if old is not None:
         updates = {key: values[key] for key in enrich if old[key] is None and values[key] is not None}
         def canonical(key, value):
@@ -115,7 +130,7 @@ def insert_checked(conn, table: str, values: dict, identity: tuple[str, ...], en
             raise ValueError(f"conflicting observation in {table}")
         if updates:
             conn.execute(f"UPDATE {table} SET " + ','.join(f"{key}=?" for key in updates)
-                         + " WHERE " + ' AND '.join(f"{key}=?" for key in identity),
+                         + " WHERE " + identity_where(identity),
                          (*updates.values(), *(values[key] for key in identity)))
         return 0
     conn.execute(

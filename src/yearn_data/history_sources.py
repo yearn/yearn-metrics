@@ -12,7 +12,7 @@ from web3._utils.events import get_event_data
 
 from . import abis, envio
 from .config import CHAINS, DEFAULT_CHAINS, V2_REGISTRIES_BY_CHAIN, V3_ROLE_MANAGERS
-from .coverage import Scope, fingerprint, insert_checked
+from .coverage import Scope, find_observation, fingerprint, identity_where, insert_checked
 from .indexing import (
     _hex, normalize_strategy_report,
 )
@@ -245,22 +245,19 @@ def write_rows(conn, table, rows, *, report_metadata=None):
     count = 0
     for row in rows:
         values = row if isinstance(row, dict) else dict(zip(columns, row))
+        values = {**values, "tx_hash": _hex(values["tx_hash"])}
         if table == "strategy_reports" and values["version"] == "v2":
-            old = conn.execute("SELECT extra_json FROM strategy_reports WHERE chain_id=? AND tx_hash=? AND log_index=?",
-                               tuple(values[key] for key in identity)).fetchone()
+            old = find_observation(conn, table, values, identity)
             if old:
-                prior, current = json.loads(old[0]), json.loads(values["extra_json"])
+                prior, current = json.loads(old["extra_json"]), json.loads(values["extra_json"])
                 if {**prior, "debtPaid": prior.get("debtPaid", 0)} == {**current, "debtPaid": current.get("debtPaid", 0)}:
-                    values = {**values, "extra_json": old[0]}
+                    values = {**values, "extra_json": old["extra_json"]}
         if table == "vault_inventory_events":
-            old = conn.execute(
-                "SELECT decoded_json FROM vault_inventory_events WHERE chain_id=? AND tx_hash=? AND log_index=? AND source_kind=?",
-                tuple(values[key] for key in identity),
-            ).fetchone()
+            old = find_observation(conn, table, values, identity)
             if old:
                 # Legacy Envio rows retain the full node. Compare its event
                 # arguments to the canonical payload and preserve that evidence.
-                previous = json.loads(old[0])
+                previous = json.loads(old["decoded_json"])
                 expected = json.loads(values["decoded_json"])
                 for key, value in expected.items():
                     prior = previous.get(key, previous.get("deployment_id") if key == "vault_id" else None)
@@ -270,7 +267,7 @@ def write_rows(conn, table, rows, *, report_metadata=None):
                         prior, value = prior.lower(), value.lower()
                     if prior != value:
                         raise HistorySourceError("conflicting inventory arguments")
-                values = {**values, "decoded_json": old[0]}
+                values = {**values, "decoded_json": old["decoded_json"]}
         if table == "strategy_reports" and report_metadata is not None:
             expected = (report_metadata["chain_id"], report_metadata["version"],
                         report_metadata["address"].lower(), report_metadata["asset"].lower(),
@@ -283,8 +280,7 @@ def write_rows(conn, table, rows, *, report_metadata=None):
             # emitted by StrategyReported. Compare every event field first.
             observation = {key: value for key, value in values.items() if key not in {"asset", "asset_decimals"}}
             count += insert_checked(conn, table, observation, identity)
-            conn.execute("""UPDATE strategy_reports SET asset=?,asset_decimals=?
-                WHERE chain_id=? AND tx_hash=? AND log_index=?""",
+            conn.execute("UPDATE strategy_reports SET asset=?,asset_decimals=? WHERE " + identity_where(identity),
                 (values["asset"], values["asset_decimals"], *(values[key] for key in identity)))
         else:
             enrich = ("asset", "asset_decimals") if table == "strategy_reports" else ()

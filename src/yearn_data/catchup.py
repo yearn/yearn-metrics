@@ -73,12 +73,15 @@ def materialize_inventory(conn, facts):
 
 
 def enrich_metadata(conn, client, vault, block):
+    """Fill required metadata, or return False for proven absent contract code."""
     address = vault["address"]
     try:
         metadata = vault_metadata_from_kong(client.chain_id, [address]).get(Web3.to_checksum_address(address))
     except Exception:
         metadata = None
     if not metadata or metadata.get("asset_decimals") is None or not metadata.get("api_version"):
+        if not client.w3.eth.get_code(Web3.to_checksum_address(address), block_identifier=block):
+            return False
         contract = client.w3.eth.contract(address=Web3.to_checksum_address(address), abi=abis.VAULT_METADATA_ABI)
         fn = contract.functions.token if vault["version"] == "v2" else contract.functions.asset
         asset = Web3.to_checksum_address(fn().call(block_identifier=block))
@@ -89,12 +92,21 @@ def enrich_metadata(conn, client, vault, block):
         raise ValueError("metadata conflicts with inventory asset")
     if not 0 <= metadata["asset_decimals"] <= 255:
         raise ValueError("invalid asset decimals")
+    if not metadata.get("api_version"):
+        raise ValueError("missing vault release")
     with conn:
         conn.execute("""UPDATE vaults SET asset=?,asset_decimals=?,api_version=?,
             asset_symbol=coalesce(?,asset_symbol),name=coalesce(?,name),updated_at=?
             WHERE chain_id=? AND address=?""",
             (metadata["asset"], metadata["asset_decimals"], metadata["api_version"], metadata.get("asset_symbol"),
              metadata.get("name"), int(time.time()), client.chain_id, address))
+    return True
+
+
+def check_release(vault):
+    prefix = {"v2": "0.", "v3": "3."}.get(vault["version"])
+    if prefix is None or (vault["api_version"] and not vault["api_version"].startswith(prefix)):
+        raise ValueError(f"unsupported vault release: {vault['address']}")
 
 
 
@@ -118,7 +130,7 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
     client = client or HistoricalSource(chain, web3_for(chain))
     pin = client.pin(end=to_block, confirmations=confirmations, use_envio=report_source == "envio")
     summary = dict(chain=chain, from_block=from_block, pin=pin, source=report_source,
-                   completed_ranges=0, inserted_rows=0, vaults=0,
+                   completed_ranges=0, inserted_rows=0, vaults=0, skipped_vaults=[],
                    discovery="bounded" if discover else "stored inventory")
 
     verified_coverage = {}
@@ -139,8 +151,8 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
             elif verified_coverage[key] != block_hash.lower():
                 raise ValueError("conflicting saved block hashes")
         for lo, hi in list(missing_ranges(conn, scope, from_block, to_block, chunk_size)):
-            rows = fetch(lo, hi)
             end_hash = _hex(client.block(hi)["hash"])
+            rows = fetch(lo, hi)
             client.verify_pin(dict(number=hi, hash=end_hash))
 
             def persist(db):
@@ -172,13 +184,19 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
     if not vaults:
         raise ValueError("no retained Yearn vaults; discover or import classified inventory first")
     for vault in vaults:
+        check_release(vault)
         if not vault["asset"] or vault["asset_decimals"] is None or not vault["api_version"]:
-            enrich_metadata(conn, client, vault, to_block)
+            try:
+                enriched = enrich_metadata(conn, client, vault, to_block)
+            except Exception as exc:
+                raise ValueError(f"metadata unavailable for vault {vault['address']} at block {to_block}") from exc
+            if not enriched:
+                summary["skipped_vaults"].append(dict(address=vault["address"], block=to_block,
+                                                    reason="no contract code at requested end block"))
+                continue
             vault = dict(conn.execute("SELECT * FROM vaults WHERE chain_id=? AND address=?",
                                       (chain_id, vault["address"])).fetchone())
-        if vault["version"] not in {"v2", "v3"} or not vault["api_version"].startswith(
-                "0." if vault["version"] == "v2" else "3."):
-            raise ValueError(f"unsupported vault release: {vault['address']}")
+        check_release(vault)
         acquire(report_scope(vault), lambda lo, hi: client.reports(vault, lo, hi, report_source),
                 "strategy_reports", report_source, report_metadata=vault)
         summary["vaults"] += 1
