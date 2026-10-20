@@ -14,7 +14,7 @@ results. HTTP requests read those prepared publications; they do not collect or
 publish data.
 
 The old preview on port 3491 used `--comparison-db` to read DefiLlama observations
-from the legacy TVL database. That preview and its 3490 socket forwarding bridge
+from the legacy TVL database. That preview and its 3492 socket forwarding bridge
 are retired. Their service/socket definitions were removed from `ops/`, and the
 installed user units are masked. No replacement external SQLite database is needed.
 
@@ -29,7 +29,7 @@ membership/fee acquisition.
 - QTOV and old pairing frontend previews on ports 4178 and 4598.
 - Legacy TVL and fees APIs on ports 3460 and 3482, including leftover module-load
   processes holding SQLite handles.
-- Old Neon preview on 3491 and socket forwarding on 3490.
+- Old Neon preview on 3491 and socket forwarding on 3492.
 - The four private routes that pointed to these services.
 - The two stale frontend worktree registrations, with branches and local files
   preserved. A tiny dependency symlink at the old QTOV path redirects a remaining

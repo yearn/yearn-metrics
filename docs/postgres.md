@@ -190,13 +190,17 @@ Coordinate writers: run one update at a time. Pricing and fee-calculation batche
 are limited to 500 targets; inspect their results and repeat acquisition/pricing
 for larger catch-ups before publishing. Missing values retain existing semantics.
 
-The user service templates in `ops/` serve Neon on localhost 3491 and forward
-legacy port 3492 to it without another database reader. The API uses `--published-tvl-only` so acquiring a finished TVL run does not
-publish it ahead of chart preparation. They assume the durable
-checkout at `~/raaaws/worktrees/yearn-data-neon`.
-Copy the unit files to `~/.config/systemd/user`, run `systemctl --user daemon-reload`
-and enable the API service and compatibility socket. The Comparison endpoint
-still uses the old TVL service's separate SQLite reference database.
+Serve selected publications with the read-only API described in
+[Hosted Powerglove API](hosted-api.md). Comparison requests read prepared
+database-backed analytics, whose reference observations are acquired directly
+by `analytics_collect.collect()`; no separate legacy SQLite reference database
+is required.
+
+The old Neon preview and compatibility socket are retired, and their unit
+templates have been removed from `ops/`. Do not reinstall those services.
+See [Legacy service retirement](legacy-service-retirement.md) for retained
+recovery evidence. The remaining `ops/staging-postgres.compose.yml` manages
+the local staging database described below.
 
 ## Local Postgres staging
 
