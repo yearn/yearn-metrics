@@ -30,7 +30,10 @@
       "targetVaultAddress": "0xe852db931ac6f02490a32695f09ee79a31f53821",
       "label": "DAI to Yearn Term USDS",
       "chainId": 1,
-      "vaultGetter": "vault()"
+      "vaultGetter": "vault()",
+      "supersededTargetVaultAddresses": ["0x182863131f9a4630ff9e27830d945b1413e347e8"],
+      "verifiedAtBlock": 26194188,
+      "verification": "At 2026-10-14 23:59:59 UTC, vault() returns 0xe852db931ac6f02490a32695f09ee79a31f53821; parent 0x92545bce636e6ee91d88d2d017182cd0bd2fc22e asset() is DAI (0x6b175474e89094c44da98b954eedeac495271d0f), child asset() is USDS (0xdc035d45d973e3ec169d2276ddab16f1e407384f), both 18 decimals. Strategy holds 131200964640808857468 child shares out of 157144927999723930045 supply and zero shares of the superseded target; parent recorded debt is zero at this close. Reverify destination and ownership at each collection block; unverified superseded positions require dated replacement evidence, not reassigned balances."
     },
     {
       "sourceVaultAddress": "0xdA816459F1AB5631232FE5e97a05BBBb94970c95",

@@ -111,3 +111,15 @@ The reviewer accepts only reviewed source hashes, and the new Finance source
 requires its dated `finance-replay.json`; it cannot reuse the old recognition-only
 replay. Retained factory events can support discovery only with continuous scan
 coverage and exactly matching factory ABI and owner filters.
+
+Registry destination corrections also apply when accounting for stored history.
+An explicitly superseded, unverified service-registry position contributes no
+deduction. A complete replacement must verify the destination at the same block,
+date, parent and strategy; amounts are never copied to the corrected child.
+Without that evidence (or observed zero debt), accounting diagnostics remain
+incomplete and the complete external-TVL total is null. Known subtotals remain
+available, so inspect diagnostics before treating them as final totals. Recollect
+affected dates and publish through the normal workflow to complete the repair.
+Dated getter-verified old destinations remain valid historical evidence. The
+correction policy is captured in new publication manifests; pinned publications
+and raw observations retain their original evidence and accounting policy.

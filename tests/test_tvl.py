@@ -46,6 +46,52 @@ def edge(parent,strategy,child,debt,owned,chain=1):
             'timestamp':100,'debt_usd':debt,'owned_usd':owned,'status':'ok'}
 
 
+@pytest.mark.parametrize('replacement', ['missing', 'verified', 'wrong-block', 'wrong-parent',
+                                       'wrong-date', 'no-getter', 'failed', 'missing-value', 'zero'])
+def test_superseded_registry_position_needs_dated_replacement(replacement):
+    correction = {'chainId':1,'strategyAddress':address(9),'targetVaultAddress':address(3),
+                  'supersededTargetVaultAddresses':[address(2)]}
+    stale = dict(edge(1,9,2,'50','80'), method='service-registry', block_number=123)
+    repaired = dict(edge(1,9,3,'50','60'), method='service-registry', block_number=123,
+                    vault_getter='vault()')
+    if replacement == 'wrong-block': repaired['block_number'] = 124
+    if replacement == 'wrong-parent': repaired['parent'] = address(4)
+    if replacement == 'wrong-date': repaired['timestamp'] = 101
+    if replacement == 'no-getter': repaired.pop('vault_getter')
+    if replacement == 'failed': repaired['status'] = 'unavailable'
+    if replacement == 'missing-value': repaired['owned_usd'] = None
+    if replacement == 'zero': repaired.update(debt_usd='0', owned_usd=None)
+    positions = [stale] + ([] if replacement == 'missing' else [repaired])
+    rows, positions, total = account([snapshot(i,'100') for i in (1,2,3)], positions,
+                                    target_corrections=[correction])
+    assert rows[1]['external_tvl_usd'] == '100'
+    assert positions[0]['overlap_usd'] == '0'
+    assert positions[0]['accounting_excluded'] is True
+    assert positions[0]['reason'] == 'superseded_registry_target'
+    if replacement in ('verified','zero'):
+        assert total['status'] == 'complete'
+        assert total['external_tvl_usd'] == ('250' if replacement == 'verified' else '300')
+    else:
+        assert total['status'] == 'incomplete'
+        assert total['external_tvl_usd'] is None
+        assert 'superseded_registry_target' in total['issues']
+    # No rewriting or relabelling of raw historical ownership.
+    assert stale['owned_usd'] == '80' and stale['child'] == address(2)
+
+
+@pytest.mark.parametrize('dated_getter,zero_debt', [(True,False),(False,True)])
+def test_registry_correction_preserves_dated_getter_or_zero(dated_getter,zero_debt):
+    correction = {'chainId':1,'strategyAddress':address(9),'targetVaultAddress':address(3),
+                  'supersededTargetVaultAddresses':[address(2)]}
+    position = dict(edge(1,9,2,'0' if zero_debt else '50','80'),
+                    method='service-registry', block_number=123)
+    if dated_getter: position['vault_getter'] = 'vault()'
+    _, _, total = account([snapshot(i,'100') for i in (1,2,3)], [position],
+                          target_corrections=[correction])
+    assert total['status'] == 'complete'
+    assert total['external_tvl_usd'] == ('300' if zero_debt else '250')
+
+
 def test_three_level_nesting_counts_capital_once():
     rows,edges,total=account([snapshot(i,'100') for i in (1,2,3)],
                             [edge(1,2,2,'100','100'),edge(2,3,3,'100','100')])
