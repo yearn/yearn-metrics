@@ -1640,8 +1640,16 @@ def _fetch_defillama_batch(batch):
         results.update(fetch_defillama_prices_batch(supported_requests))
     except Exception:
         for chain_id, token_address, timestamp in supported_requests:
-            price, status, payload = fetch_defillama_price(chain_id, token_address, timestamp)
-            results[(chain_id, token_address, timestamp)] = (price, status, payload)
+            try:
+                result = fetch_defillama_price(chain_id, token_address, timestamp)
+            except requests.RequestException as error:
+                result = (None, "retryable", {
+                    "provider": "defillama",
+                    "failure_class": "retryable",
+                    "failure_reason": type(error).__name__,
+                    "timestamp": timestamp,
+                })
+            results[(chain_id, token_address, timestamp)] = result
     return batch, results
 
 

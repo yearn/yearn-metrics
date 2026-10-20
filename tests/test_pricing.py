@@ -773,3 +773,26 @@ def test_yearn_only_missing_price_never_calls_optional_adapters(tmp_path, monkey
     monkeypatch.setattr(pricing, '_row_level_fallback_price', forbidden)
     assert pricing.price_unpriced_reports(conn, fallback=None, onchain_fallbacks=False) == 1
     assert tuple(conn.execute('SELECT source,status,price_usd FROM prices').fetchone()) == ('yearn-prices', 'missing', None)
+
+
+def test_exhausted_defillama_target_does_not_abort_other_targets(tmp_path, monkeypatch):
+    from yearn_data import pricing
+    conn = connect(tmp_path / 'partial-transport.sqlite')
+    init_db(conn)
+    asset = '0x' + '2' * 40
+    for timestamp in (100, 200):
+        conn.execute("""INSERT INTO strategy_reports (
+            chain_id,version,vault_address,strategy_address,tx_hash,log_index,
+            block_number,block_timestamp,asset,asset_decimals,gain_raw,loss_raw,net_raw)
+            VALUES (1,'v3',?,?,?,0,1,?,?,6,'1','0','1')""", (asset, asset, str(timestamp), timestamp, asset))
+    def failed_batch(*args, **kwargs):
+        raise pricing.requests.Timeout('batch unavailable')
+    def exact(chain, token, timestamp):
+        if timestamp == 100:
+            raise pricing.requests.Timeout('target unavailable')
+        return 2.0, 'ok', {'timestamp': timestamp}
+    monkeypatch.setattr(pricing, 'fetch_defillama_prices_batch', failed_batch)
+    monkeypatch.setattr(pricing, 'fetch_defillama_price', exact)
+    pricing.price_unpriced_reports(conn, source='defillama', fallback=None, onchain_fallbacks=False)
+    rows = conn.execute('SELECT price_usd,status FROM prices ORDER BY timestamp').fetchall()
+    assert [tuple(row) for row in rows] == [(None, 'retryable'), (2.0, 'ok')]
