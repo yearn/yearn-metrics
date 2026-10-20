@@ -29,6 +29,9 @@ yearn-data --db data/yearn.sqlite export lifetime-yield --out exports/earnings
 `--no-provider-fallback` prevents the use of DefiLlama prices.
 This also prevents analysis from using an existing DefiLlama price in the database.
 `--no-onchain-fallbacks` disables local price calculations that use onchain data.
+The local onchain adapters also depend on DefiLlama quotes. When acquiring Yearn
+Prices without provider fallback, both flags are required; enabling the local
+onchain adapters in that mode is rejected before any price requests.
 
 These commands do not fetch onchain events again.
 Volume and legacy fee analyses keep their existing DefiLlama policy.
@@ -41,6 +44,9 @@ The client checks the asset, timestamp, and positive price value.
 If a successful batch response omits a target, the client makes an exact historical request for that target.
 Network failures remain eligible for retry.
 An authentication failure stops the run.
+Malformed batch evidence is rejected and its targets are checked through exact
+requests. A malformed exact response is saved as `invalid`, remains eligible for
+`--retry-missing`, and can use the configured provider fallback.
 
 Saved price records include these details:
 
@@ -66,5 +72,9 @@ They also include amounts adjusted for known incidents, including the yRecoverer
 | Known USD subtotal | The sum of values that could be calculated. It can be incomplete. |
 
 Summaries include priced and unpriced report counts.
+A report counts as priced only when all its raw and adjusted gain, loss, and net
+amounts have USD values. A known zero net does not make unknown gains or losses
+priced. A nonzero amount with a price but unknown asset decimals stays unpriced
+and has `valuation_status: missing_decimals`.
 A completed analysis is a saved snapshot.
 Run the analysis again after you change relevant reports or prices.

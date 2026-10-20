@@ -147,14 +147,15 @@ def run_lifetime_yield(
         gain_usd = _usd(adjusted_gain_raw, decimals, price)
         loss_usd = _usd(adjusted_loss_raw, decimals, price)
         net_usd = _usd(adjusted_net_raw, decimals, price)
-        priced = net_usd is not None
-        valuation_status = (
-            "priced"
-            if price is not None
-            else "zero_amount_no_price_required"
-            if int(row["gain_raw"]) == 0 and int(row["loss_raw"]) == 0
-            else "missing_price"
-        )
+        priced = all(value is not None for value in (
+            raw_gain_usd, raw_loss_usd, raw_net_usd, gain_usd, loss_usd, net_usd,
+        ))
+        if not priced:
+            valuation_status = "missing_price" if price is None else "missing_decimals"
+        elif price is None:
+            valuation_status = "zero_amount_no_price_required"
+        else:
+            valuation_status = "priced"
         report_row = {
             "chain_id": row["chain_id"],
             "version": row["version"],

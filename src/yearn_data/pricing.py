@@ -135,6 +135,10 @@ class YearnPricesRequestError(RuntimeError):
         self.retryable = retryable
 
 
+class YearnPricesResponseError(ValueError):
+    """Unusable upstream price evidence, distinct from local configuration errors."""
+
+
 def _yearn_prices_get(
     path: str,
     *,
@@ -168,7 +172,7 @@ def _yearn_prices_get(
             response.raise_for_status()
             payload = response.json()
             if not isinstance(payload, dict):
-                raise ValueError("Yearn Prices returned a non-object JSON response")
+                raise YearnPricesResponseError("Yearn Prices returned a non-object JSON response")
             return payload
         except YearnPricesAuthenticationError:
             raise
@@ -199,7 +203,7 @@ def _parse_yearn_price_point(
     adapter: str,
 ) -> tuple[float, str, dict[str, Any]] | None:
     if not isinstance(raw_point, dict):
-        raise ValueError("Yearn Prices returned a malformed price point")
+        raise YearnPricesResponseError("Yearn Prices returned a malformed price point")
     price = raw_point.get("price")
     if price == 0:
         return None
@@ -212,14 +216,14 @@ def _parse_yearn_price_point(
         or not isinstance(raw_point.get("source"), str)
         or not raw_point["source"]
     ):
-        raise ValueError("Yearn Prices returned a malformed price point")
+        raise YearnPricesResponseError("Yearn Prices returned a malformed price point")
     confidence = raw_point.get("confidence")
     if confidence is not None and (
         not isinstance(confidence, (int, float))
         or isinstance(confidence, bool)
         or not isfinite(float(confidence))
     ):
-        raise ValueError("Yearn Prices returned malformed confidence metadata")
+        raise YearnPricesResponseError("Yearn Prices returned malformed confidence metadata")
     payload = {
         "adapter": adapter,
         "confidence": confidence,
@@ -261,24 +265,24 @@ def fetch_yearn_prices_batch(
     )
     raw_coins = payload.get("coins") if payload is not None else None
     if not isinstance(raw_coins, dict):
-        raise ValueError("Yearn Prices returned a malformed batch response")
+        raise YearnPricesResponseError("Yearn Prices returned a malformed batch response")
 
     output: dict[tuple[int, str, int], tuple[float, str, dict[str, Any]]] = {}
     seen_targets: set[tuple[int, str, int]] = set()
     for raw_token_key, raw_coin in raw_coins.items():
         if not isinstance(raw_token_key, str) or not isinstance(raw_coin, dict):
-            raise ValueError("Yearn Prices returned a malformed batch coin")
+            raise YearnPricesResponseError("Yearn Prices returned a malformed batch coin")
         token_key = raw_token_key.lower()
         prices = raw_coin.get("prices")
         if not isinstance(prices, list):
-            raise ValueError("Yearn Prices returned malformed batch prices")
+            raise YearnPricesResponseError("Yearn Prices returned malformed batch prices")
         for raw_point in prices:
             if not isinstance(raw_point, dict) or not isinstance(raw_point.get("timestamp"), int):
-                raise ValueError("Yearn Prices returned a malformed batch price point")
+                raise YearnPricesResponseError("Yearn Prices returned a malformed batch price point")
             lookup = (token_key, raw_point["timestamp"])
             target = target_by_key.get(lookup)
             if target is None or target in seen_targets:
-                raise ValueError("Yearn Prices returned an unexpected or duplicate batch price point")
+                raise YearnPricesResponseError("Yearn Prices returned an unexpected or duplicate batch price point")
             seen_targets.add(target)
             parsed = _parse_yearn_price_point(
                 raw_point,
@@ -305,8 +309,24 @@ def fetch_yearn_price(
             timeout=timeout,
             allow_not_found=True,
         )
-    except YearnPricesRequestError as error:
-        failure_class = "retryable" if error.retryable else "invalid"
+        parsed = None
+        if payload is not None:
+            raw_coins = payload.get("coins")
+            if not isinstance(raw_coins, dict) or len(raw_coins) != 1:
+                raise YearnPricesResponseError("Yearn Prices returned a malformed exact response")
+            raw_key, raw_point = next(iter(raw_coins.items()))
+            if not isinstance(raw_key, str) or raw_key.lower() != token_key:
+                raise YearnPricesResponseError("Yearn Prices returned an unexpected exact token key")
+            parsed = _parse_yearn_price_point(
+                raw_point,
+                expected_timestamp=normalized,
+                symbol=raw_point.get("symbol") if isinstance(raw_point, dict) else None,
+                adapter="historical",
+            )
+    except (YearnPricesRequestError, YearnPricesResponseError) as error:
+        failure_class = (
+            "retryable" if isinstance(error, YearnPricesRequestError) and error.retryable else "invalid"
+        )
         return None, failure_class, {
             "adapter": "historical",
             "failure_class": failure_class,
@@ -314,25 +334,6 @@ def fetch_yearn_price(
             "normalized_timestamp": normalized,
             "provider": "yearn-prices",
         }
-    if payload is None:
-        return None, "missing", {
-            "adapter": "historical",
-            "failure_class": "not-found",
-            "normalized_timestamp": normalized,
-            "provider": "yearn-prices",
-        }
-    raw_coins = payload.get("coins")
-    if not isinstance(raw_coins, dict) or len(raw_coins) != 1:
-        raise ValueError("Yearn Prices returned a malformed exact response")
-    raw_key, raw_point = next(iter(raw_coins.items()))
-    if not isinstance(raw_key, str) or raw_key.lower() != token_key:
-        raise ValueError("Yearn Prices returned an unexpected exact token key")
-    parsed = _parse_yearn_price_point(
-        raw_point,
-        expected_timestamp=normalized,
-        symbol=raw_point.get("symbol") if isinstance(raw_point, dict) else None,
-        adapter="historical",
-    )
     if parsed is None:
         return None, "missing", {
             "adapter": "historical",
@@ -893,6 +894,11 @@ def price_unpriced_reports(
         raise ValueError(f"unsupported price source {source!r}")
     if fallback is not None and fallback not in SUPPORTED_SOURCES:
         raise ValueError(f"unsupported fallback source {fallback!r}")
+    if source == "yearn-prices" and fallback != "defillama" and onchain_fallbacks:
+        raise ValueError(
+            "onchain fallbacks require DefiLlama provider fallback; "
+            "use --no-onchain-fallbacks with --no-provider-fallback"
+        )
     chain_filter = ""
     chain_params: list[int] = []
     if chain_ids:
@@ -1255,10 +1261,9 @@ def _price_rows_with_yearn_prices(conn, rows) -> tuple[int, list]:
         for future in as_completed(futures):
             try:
                 results.update(future.result())
-            except YearnPricesRequestError:
-                # Treat a transient batch failure like an omission. The exact
-                # request below records the terminal state for each target,
-                # after which the configured provider fallback can run.
+            except (YearnPricesRequestError, YearnPricesResponseError):
+                # Verify failed or malformed batches through exact requests.
+                # Invalid evidence is never accepted as a usable price.
                 continue
 
     missing_targets = sorted(normalized_targets - results.keys())

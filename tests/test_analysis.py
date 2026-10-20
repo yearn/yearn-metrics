@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+import pytest
+
 from yearn_data.analysis import run_lifetime_yield, run_vault_fees, run_vault_volume
 from yearn_data.config import CHAINS
 from yearn_data.incident_adjustments import adjustment_for_tx
@@ -509,3 +511,56 @@ def test_yrecover_loss_is_an_incident_adjustment():
     assert adjustment is not None
     assert adjustment.classification == "intentional_recovery_accounting_loss"
     assert adjustment.adjusted_net_raw == "0"
+
+
+@pytest.mark.parametrize(
+    "tx_hash,gain,loss,net,decimals,price,expected_status,expected_priced",
+    [
+        ("0xbalanced", "1000000", "1000000", "0", 6, None, "missing_price", 0),
+        ("0x9cc9c42e2da1a2ae774a6ac393aff5974462c999773ea0b04cdd41aebdf5d650",
+         "0", "1000000", "-1000000", 6, None, "missing_price", 0),
+        ("0xunknown", "1000000", "0", "1000000", None, 2.0, "missing_decimals", 0),
+        ("0xzero", "0", "0", "0", None, None, "zero_amount_no_price_required", 1),
+    ],
+)
+def test_lifetime_yield_counts_complete_valuations_without_vault_metadata(
+    tmp_path, tx_hash, gain, loss, net, decimals, price, expected_status, expected_priced
+):
+    conn = connect(tmp_path / "test.sqlite")
+    init_db(conn)
+    seed_chains(conn, CHAINS)
+    asset = "0x0000000000000000000000000000000000000002"
+    conn.execute(
+        """
+        INSERT INTO strategy_reports (
+            chain_id, version, vault_address, strategy_address, tx_hash, log_index,
+            block_number, block_timestamp, asset, asset_decimals, gain_raw, loss_raw,
+            net_raw, extra_json
+        ) VALUES (1, 'v3', '0x0000000000000000000000000000000000000001',
+                  '0x0000000000000000000000000000000000000003', ?, 0,
+                  10, 100, ?, ?, ?, ?, ?, '{}')
+        """,
+        (tx_hash, asset, decimals, gain, loss, net),
+    )
+    if price is not None:
+        conn.execute(
+            """INSERT INTO prices (chain_id, token_address, timestamp, source, price_usd, status)
+               VALUES (1, ?, 100, 'yearn-prices', ?, 'ok')""", (asset, price),
+        )
+    conn.commit()
+
+    run_id = run_lifetime_yield(conn)
+    outputs = {
+        row["name"]: from_json(row["row_json"])
+        for row in conn.execute("SELECT name, row_json FROM analysis_outputs WHERE run_id=?", (run_id,))
+    }
+    report = outputs["reports"]
+    summary = outputs["total_yield_summary"]
+    assert summary["priced_reports"] == expected_priced
+    assert summary["unpriced_reports"] == 1 - expected_priced
+    assert report["valuation_status"] == expected_status
+    assert report["vault_name"] is None
+    for raw, field in [(gain, "raw_gross_gain_usd"), (loss, "raw_loss_usd"), (net, "raw_net_yield_usd")]:
+        assert report[field] == ("0" if int(raw) == 0 else None)
+    if adjustment_for_tx(tx_hash):
+        assert report["net_yield_usd"] == "0"

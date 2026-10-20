@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from yearn_data.config import CHAINS
 from yearn_data.pricing import _yearn_prices_batches, fetch_yearn_price, normalize_yearn_price_timestamp, price_unpriced_reports
@@ -322,3 +324,109 @@ def test_yearn_only_command_disables_both_fallbacks(tmp_path, monkeypatch):
 def test_gnosis_price_namespace_requires_no_rpc():
     from yearn_data.pricing import yearn_prices_token_key
     assert yearn_prices_token_key(100, '0x' + '2' * 40) == 'gnosis:0x' + '2' * 40
+
+
+@pytest.mark.parametrize("exact_outcome", ["ok", "missing", "invalid"])
+def test_malformed_batch_preserves_other_targets_and_exact_provider_fallbacks(
+    tmp_path, monkeypatch, exact_outcome
+):
+    from yearn_data import pricing
+
+    conn = connect(tmp_path / "test.sqlite")
+    init_db(conn)
+    seed_chains(conn, CHAINS)
+    assets = ["0x" + "2" * 40, "0x" + "4" * 40]
+    for index, asset in enumerate(assets):
+        conn.execute(
+            """
+            INSERT INTO strategy_reports (
+                chain_id, version, vault_address, strategy_address, tx_hash, log_index,
+                block_number, block_timestamp, asset, asset_decimals, gain_raw, loss_raw,
+                net_raw, extra_json
+            ) VALUES (1, 'v3', '0x0000000000000000000000000000000000000001',
+                      '0x0000000000000000000000000000000000000003', ?, 0,
+                      10, 100, ?, 6, '1000000', '0', '1000000', '{}')
+            """, (f"0x{index}", asset),
+        )
+    conn.commit()
+    monkeypatch.setenv("YEARN_PRICE_BATCH_TOKENS", "1")
+    exact_calls = []
+
+    def fake_get(path, *, params=None, **kwargs):
+        if params is not None:
+            token_key = next(iter(json.loads(params["coins"])))
+            point = {"timestamp": 86399, "price": True if token_key.endswith(assets[0]) else 2.0,
+                     "source": "oracle"}
+            return {"coins": {token_key: {"prices": [point]}}}
+        exact_calls.append(path)
+        if exact_outcome == "missing":
+            return None
+        return {"coins": {"ethereum:" + assets[0]: {
+            "timestamp": 172799 if exact_outcome == "invalid" else 86399,
+            "price": 3.0, "source": "oracle",
+        }}}
+
+    fallback_calls = []
+    def fake_fallback(targets):
+        fallback_calls.extend(targets)
+        return {target: (7.0, "ok", {"source": "defillama"}) for target in targets}
+
+    monkeypatch.setattr(pricing, "_yearn_prices_get", fake_get)
+    monkeypatch.setattr(pricing, "fetch_defillama_prices_batch", fake_fallback)
+    count = price_unpriced_reports(conn, onchain_fallbacks=False)
+    rows = {(row["token_address"], row["source"]): row for row in conn.execute("SELECT * FROM prices")}
+    assert rows[assets[1], "yearn-prices"]["price_usd"] == 2.0
+    assert len(exact_calls) == 1
+    if exact_outcome == "ok":
+        assert count == 2
+        assert rows[assets[0], "yearn-prices"]["price_usd"] == 3.0
+        assert fallback_calls == []
+    else:
+        assert count == 3
+        row = rows[assets[0], "yearn-prices"]
+        assert row["price_usd"] is None
+        assert row["status"] == exact_outcome
+        assert from_json(row["raw_json"])["failure_class"] == (
+            "invalid" if exact_outcome == "invalid" else "not-found"
+        )
+        assert fallback_calls == [(1, assets[0], 100)]
+        assert rows[assets[0], "defillama"]["price_usd"] == 7.0
+
+
+def test_yearn_only_pricing_rejects_enabled_onchain_fallbacks_before_requests(monkeypatch, tmp_path):
+    from yearn_data import pricing
+
+    conn = connect(tmp_path / "test.sqlite")
+    init_db(conn)
+    monkeypatch.setattr(pricing, "_price_rows_with_yearn_prices",
+                        lambda *_: pytest.fail("Must reject unsupported policy before fetching"))
+    with pytest.raises(ValueError, match="onchain.*DefiLlama.*no-onchain-fallbacks"):
+        price_unpriced_reports(conn, source="yearn-prices", fallback=None)
+
+
+@pytest.mark.parametrize("failure", ["batch-auth", "exact-auth", "missing-key"])
+def test_response_error_recovery_preserves_fatal_authentication_and_configuration(
+    monkeypatch, tmp_path, failure
+):
+    from yearn_data import pricing
+
+    conn = connect(tmp_path / "test.sqlite")
+    init_db(conn)
+    row = {"chain_id": 1, "asset": "0x" + "2" * 40,
+           "block_timestamp": 100, "block_number": 10}
+    if failure == "missing-key":
+        monkeypatch.delenv("YEARN_PRICE_PROD_KEY", raising=False)
+        expected_error = ValueError
+        message = "missing Yearn Prices API key"
+    else:
+        def fake_get(path, **kwargs):
+            if failure == "exact-auth" and path.endswith("batchHistorical"):
+                return {"coins": {}}
+            raise pricing.YearnPricesAuthenticationError("authentication failed")
+        monkeypatch.setattr(pricing, "_yearn_prices_get", fake_get)
+        expected_error = pricing.YearnPricesAuthenticationError
+        message = "authentication failed"
+
+    with pytest.raises(expected_error, match=message):
+        pricing._price_rows_with_yearn_prices(conn, [row])
+    assert conn.execute("SELECT count(*) FROM prices").fetchone()[0] == 0
