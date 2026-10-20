@@ -123,3 +123,56 @@ def test_price_only_repair_preserves_old_publication_and_recalculates_deductions
     assert prepare_price_repair(repaired,old)['status']=='already-prepared'
     incompatible=deepcopy(manifest);incompatible['datasetId']='e'*64;incompatible['currentBridgePolicy']='retired-registry'
     with pytest.raises(ValueError,match='preserve all other'):prepare_price_repair(TvlDataset(incompatible),old)
+
+
+def test_price_repair_rejects_source_with_interrupted_total_preparation(tmp_path, monkeypatch):
+    from copy import deepcopy
+    from yearn_data import tvl_history_cache as cache
+    path = tmp_path / 'interrupted-totals.sqlite'
+    with closing(connect(path)) as conn:
+        init_db(conn)
+        run(conn, 1, DAY, [(PARENT, '100')])
+        run(conn, 2, DAY + 86400, [(PARENT, '200')])
+    old = TvlStore(path, tmp_path / 'publication').get()
+    def interrupted(_dataset):
+        raise RuntimeError('total preparation interrupted')
+    monkeypatch.setattr(cache, 'prepare_totals', interrupted)
+    with pytest.raises(RuntimeError, match='interrupted'):
+        prepare(old)
+    assert ready(old) and not cache.totals_ready(old)
+    manifest = deepcopy(old.manifest)
+    manifest['datasetId'] = 'f' * 64
+    manifest['priceRejections'].append({'chainId': 1, 'asset': '0x' + 'aa' * 20,
+        'timestamp': DAY, 'priceUsd': '10', 'reason': 'verified quote'})
+    repaired = TvlDataset(manifest)
+    with pytest.raises(ValueError, match='totals'):
+        cache.prepare_price_repair(repaired, old)
+    assert not ready(repaired)
+
+
+def test_price_repair_resumes_interrupted_destination_totals(tmp_path, monkeypatch):
+    from copy import deepcopy
+    from yearn_data import tvl_history_cache as cache
+    path = tmp_path / 'destination-totals.sqlite'
+    with closing(connect(path)) as conn:
+        init_db(conn)
+        run(conn, 1, DAY, [(PARENT, '100')])
+        run(conn, 2, DAY + 86400, [(PARENT, '200')])
+    old = TvlStore(path, tmp_path / 'publication').get()
+    prepare(old)
+    manifest = deepcopy(old.manifest)
+    manifest['datasetId'] = 'f' * 64
+    manifest['priceRejections'].append({'chainId': 1, 'asset': '0x' + 'aa' * 20,
+        'timestamp': DAY, 'priceUsd': '10', 'reason': 'verified quote'})
+    repaired = TvlDataset(manifest)
+    expected = repaired.history(interval='daily')['chart']
+    def interrupted(_dataset):
+        raise RuntimeError('total preparation interrupted')
+    with monkeypatch.context() as patch:
+        patch.setattr(cache, 'prepare_totals', interrupted)
+        with pytest.raises(RuntimeError, match='interrupted'):
+            prepare(repaired)
+    assert ready(repaired) and not cache.totals_ready(repaired)
+    assert cache.prepare_price_repair(repaired, old)['status'] == 'already-prepared'
+    assert cache.totals_ready(repaired)
+    assert repaired.history(interval='daily')['chart'] == expected

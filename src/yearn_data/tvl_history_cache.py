@@ -160,8 +160,8 @@ def prepare_price_repair(dataset, previous):
     A marker commits only with the copied rows and recomputed daily totals.
     """
     from .tvl_api import CHAINS, encoded
-    if not ready(previous):
-        raise ValueError('previous TVL history must be prepared')
+    if not ready(previous) or not totals_ready(previous):
+        raise ValueError('previous TVL history and totals must be prepared')
     excluded={'datasetId','publishedAt','asOfTimestamp','diagnostics','priceRejections'}
     before={k:v for k,v in previous.manifest.items() if k not in excluded}
     after={k:v for k,v in dataset.manifest.items() if k not in excluded}
@@ -171,7 +171,9 @@ def prepare_price_repair(dataset, previous):
     new={(r['chainId'],r['asset'].lower(),r['timestamp'],r['priceUsd']) for r in dataset.manifest.get('priceRejections',[])}
     if not old<=new:raise ValueError('price repair cannot remove previous rejections')
     changed=tuple(sorted({r[2] for r in new-old}))
-    if ready(dataset):return {'status':'already-prepared','datasetId':dataset.id}
+    if ready(dataset):
+        prepare_totals(dataset)
+        return {'status':'already-prepared','datasetId':dataset.id}
     # Native daily accounting reapplies child/parent caps after valuation rejection.
     frames=list(dataset.iter_frames(changed))
     repaired=[];sums=[]
