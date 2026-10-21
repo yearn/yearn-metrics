@@ -64,7 +64,8 @@ def test_curation_flow_is_visible_without_changing_headline_policy(source):
     assert g['totalTvlUsd']==200 and g['totalOverlapTvlUsd']==0
 
 
-def test_graph_recalculation_preserves_pinned_mapping_policy(source, monkeypatch):
+@pytest.mark.parametrize('curation', [False, True])
+def test_graph_recalculation_preserves_pinned_mapping_policy(source, monkeypatch, curation):
     from yearn_data import tvl_api
     from yearn_data.tvl_policy import TARGET_CORRECTIONS
 
@@ -73,6 +74,11 @@ def test_graph_recalculation_preserves_pinned_mapping_policy(source, monkeypatch
     old_child='0x182863131f9a4630ff9e27830d945b1413e347e8'
     run(conn,1,DAY,[(PARENT,'100'),(old_child,'100')])
     router(conn,child=old_child,holder=holder,debt='50',owned='80')
+    if curation:
+        for stored in conn.execute('SELECT vault,data_json FROM tvl_snapshots').fetchall():
+            row=json.loads(stored['data_json']);row['category']='curation'
+            conn.execute('UPDATE tvl_snapshots SET data_json=? WHERE vault=?',(json.dumps(row),stored['vault']))
+        conn.commit()
     monkeypatch.setattr(tvl_api,'TARGET_CORRECTIONS',[])
     original=TvlStore(path,root).get()
     monkeypatch.setattr(tvl_api,'TARGET_CORRECTIONS',TARGET_CORRECTIONS)
@@ -86,6 +92,11 @@ def test_graph_recalculation_preserves_pinned_mapping_policy(source, monkeypatch
     assert flow['tvlUsd'] == flow['deductedTvlUsd'] == 50
     assert pinned['totalOverlapTvlUsd'] == 50
     assert pinned['diagnostics']['status'] == 'complete'
+    if curation:
+        original=TvlStore(path,root).get(original.id)
+        assert original.summary()['totalTvl'] == 150
+        assert original.curation()['knownInternalOverlapTvlUsd'] == 50
+        assert original.curation()['totalTvlUsd'] == 150
 
 
 def test_unknowns_are_diagnostics_not_zero_value_nodes_and_dataset_is_pinned(source):
