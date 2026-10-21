@@ -84,7 +84,7 @@ def test_invalid_graph_filters(source,query):
     assert tvl_response(TvlStore(path,root),'/api/tvl/graph?'+query)[0]==400
 
 
-def test_cross_chain_graph_and_chain_summary_account_before_filtering(source):
+def test_cross_chain_graph_and_chain_summary_account_before_filtering(source, monkeypatch):
     conn,path,root=source
     run(conn,1,DAY,[(PARENT,'100')])
     remote={'chain_id':10,'vault':CHILD,'timestamp':DAY,'block_number':50,'version':'v3','category':'v3',
@@ -96,12 +96,24 @@ def test_cross_chain_graph_and_chain_summary_account_before_filtering(source):
     conn.execute('INSERT INTO tvl_positions VALUES (1,1,?,?,?,?,?)',(PARENT,HOLDER,CHILD,DAY,json.dumps(p)))
     conn.commit()
     dataset=TvlStore(path,root).get()
+    from yearn_data import tvl_api
+    original_account=tvl_api.account
+    calls=[]
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return original_account(*args, **kwargs)
+    monkeypatch.setattr(tvl_api,'account',counted)
     assert dataset.summary()['totalTvl']==220
     assert dataset.summary(10)['totalTvl']==120
     g=dataset.graph(10)
     assert g['totalTvlUsd']==120 and g['totalOverlapTvlUsd']==80
     assert {n['chainId'] for n in g['nodes']}=={1,10}
     assert next(e for e in g['edges'] if e['kind']=='registry')['targetNodeId']==f'10:{CHILD}'
+    assert dataset.audit(10)['overlapTvl'] == 80
+    assert dataset.summary(1)['totalTvl'] == 100
+    assert len(calls) == 1  # Shared full-network accounting across equivalent calls.
+    dataset.curation(1); dataset.curation(10)
+    assert len(calls) == 4  # One curation frame, plus each endpoint's product-only accounting.
     # A later selected receiver observation at another block cannot reuse old ownership.
     remote['block_number']=51
     conn.execute('INSERT INTO tvl_runs VALUES (2,2,2,?,?)',('complete',json.dumps({'from':DAY,'to':DAY})))
@@ -152,3 +164,16 @@ def test_verified_zero_cross_chain_debt_needs_no_remote_block(source):
     _,_,positions,diagnostics=TvlStore(path,root).get().frames((DAY,))[0]
     assert positions[0]['status']=='ok' and positions[0]['overlap_usd']=='0'
     assert diagnostics['status']=='complete' and diagnostics['external_tvl_usd']=='300'
+
+
+@pytest.mark.parametrize('chain,category,expected', [(1, None, True), (10, None, False), (None, 'v3', False), (1, 'v2', True)])
+def test_graph_unavailable_nodes_follow_scope_without_fabricating_strategy(source, chain, category, expected):
+    conn,path,root=source
+    run(conn,1,DAY,[(PARENT,'100'),(CHILD,None)],[(CHILD,'80')])
+    row=json.loads(conn.execute('SELECT data_json FROM tvl_snapshots WHERE vault=?',(CHILD,)).fetchone()[0])
+    row.update(version='v2',category='v2')
+    conn.execute('UPDATE tvl_snapshots SET data_json=? WHERE vault=?',(json.dumps(row),CHILD));conn.commit()
+    graph=TvlStore(path,root).get().graph(chain_id=chain,category=category)
+    assert graph['diagnostics']['unavailableNodes'] == ([{'nodeId':f'1:{CHILD}','reason':'missing_valuation'}] if expected else [])
+    assert all(n['address'] != CHILD for n in graph['nodes'])
+    assert graph['edges'] == []

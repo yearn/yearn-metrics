@@ -254,9 +254,19 @@ class TvlDataset:
         for row in conn.execute(sql,args):
             yield self.validate_price(json.loads(row['data_json']))
 
-    @lru_cache(maxsize=8)
     def frames(self, timestamps, chain_id=None, include_curation=False, include_retired=True):
-        return tuple(self.iter_frames(timestamps, chain_id, include_curation, include_retired))
+        # Normalize positional/keyword calls and share accounting across chains.
+        frames = self._network_frames(tuple(timestamps), include_curation, include_retired)
+        if chain_id is None:
+            return frames
+        return tuple((timestamp,
+                      [r for r in rows if r['chain_id']==chain_id],
+                      [p for p in positions if p['chain_id']==chain_id or p.get('child_chain_id',p['chain_id'])==chain_id],
+                      diagnostics) for timestamp,rows,positions,diagnostics in frames)
+
+    @lru_cache(maxsize=8)
+    def _network_frames(self, timestamps, include_curation, include_retired):
+        return tuple(self.iter_frames(timestamps, None, include_curation, include_retired))
 
     def iter_frames(self, timestamps, chain_id=None, include_curation=False, include_retired=True):
         if not timestamps:

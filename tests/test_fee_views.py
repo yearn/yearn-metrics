@@ -84,6 +84,9 @@ def test_yvusd_reads_actual_fee_config_separately_from_locker_bonus(monkeypatch)
     r.call = lambda calls: [(YVUSD,), None]
     with pytest.raises(ValueError, match='configuration'):
         custom_accountant_config(r, config)
+    r.call = lambda calls: [(LOAN,), (25, 50, 1000)]
+    with pytest.raises(ValueError, match='asset'):
+        custom_accountant_config(r, config)
     r = reader(monkeypatch, LOCKED, '0x' + '0' * 64, [])
     with pytest.raises(ValueError, match='implementation'):
         custom_accountant_config(r, config)
@@ -148,3 +151,37 @@ def test_standalone_entries_keep_existing_tvl_eligibility(tvl):
              'tvl_usd': tvl, 'external_tvl_usd': tvl}]
     configs = {'vaults': [{'chainId': 1, 'address': LOAN, 'performanceFee': 1000, 'managementFee': 0}]}
     assert fee_stack(rows, [], configs)['entries'] == []
+
+
+@pytest.mark.parametrize('failure', ['code_timeout', 'call_timeout', 'rpc_value_error', 'code_mismatch', 'recipient_mismatch', 'recipient_unavailable'])
+def test_observed_product_config_records_failure_kind(monkeypatch, failure):
+    import sqlite3
+    from yearn_data import analytics_collect
+    from yearn_data.analytics import SCHEMA, put_input, selected_input
+    r=reader(monkeypatch, ACCOUNTANT, CODE_HASH, [(STAKER,)])
+    r.block.update(number=123, timestamp=456)
+    def calls(batch):
+        if not batch:return []
+        if len(batch)==4:return [None,None,None,(ACCOUNTANT,)]
+        if failure=='call_timeout':raise TimeoutError('private provider URL')
+        if failure=='recipient_unavailable':return [None]
+        return [(LOAN if failure=='recipient_mismatch' else STAKER,)]
+    r.call=calls
+    if failure in ('code_timeout','rpc_value_error'):
+        def unavailable(*args, **kwargs):
+            raise (TimeoutError if failure=='code_timeout' else ValueError)('private provider URL')
+        r.w3.eth.get_code=unavailable
+    if failure=='code_mismatch':
+        import eth_utils
+        monkeypatch.setattr(eth_utils,'keccak',lambda code:bytes(32))
+    monkeypatch.setattr(analytics_collect,'Reader',lambda chain:r)
+    configs=analytics_collect.observed_configs(1,[{'address':YBOLD,'version':'v3'}],[])
+    conn=sqlite3.connect(':memory:');conn.row_factory=sqlite3.Row
+    try:
+        conn.executescript(SCHEMA)
+        put_input(conn,'fee-config',{'vaults':configs},status='partial',observed_at=456)
+        stored=selected_input(conn,'fee-config')['body']['vaults'][0]
+        assert stored['failureKind'] == ('verification_rejected' if failure.endswith('mismatch') else 'acquisition_failed')
+        assert stored['failureReason'] and 'private provider URL' not in str(stored)
+        assert stored['fixedRateSupported'] is False and stored['availability']=='unavailable'
+    finally:conn.close()
