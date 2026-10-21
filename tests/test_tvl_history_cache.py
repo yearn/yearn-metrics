@@ -344,3 +344,51 @@ def test_rejection_evidence_does_not_publish_empty_or_repr_values():
         evidence=row.get('evidence',{})
         assert not any(value=='None' for value in evidence.values())
         assert 'canonicalCurveQuote' not in evidence or evidence['canonicalCurveQuote']
+
+
+@pytest.mark.parametrize('include_current', [False,True])
+def test_price_repair_bounds_recalculation_and_copied_rows_to_publication(tmp_path,include_current):
+    from copy import deepcopy
+    from yearn_data.tvl_history_cache import prepare_price_repair
+    path=tmp_path/'bounded-repair.sqlite';future=DAY+2*86400
+    with closing(connect(path)) as conn:
+        init_db(conn)
+        for offset in range(3):
+            timestamp=DAY+offset*86400
+            run(conn,offset+1,timestamp,[(PARENT,str(100*(offset+1)))])
+            if offset<2:
+                row={'chain_id':10,'vault':CHILD,'timestamp':timestamp,'block_number':100+offset,
+                     'version':'v2','category':'v2','asset':'0x'+'bb'*20,'asset_units':'10',
+                     'tvl_usd':'100','price_usd':'10'}
+                conn.execute('INSERT INTO tvl_snapshots VALUES (?,?,?,?,?,?)',
+                    (offset+1,10,CHILD,timestamp,100+offset,json.dumps(row)))
+                conn.commit()
+    previous=TvlStore(path,tmp_path/'publication').get();prepare(previous)
+    assert previous.as_of()==DAY+86400 and future in previous.dates()
+    # A legacy repair could already have persisted the partial close. It must
+    # remain intact in the source while the new publication excludes it.
+    with closing(connect(path)) as conn,conn:
+        conn.execute('INSERT INTO tvl_chart_rows VALUES (?,?,?,?,?,?,?,?,?,?)',
+            (previous.id,future,1,PARENT,'Vault','v3','v3','10','300','300'))
+        for mode in ('raw','external'):
+            for group,series in (('chain','Ethereum'),('category','v3')):
+                conn.execute('INSERT INTO tvl_chart_totals VALUES (?,?,?,?,?,?)',
+                    (previous.id,future,group,mode,series,'300'))
+        conn.execute('UPDATE tvl_chart_publications SET row_count=row_count+1 WHERE dataset_id=?',(previous.id,))
+    manifest=deepcopy(previous.manifest);manifest['datasetId']='f'*64
+    new=[{'chainId':1,'asset':'0x'+'aa'*20,'timestamp':future,'priceUsd':'30','reason':'fixture'},
+         {'chainId':1,'asset':'0x'+'aa'*20,'timestamp':DAY+3600,'priceUsd':'10','reason':'no snapshot at this timestamp'}]
+    if include_current:new.append(new[0]|{'timestamp':DAY,'priceUsd':'10'})
+    manifest['priceRejections']+=new
+    result=prepare_price_repair(TvlDataset(manifest),previous)
+    assert result['recomputedDates']==([DAY] if include_current else [])
+    with closing(connect(path,readonly=True)) as conn:
+        for table in ('tvl_chart_rows','tvl_chart_totals'):
+            assert conn.execute(f'SELECT COUNT(*) FROM {table} WHERE dataset_id=? AND timestamp>?',
+                                (manifest['datasetId'],previous.as_of())).fetchone()[0]==0
+            assert conn.execute(f'SELECT COUNT(*) FROM {table} WHERE dataset_id=? AND timestamp=?',
+                                (previous.id,future)).fetchone()[0]>0
+    chart=TvlDataset(manifest).history(interval='daily')['chart']
+    assert [point['Optimism'] for point in chart]==[100,100]
+    assert chart[0].get('Ethereum')==(None if include_current else 100)
+    assert chart[1]['Ethereum']==200

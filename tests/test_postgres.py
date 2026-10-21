@@ -383,3 +383,47 @@ def test_real_postgres_repair_uses_full_preparation_builder_lock(pg,tmp_path):
     assert totals_ready(TvlDataset(manifest))
     chart=TvlDataset(manifest).history(interval='daily')['chart']
     assert chart[0].get('Ethereum') is None and chart[1]['Ethereum']==200
+
+
+@pytest.mark.parametrize('completion', ['complete','incomplete','unsupported'])
+def test_real_postgres_repair_rechecks_builder_completion_under_lock(pg,tmp_path,monkeypatch,completion):
+    from copy import deepcopy
+    from test_tvl_api import run,DAY,PARENT
+    from yearn_data import tvl_history_cache as cache
+    from yearn_data.tvl_api import TvlStore,TvlDataset
+    conn,_=pg;init_db(conn)
+    run(conn,1,DAY,[(PARENT,'100')]);run(conn,2,DAY+86400,[(PARENT,'200')])
+    previous=TvlStore('neon',tmp_path/'publication').get();cache.prepare(previous)
+    manifest=deepcopy(previous.manifest);manifest['datasetId']='f'*64
+    manifest['priceRejections'].append({'chainId':1,'asset':'0x'+'aa'*20,
+        'timestamp':DAY,'priceUsd':'10','reason':'fixture'})
+    target=TvlDataset(manifest);original=target.iter_frames;ran=[]
+    def interrupted_totals(dataset):raise RuntimeError('injected total interruption')
+    def competing_builder(dates,*args,**kwargs):
+        # The repair has already observed ready(target)==False, but has not
+        # reached its write transaction. Finish another real build in that gap.
+        ran.append(True)
+        if completion=='incomplete':
+            with monkeypatch.context() as patch:
+                patch.setattr(cache,'prepare_totals',interrupted_totals)
+                with pytest.raises(RuntimeError,match='total interruption'):
+                    cache.prepare(TvlDataset(manifest))
+        else:
+            cache.prepare(TvlDataset(manifest))
+            if completion=='unsupported':
+                conn.execute('UPDATE tvl_chart_publications SET version=? WHERE dataset_id=?',
+                             ('older-accounting',target.id));conn.commit()
+        yield from original(dates,*args,**kwargs)
+    monkeypatch.setattr(target,'iter_frames',competing_builder)
+    if completion=='complete':
+        assert cache.prepare_price_repair(target,previous)['status']=='already-prepared'
+    else:
+        message='already running' if completion=='incomplete' else 'full history preparation'
+        with pytest.raises(ValueError,match=message):cache.prepare_price_repair(target,previous)
+        cache.prepare(TvlDataset(manifest))
+    assert ran==[True]
+    assert cache.totals_ready(TvlDataset(manifest))
+    assert conn.execute('SELECT COUNT(*) FROM tvl_chart_rows WHERE dataset_id=?',(target.id,)).fetchone()[0]==2
+    chart=TvlDataset(manifest).history(interval='daily')['chart']
+    assert chart[0].get('Ethereum') is None and chart[1]['Ethereum']==200
+    assert TvlDataset(previous.manifest).history(interval='daily')['chart'][0]['Ethereum']==100
