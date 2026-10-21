@@ -155,6 +155,14 @@ def _build_graph(dataset, rows, positions, diagnostics, *, chain_id, category):
         values = [decimal(r[field]) for r in scope_rows if r.get(field) is not None]
         return float(sum(values,Decimal(0))) if values or not scope_rows else None
 
+    unresolved = diagnostics['unresolved_positions']
+    if chain_id is not None or category is not None:
+        scope_keys = {(r['chain_id'], r['vault'].lower()) for r in scope_rows}
+        unresolved = sum(bool(r.get('accounting_unresolved')) for r in scope_rows)
+        unresolved += sum(bool(p.get('accounting_unresolved')) for p in positions
+                          if (p['chain_id'], p['parent'].lower()) in scope_keys
+                          or (p.get('child_chain_id', p['chain_id']), p['child'].lower()) in scope_keys)
+
     raw, external = total('tvl_usd'), total('external_tvl_usd')
     return {'datasetId':dataset.id,'asOfTimestamp':dataset.as_of(),'snapshotAt':dataset.as_of(),
             'totalTvlUsd':external,'totalRawTvlUsd':raw,
@@ -163,4 +171,4 @@ def _build_graph(dataset, rows, positions, diagnostics, *, chain_id, category):
             'edges':sorted(edges,key=lambda e:(-e['tvlUsd'],e['id'])),
             'bridgeExclusions':sorted(bridges,key=lambda b:b['sourceNodeId']),
             'diagnostics':{'status':diagnostics['status'],'mappingScope':'known candidates',
-                           'unavailableNodes':unavailable,'unresolvedPositions':diagnostics['unresolved_positions']}}
+                           'unavailableNodes':unavailable,'unresolvedPositions':unresolved}}

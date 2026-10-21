@@ -361,3 +361,12 @@ Powerglove build pins this deployment through its server-side proxy; protection
 bypass credentials remain server-only. The public production project environment
 was not changed. See [the overlap rollout](tvl-overlaps.md) for data scope and
 verification.
+
+
+Republication preserves immutable serving bounds. Regenerating local manifests may
+change `publishedAt` or diagnostic metadata, but the stored reporting close and
+prepared date index must match. A changed `asOfTimestamp`, changed date set, or empty
+prepared history fails publication before changing the hosted selection. Collect
+new observations in a new run, generate its new dataset ID, and prepare its history
+and analytics before publishing. Preparation is idempotent for an existing dataset;
+it does not extend an already prepared dataset in place.
