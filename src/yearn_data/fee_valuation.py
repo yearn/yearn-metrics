@@ -177,7 +177,11 @@ def value_event(event, cache):
             if status == 'ok':
                 price = evidence['price_usd']
         if int(amounts['total_fees_paid_raw']) == 0:
-            status = 'zero_fee'
+            unpriced_component = price is None and any(int(amounts.get(f) or 0)>0 for f in FIELDS)
+            if not unpriced_component:
+                status = 'zero_fee'
+            elif status != 'metadata_unavailable':
+                status = 'zero_fee_unpriced_component'
     output = {key:value for key,value in event.items() if key != 'accounting'}
     output.update(day=datetime.fromtimestamp(timestamp, timezone.utc).date().isoformat(),
                   eod_timestamp=timestamp, valuation_policy=POLICY, price_provider='yearn-prices',
@@ -257,7 +261,7 @@ def _write_fee_usd_outputs(conn, run_id, cutoff, cache, deferrals, manifest_hash
             for name,key in dimensions.items():
                 bucket = groups[name].setdefault(key, {'events':0,'accounting_unavailable_events':0,
                     'deferred_accounting_events':0,'metadata_unavailable_events':0,'unpriced_fee_events':0,'known_fee_events':0,
-                    'zero_fee_events':0,'totals':{f:Decimal(0) for f in FIELDS},
+                    'zero_fee_events':0,'unpriced_component_events':0,'totals':{f:Decimal(0) for f in FIELDS},
                     'known':{f:0 for f in FIELDS},'statuses':Counter()})
                 bucket['events'] += 1
                 bucket['deferred_accounting_events'] += row['accounting_status']=='deferred'
@@ -266,7 +270,9 @@ def _write_fee_usd_outputs(conn, run_id, cutoff, cache, deferrals, manifest_hash
                 bucket['metadata_unavailable_events'] += status == 'metadata_unavailable'
                 fee = row['total_fees_paid_usd']
                 bucket['known_fee_events'] += fee is not None
-                bucket['zero_fee_events'] += status == 'zero_fee'
+                bucket['zero_fee_events'] += fee == '0'
+                bucket['unpriced_component_events'] += any(
+                    int(row.get(f) or 0)>0 and row[f.replace('_raw','_usd')] is None for f in FIELDS)
                 bucket['unpriced_fee_events'] += (fee is None and status not in ('accounting_unavailable','metadata_unavailable'))
                 for field in FIELDS:
                     amount = row[field.replace('_raw','_usd')]
@@ -287,8 +293,9 @@ def _write_fee_usd_outputs(conn, run_id, cutoff, cache, deferrals, manifest_hash
                     scope='stored_reports_and_tokenized_events_only', historical_discovery_complete=False,
                     accepted_fee_events=bucket['events']-bucket['accounting_unavailable_events'],
                     accounting_complete=bucket['accounting_unavailable_events']==0,
-                    pricing_complete_for_accepted_fees=(bucket['metadata_unavailable_events']==0 and bucket['unpriced_fee_events']==0),
-                    fee_usd_complete=bucket['known_fee_events']==bucket['events'],
+                    pricing_complete_for_accepted_fees=(bucket['metadata_unavailable_events']==0 and bucket['unpriced_fee_events']==0
+                                                        and bucket['unpriced_component_events']==0),
+                    fee_usd_complete=(bucket['known_fee_events']==bucket['events'] and bucket['unpriced_component_events']==0),
                     valuation_status_counts_json=json.dumps(dict(statuses),sort_keys=True))
                 for field in FIELDS:
                     usd = field.replace('_raw','_usd')
