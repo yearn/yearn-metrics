@@ -110,13 +110,22 @@ def test_receipt_failure_keeps_reason_and_other_reports_available(case_db, inval
     assert results[case['report']['log_index']+1]['status']=='ok'
 
 
-def test_offline_pre_migration_row_without_split_is_unavailable(case_db):
+@pytest.mark.parametrize('damage', ['missing','unreconciled','inputs'])
+def test_offline_replay_distinguishes_distribution_evidence_from_inputs(case_db, damage):
     conn,case=case_db;assert index(conn,case)==1
     evidence=json.loads(conn.execute('SELECT evidence_json FROM canonical_fee_reports').fetchone()[0])
-    evidence.pop('yvusd')
+    if damage == 'missing':
+        evidence.pop('yvusd')
+    elif damage == 'unreconciled':
+        from yearn_data.yvusd_fees import FEE_TOPIC
+        log=next(l for l in evidence['yvusd']['receipt']['logs'] if l['topics'][0]==FEE_TOPIC)
+        log['topics'][1]='0x'+format(123,'064x')
+    else:
+        evidence['allocator_inputs']['total_fees_raw']='123'
     conn.execute('UPDATE canonical_fee_reports SET evidence_json=?',(json.dumps(evidence),));conn.commit()
     assert recompute_canonical_fees(conn,'formulas')['unavailable']==1
-    assert conn.execute('SELECT accounting_json FROM canonical_fee_reports').fetchone()[0] is None
+    reason='cached_allocator_inputs_missing_or_changed' if damage=='inputs' else 'cached_distribution_evidence_missing_or_invalid'
+    assert tuple(conn.execute('SELECT accounting_json,reason FROM canonical_fee_reports').fetchone()) == (None,reason)
 
 
 @pytest.mark.parametrize('scope,expected', [({'version':'v2'},0), ({'chains':['arb']},0),

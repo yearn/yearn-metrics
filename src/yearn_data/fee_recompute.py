@@ -36,14 +36,19 @@ def recompute_canonical_fees(conn, mode, chains=None, limit=None, version=None, 
     for r in conn.execute(sql,params).fetchall():
         evidence=json.loads(r['evidence_json'])
         if r['version'] == 'v3' and evidence.get('source') == 'strategy_reports':
+            failure_reason = 'cached_allocator_inputs_missing_or_changed'
             try:
                 if evidence.get('allocator_inputs') != allocator_inputs(r):
                     raise ValueError('allocator inputs missing or changed')
                 from .yvusd_fees import applies, accounting
-                amounts = accounting(r, evidence['yvusd']) if applies(dict(r)) else normalize_allocator_fees(r)
+                if applies(dict(r)):
+                    failure_reason = 'cached_distribution_evidence_missing_or_invalid'
+                    amounts = accounting(r, evidence['yvusd'])
+                else:
+                    amounts = normalize_allocator_fees(r)
                 reason = None
             except (ValueError, KeyError, TypeError):
-                amounts, reason = None, 'cached_allocator_inputs_missing_or_changed'
+                amounts, reason = None, failure_reason
             _save(conn, r, amounts, reason, evidence, r['log_index'])
             counts['processed'] += 1
             counts['accepted' if amounts is not None else 'unavailable'] += 1
