@@ -267,3 +267,80 @@ def test_quote_rejection_inventory_has_unique_coordinates():
     from yearn_data.tvl_api import PRICE_REJECTIONS
     coordinates=[(r['chainId'],r['asset'].lower(),r['timestamp']) for r in PRICE_REJECTIONS]
     assert len(coordinates)==len(set(coordinates))
+
+
+def test_price_repair_refuses_withdrawn_rejection_even_when_another_is_added(tmp_path):
+    from copy import deepcopy
+    from yearn_data.tvl_history_cache import prepare_price_repair
+    path=tmp_path/'withdrawn.sqlite'
+    with closing(connect(path)) as conn:
+        init_db(conn)
+        run(conn,1,DAY,[(PARENT,'100')]);run(conn,2,DAY+86400,[(PARENT,'200')])
+    original=TvlStore(path,tmp_path/'publication').get()
+    rejected={'chainId':1,'asset':'0x'+'aa'*20,'timestamp':DAY,'priceUsd':'10','reason':'fixture'}
+    manifest=deepcopy(original.manifest);manifest['datasetId']='d'*64
+    manifest['priceRejections'].append(rejected)
+    previous=TvlDataset(manifest);prepare(previous)
+    updated=deepcopy(original.manifest);updated['datasetId']='e'*64
+    updated['priceRejections'].append(rejected|{'timestamp':DAY+86400,'priceUsd':'20'})
+    target=TvlDataset(updated)
+    with pytest.raises(ValueError,match='cannot remove previous rejections'):
+        prepare_price_repair(target,previous)
+    assert not ready(target)
+    assert previous.history(interval='daily')['chart'][0].get('Ethereum') is None
+
+
+def test_price_repair_rejects_changed_close_that_moves_bridge_deduction(tmp_path):
+    from copy import deepcopy
+    from yearn_data.tvl_history_cache import prepare_price_repair
+    path=tmp_path/'changed-close.sqlite'
+    with closing(connect(path)) as conn:
+        init_db(conn)
+        conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,active,updated_at) VALUES (1,'v3',?,0,1)",(BRIDGE,))
+        conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,active,updated_at) VALUES (10,'v3',?,1,1)",(CHILD,))
+        run(conn,1,DAY,[(PARENT,'100'),(BRIDGE,'100')])
+        run(conn,2,DAY+86400,[(PARENT,'100'),(BRIDGE,'100')])
+    previous=TvlStore(path,tmp_path/'publication',current_bridge_policy='retired-registry').get();prepare(previous)
+    manifest=deepcopy(previous.manifest);manifest.update(datasetId='f'*64,asOfTimestamp=DAY)
+    manifest['priceRejections'].append({'chainId':1,'asset':'0x'+'aa'*20,
+        'timestamp':DAY+86400,'priceUsd':'10','reason':'fixture'})
+    native=TvlDataset(manifest).history(interval='daily')['chart']
+    assert native==[{'timestamp':DAY,'Ethereum':100}]
+    assert previous.history(interval='daily')['chart'][0]['Ethereum']==200
+    repaired=TvlDataset(manifest)
+    with pytest.raises(ValueError,match='accounting close'):
+        prepare_price_repair(repaired,previous)
+    assert not ready(repaired)
+
+
+def test_price_repair_can_copy_metadata_only_inventory_update(tmp_path,monkeypatch):
+    from copy import deepcopy
+    from yearn_data.tvl_history_cache import prepare_price_repair
+    path=tmp_path/'metadata-only.sqlite'
+    with closing(connect(path)) as conn:
+        init_db(conn)
+        run(conn,1,DAY,[(PARENT,'100')]);run(conn,2,DAY+86400,[(PARENT,'200')])
+    original=TvlStore(path,tmp_path/'publication').get()
+    rejected={'chainId':1,'asset':'0x'+'aa'*20,'timestamp':DAY,'priceUsd':'10',
+              'reason':'fixture','evidence':{'canonicalCurveQuote':{}}}
+    manifest=deepcopy(original.manifest);manifest['datasetId']='d'*64
+    manifest['priceRejections'].append(rejected)
+    previous=TvlDataset(manifest);prepare(previous)
+    updated=deepcopy(manifest);updated['datasetId']='e'*64
+    updated['priceRejections'][-1]['evidence'].pop('canonicalCurveQuote')
+    target=TvlDataset(updated)
+    def no_recompute(dates,*args,**kwargs):
+        assert tuple(dates)==()
+        return iter(())
+    monkeypatch.setattr(target,'iter_frames',no_recompute)
+    result=prepare_price_repair(target,previous)
+    assert result['recomputedDates']==[] and result['rows']==2
+    assert TvlDataset(updated).history(interval='daily')==TvlDataset(manifest).history(interval='daily')|{'datasetId':target.id}
+
+
+def test_rejection_evidence_does_not_publish_empty_or_repr_values():
+    from yearn_data.tvl_api import PRICE_REJECTIONS
+    for row in PRICE_REJECTIONS:
+        evidence=row.get('evidence',{})
+        assert not any(value=='None' for value in evidence.values())
+        assert 'canonicalCurveQuote' not in evidence or evidence['canonicalCurveQuote']
