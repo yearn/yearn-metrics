@@ -13,7 +13,7 @@ from .analysis import closed_cutoff, create_analysis_run, complete_analysis_run,
 from . import pricing
 
 POLICY = 'fee-usd-yearn-eod-1'
-DISTRIBUTION_FIELDS = ('locker_bonus_raw',)
+DISTRIBUTION_FIELDS = ('locker_bonus_raw', 'staker_distribution_raw', 'recovery_distribution_raw')
 FIELDS = ('gross_gain_raw', 'loss_raw', 'total_fees_paid_raw', 'management_fee_raw',
           'performance_fee_raw', 'strategist_fee_raw', 'protocol_fee_raw',
           'manager_fee_raw', 'total_refunds_raw', 'locker_bonus_raw', 'staker_distribution_raw', 'recovery_distribution_raw', 'reported_total_fees_raw')

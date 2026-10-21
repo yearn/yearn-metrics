@@ -55,7 +55,10 @@ def accounting(report, evidence):
                 or _hex(log['topics'][0]) != REPORT_TOPIC
                 or '0x' + _hex(log['topics'][1])[-40:] != report['strategy_address'].lower()):
             raise ValueError('yBOLD report identity mismatch')
-        values = decode(['uint256'] * 6, bytes.fromhex(_hex(log['data'])[2:]))
+        data = bytes.fromhex(_hex(log['data'])[2:])
+        if len(data) != 192:
+            raise ValueError('invalid StrategyReported encoding')
+        values = decode(['uint256'] * 6, data)
         for offset, field in ((0, 'gain_raw'), (1, 'loss_raw'), (3, 'protocol_fees_raw'),
                               (4, 'total_fees_raw'), (5, 'total_refunds_raw')):
             if values[offset] != unsigned(report[field]):
