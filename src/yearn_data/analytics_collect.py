@@ -97,15 +97,27 @@ class Reader:
 
 
 def curator_factories(source):
+    source=re.sub(r'//[^\n]*','',source)
+    section=re.search(r'const MorphoConfigs\s*=\s*\{([\s\S]*?)\n\}',source)
+    if not section:raise ValueError('unsupported curation factory source: MorphoConfigs')
     factories=[]
     for chain,name in CURATION_CHAINS.items():
-        block=re.search(r'\n  '+name+r': \{([\s\S]*?)(?=\n  [a-z_]+: \{|\n\})',source)
-        if not block:continue
+        block=re.search(r'\n  '+name+r': \{([\s\S]*?)(?=\n  [a-z_]+: \{|$)',section[1])
+        if not block:raise ValueError('unsupported curation factory source: '+name)
+        parsed=False
         for array,family in [('vaultFactories','morpho-v1'),('vaultFactoriesV2','morpho-v2')]:
-            entries=re.search(array+r':\s*\[([^]]*)\]',block[1])
-            if not entries:continue
-            for address,start in re.findall(r"address:\s*'(0x[0-9a-fA-F]{40})',\s*fromBlock:\s*(\d+)",entries[1]):
-                factories.append({'chain_id':chain,'address':address,'family':family,'from_block':int(start)})
+            entries=re.search(r'\b'+array+r':\s*\[([^]]*)\]',block[1])
+            if not entries:
+                if re.search(r'\b'+array+r'\s*:',block[1]):
+                    raise ValueError('unsupported curation factory array: '+name+' '+array)
+                continue
+            parsed=True
+            pattern=r"\{\s*address:\s*['\"](0x[0-9a-fA-F]{40})['\"],\s*fromBlock:\s*(\d+)\s*,?\s*\}"
+            if re.sub(pattern,'',entries[1]).strip(' \n\r\t,'):
+                raise ValueError('unsupported curation factory entries: '+name+' '+array)
+            for address,start in re.findall(pattern,entries[1]):
+                factories.append({'chain_id':chain,'address':address.lower(),'family':family,'from_block':int(start)})
+        if not parsed:raise ValueError('unsupported curation factory arrays: '+name)
     return factories
 
 
@@ -149,6 +161,7 @@ def membership_chain(chain,local,candidates,policy,creation):
         balance=balances[address]
         if balance is None:return None,'totalAssets read unavailable'
         if balance[0]==0:return False,'zero assets'
+        if strategy_count(finance[address]) is None:return None,'strategy count unavailable'
         if debts.get(address) is None:return None,'strategy queue/debt read unavailable'
         parent_asset=(finance[address].get('asset') or {}).get('address','').lower()
         if not parent_asset:return None,'parent asset unavailable'
@@ -185,15 +198,26 @@ def membership_chain(chain,local,candidates,policy,creation):
     return observations
 
 
+def strategy_count(row):
+    value=row.get('strategiesCount')
+    if type(value) is int and value>=0:return value
+    if isinstance(value,str) and re.fullmatch('[0-9]+',value):return int(value)
+    return None
+
+
 def default_debts(reader,active):
     calls=[];slots=[];result={a:[] for a in active}
     for address,row in active.items():
-        if not row.get('strategiesCount'):continue
+        count=strategy_count(row)
+        if count is None:
+            result[address]=None
+            continue
+        if count==0:continue
         v3=str(row.get('apiVersion','')).startswith('3')
         if v3:
             slots.append((address,True));calls.append((address,'get_default_queue()',[],[],['address[]']))
         else:
-            for slot in range(min(int(row['strategiesCount']),20)):
+            for slot in range(min(count,20)):
                 slots.append((address,False));calls.append((address,'withdrawalQueue(uint256)',['uint256'],[slot],['address']))
     debts=[];debt_slots=[]
     for (address,v3),value in zip(slots,reader.call(calls)):
@@ -375,8 +399,15 @@ def collect(database,progress=print):
     with closing(connect(database)) as conn:
         fee_id=put_input(conn,'fee-config',{'vaults':configs,'expectedVaults':len(catalog)},'available' if len(configs)==len(catalog) and all(r['availability']=='available' for r in configs) else 'partial',now)
         membership_id=put_input(conn,'membership',{'vaults':membership,'source':source_info},'available' if all(r['included'] is not None for r in membership) else 'partial',now)
-    return {'referenceId':ref_id,'configurationId':fee_id,'membershipId':membership_id,'configuredVaults':sum(r['availability']=='available' for r in configs),
-            'verifiedMembershipVaults':sum(r['included'] is not None for r in membership),'expectedVaults':len(catalog)}
+        stored_configs=json.loads(conn.execute('SELECT body_json FROM analytics_inputs WHERE id=?',(fee_id,)).fetchone()[0])['vaults']
+        stored_membership=json.loads(conn.execute('SELECT body_json FROM analytics_inputs WHERE id=?',(membership_id,)).fetchone()[0])['vaults']
+    return {'referenceId':ref_id,'configurationId':fee_id,'membershipId':membership_id,
+            'configuredVaults':sum(r['availability']=='available' for r in stored_configs),
+            'verifiedMembershipVaults':sum(r['included'] is not None for r in stored_membership),
+            'expectedVaults':len(catalog),
+            'attemptCoverage':{'configuredVaults':sum(r['availability']=='available' for r in configs),
+                               'verifiedMembershipVaults':sum(r['included'] is not None for r in membership)}}
+
 
 
 def math_is_rate(value):
