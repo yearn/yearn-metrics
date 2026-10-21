@@ -166,7 +166,6 @@
         "17041213027",
         "125461734629627490333"
       ],
-      "canonicalCurveQuote": {},
       "note": "Exact quote quarantine only; historical pool state contradicts the extreme LP quote. No replacement or later price is substituted."
     }
   },
@@ -185,7 +184,6 @@
         "11471711882923",
         "15885698793320544843793713"
       ],
-      "canonicalCurveQuote": {},
       "note": "Exact quote quarantine only; historical pool state contradicts the extreme LP quote. No replacement or later price is substituted."
     }
   },
@@ -204,7 +202,6 @@
         "3540197140660",
         "280964362"
       ],
-      "canonicalCurveQuote": {},
       "note": "Exact quote quarantine only; historical pool state contradicts the extreme LP quote. No replacement or later price is substituted."
     }
   },
@@ -223,7 +220,6 @@
         "15385566543512990",
         "1419904715724012"
       ],
-      "canonicalCurveQuote": {},
       "note": "Exact quote quarantine only; historical pool state contradicts the extreme LP quote. No replacement or later price is substituted."
     }
   },
@@ -242,7 +238,6 @@
         "2961000865569",
         "75054876531082044313"
       ],
-      "canonicalCurveQuote": {},
       "note": "Exact quote quarantine only; historical pool state contradicts the extreme LP quote. No replacement or later price is substituted."
     }
   },
@@ -256,12 +251,10 @@
       "blockNumber": 24343955,
       "lpSupplyRaw": "702333077788341659268",
       "pool": "0x69ACcb968B19a53790f43e57558F5E443A91aF22",
-      "virtualPriceRaw": "None",
       "reserveBalanceRaw": [
         "43294163612791",
         "98543928183015345649901089094320741"
       ],
-      "canonicalCurveQuote": {},
       "note": "The pool holds an inflated yETH reserve; nominal derivative-token balances cannot be valued as backed ETH. No replacement price is inferred.",
       "derivativeToken": "0x1BED97CBC3c24A4fb5C069C6E311a967386131f7",
       "derivativeTotalSupplyRaw": "235443031407908519912635443025109144448181362622575235916"
@@ -282,7 +275,6 @@
         "1335802010672",
         "42479415867868057763674"
       ],
-      "canonicalCurveQuote": {},
       "note": "Exact quote quarantine only; historical pool state contradicts the extreme LP quote. No replacement or later price is substituted."
     }
   },
@@ -301,7 +293,6 @@
         "26321216511906642629",
         "1878127764"
       ],
-      "canonicalCurveQuote": {},
       "note": "Exact quote quarantine only; historical pool state contradicts the extreme LP quote. No replacement or later price is substituted."
     }
   },
@@ -320,7 +311,6 @@
         "41920497",
         "733371222449882571287020"
       ],
-      "canonicalCurveQuote": {},
       "note": "Exact quote quarantine only; historical pool state contradicts the extreme LP quote. No replacement or later price is substituted."
     }
   },
@@ -339,7 +329,6 @@
         "17943426463302",
         "40809253727"
       ],
-      "canonicalCurveQuote": {},
       "note": "Exact quote quarantine only; historical pool state contradicts the extreme LP quote. No replacement or later price is substituted."
     }
   },
@@ -363,8 +352,7 @@
       "reserveBalanceRaw": [
         "389040756729904514401244",
         "341776428767495995483858"
-      ],
-      "canonicalCurveQuote": {}
+      ]
     }
   },
   {
@@ -391,8 +379,7 @@
       "reserveBalanceRaw": [
         "2354894735404751275190771",
         "2504995906859692885500810"
-      ],
-      "canonicalCurveQuote": {}
+      ]
     }
   },
   {
@@ -415,8 +402,7 @@
       "reserveBalanceRaw": [
         "4334622831925445703490",
         "2846341661242716515638395"
-      ],
-      "canonicalCurveQuote": {}
+      ]
     }
   },
   {
@@ -439,8 +425,7 @@
       "reserveBalanceRaw": [
         "603063834810502611691",
         "842275273340011377"
-      ],
-      "canonicalCurveQuote": {}
+      ]
     }
   },
   {
@@ -463,8 +448,7 @@
       "reserveBalanceRaw": [
         "5944729862649174740820393",
         "2699899895187202245066"
-      ],
-      "canonicalCurveQuote": {}
+      ]
     }
   },
   {
@@ -487,8 +471,7 @@
       "reserveBalanceRaw": [
         "14782678400949597057055652",
         "60670208216856680508680992"
-      ],
-      "canonicalCurveQuote": {}
+      ]
     }
   },
   {
@@ -511,8 +494,7 @@
       "reserveBalanceRaw": [
         "1534206365457053818262511",
         "681882794389808565627174"
-      ],
-      "canonicalCurveQuote": {}
+      ]
     }
   },
   {
@@ -535,8 +517,7 @@
       "reserveBalanceRaw": [
         "2605535117580515593",
         "11492397671632046982"
-      ],
-      "canonicalCurveQuote": {}
+      ]
     }
   },
   {
@@ -559,8 +540,7 @@
       "reserveBalanceRaw": [
         "108426591691172635532",
         "1721120574364450116657892"
-      ],
-      "canonicalCurveQuote": {}
+      ]
     }
   },
   {
@@ -583,8 +563,7 @@
       "reserveBalanceRaw": [
         "810002334264",
         "1292151271942969312749683"
-      ],
-      "canonicalCurveQuote": {}
+      ]
     }
   }
 ]
