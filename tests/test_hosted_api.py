@@ -358,7 +358,7 @@ def test_republish_regenerated_tvl_manifest_preserves_first_metadata(published, 
     assert HostedAPI(database).response('/api/tvl/history/runs/latest') == expected
 
 
-@pytest.mark.parametrize('field,value', [('publishedAt', 1), ('asOfTimestamp', 1), ('diagnostics', {'changed': True})])
+@pytest.mark.parametrize('field,value', [('publishedAt', 1), ('diagnostics', {'changed': True})])
 def test_existing_tvl_manifest_ignores_only_identity_excluded_metadata(published, field, value):
     database, _, _, release = published
     registry = Registry(database); selection = registry.selection()
@@ -371,3 +371,46 @@ def test_existing_tvl_manifest_ignores_only_identity_excluded_metadata(published
         with pytest.raises(ValueError, match='immutable'):
             save_release(conn, fees, changed, selection['analyticsPublicationId'])
     assert Registry(database).manifest('tvl', original['datasetId']) == original
+
+
+@pytest.mark.parametrize('change', ['close', 'dates', 'empty'])
+def test_republish_rejects_changed_serving_bounds_atomically(published, change):
+    database, financial, history, release = published
+    registry = Registry(database)
+    selection = registry.selection()
+    original = registry.manifest('tvl', selection['tvlDatasetId'])
+    with closing(connect(database)) as conn:
+        old_dates = conn.execute('SELECT dates_json FROM api_tvl_dates').fetchone()[0]
+        if change == 'dates':
+            conn.execute('UPDATE tvl_chart_rows SET timestamp=timestamp+1 WHERE timestamp=?', (DAY,))
+        elif change == 'empty':
+            conn.execute('DELETE FROM tvl_chart_rows')
+        conn.commit()
+    if change == 'close':
+        path = history/'datasets'/f"{original['datasetId']}.json"
+        path.write_text(json.dumps(dict(original, asOfTimestamp=original['asOfTimestamp']+86400)))
+    expected = {'close':'reporting close changed', 'dates':'prepared dates changed', 'empty':'dates are unavailable'}[change]
+    with pytest.raises(ValueError, match=expected):
+        publish(database, financial, history)
+    assert Registry(database).selection() == selection
+    assert Registry(database).manifest('tvl', original['datasetId']) == original
+    with closing(connect(database)) as conn:
+        assert conn.execute('SELECT dates_json FROM api_tvl_dates').fetchone()[0] == old_dates
+
+
+def test_new_history_uses_new_dataset_and_date_index(published):
+    from yearn_data.analytics import prepare as prepare_analytics
+    database, financial, history, release = published
+    api = HostedAPI(database)
+    old = Registry(database).selection()
+    assert api.response('/api/tvl/history/runs/latest')[0] == 200
+    with closing(connect(database)) as conn:
+        run(conn, 3, DAY+8*86400, [(PARENT, '300')])
+    tvl = TvlStore(database, history).get()
+    assert tvl.id != old['tvlDatasetId']
+    assert prepare(tvl)['status'] == 'prepared'
+    analytics_id = prepare_analytics(database, PairingStore(financial).get(), tvl, select=False)
+    assert publish(database, financial, history, analytics_id) != release
+    assert Registry(database).tvl(tvl.id).dates() == (DAY, DAY+7*86400, DAY+8*86400)
+    status, body = api.response('/api/tvl')
+    assert status == 200 and body['datasetId'] == tvl.id and body['totalTvl'] == 300

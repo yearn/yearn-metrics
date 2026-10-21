@@ -35,7 +35,7 @@ def tvl_identity_context(manifest):
             if key not in {'datasetId', 'publishedAt', 'asOfTimestamp', 'diagnostics'}}
 
 
-def save_release(conn, financial, tvl, analytics_id):
+def save_release(conn, financial, tvl, analytics_id, *, tvl_dates=None):
     """Commit immutable manifests and their selection together; caller validates inputs."""
     selection = {'feesDatasetId': identifier(financial['datasetId']),
                  'tvlDatasetId': identifier(tvl['datasetId']),
@@ -53,8 +53,20 @@ def save_release(conn, financial, tvl, analytics_id):
             # Regenerating a local TVL manifest may change metadata outside its ID.
             differs = (encoded(tvl_identity_context(json.loads(existing[0]))) != encoded(tvl_identity_context(manifest))
                        if kind == 'tvl' else existing[0] != body)
+            if kind == 'tvl' and json.loads(existing[0]).get('asOfTimestamp') != manifest.get('asOfTimestamp'):
+                raise ValueError('immutable publication reporting close changed; publish a new dataset')
             if differs:
                 raise ValueError('immutable publication manifest changed')
+        if tvl_dates is not None:
+            if not tvl_dates:
+                raise ValueError('prepared TVL dates are unavailable')
+            dates_body = encoded(tvl_dates)
+            conn.execute('INSERT INTO api_tvl_dates VALUES (?,?) ON CONFLICT DO NOTHING',
+                         (tvl['datasetId'], dates_body))
+            previous_dates = conn.execute('SELECT dates_json FROM api_tvl_dates WHERE dataset_id=?',
+                                          (tvl['datasetId'],)).fetchone()[0]
+            if json.loads(previous_dates) != list(tvl_dates):
+                raise ValueError('immutable publication prepared dates changed; publish a new dataset')
         conn.execute('INSERT INTO api_releases VALUES (?,?) ON CONFLICT(id) DO NOTHING',
                      (release_id, encoded(selection)))
         conn.execute("INSERT INTO api_selection VALUES ('powerglove',?) ON CONFLICT(name) DO UPDATE SET release_id=excluded.release_id",
@@ -107,15 +119,9 @@ def publish(database, financial_directory, tvl_directory, analytics_id=None, *, 
     with closing(connect(database)) as conn:
         from .hosted_fees import prepare
         prepare(conn, financial)
-        conn.executescript(SCHEMA)
-        with conn:
-            if not conn.execute('SELECT 1 FROM api_tvl_dates WHERE dataset_id=?', (tvl.id,)).fetchone():
-                dates = [row[0] for row in conn.execute(
-                    'SELECT DISTINCT timestamp FROM tvl_chart_rows WHERE dataset_id=? ORDER BY timestamp', (tvl.id,))]
-                if not dates:
-                    raise ValueError('prepared TVL dates are unavailable')
-                conn.execute('INSERT INTO api_tvl_dates VALUES (?,?) ON CONFLICT DO NOTHING', (tvl.id, encoded(dates)))
-        release = save_release(conn, fees, manifest, analytics['publicationId'])
+        dates = [row[0] for row in conn.execute(
+            'SELECT DISTINCT timestamp FROM tvl_chart_rows WHERE dataset_id=? ORDER BY timestamp', (tvl.id,))]
+        release = save_release(conn, fees, manifest, analytics['publicationId'], tvl_dates=dates)
     # Retire superseded values only after a complete coherent publication exists.
     # A verification failure rolls back consolidation and keeps both revisions
     # for inspection; the newly published, already validated release stays usable.

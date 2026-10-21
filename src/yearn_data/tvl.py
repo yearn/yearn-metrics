@@ -180,7 +180,7 @@ def account(snapshots, positions, *, include_curation=False, deduct_internal_cur
 def _account(snapshots, positions, *, include_curation, deduct_internal_curation):
     by_key = {(s['chain_id'], s['vault'].lower()): s for s in snapshots}
     adjustments = defaultdict(lambda: Decimal(0))
-    edges = [dict(p, overlap_usd=None) for p in positions]
+    edges = [dict(p, overlap_usd=None, accounting_unresolved=False) for p in positions]
     groups = defaultdict(list)
     issues = []
     chains = {s['chain_id'] for s in snapshots}
@@ -192,6 +192,7 @@ def _account(snapshots, positions, *, include_curation, deduct_internal_curation
             if (edge.get('reason') == 'unresolved_adapter_mapping'
                     or (edge.get('mapping_status') == 'unresolved' and edge.get('status') != 'ok')):
                 issues.append(edge.get('reason') or 'unresolved_adapter_mapping')
+                edge['accounting_unresolved'] = True
             else:
                 edge['overlap_usd'] = '0'
             continue
@@ -218,6 +219,7 @@ def _account(snapshots, positions, *, include_curation, deduct_internal_curation
                 or edge.get('debt_usd') is None):
             edge['reason'] = edge.get('reason') or 'missing_position_valuation'
             issues.append(edge['reason'])
+            edge['accounting_unresolved'] = True
             continue
         kind = 'recorded-debt' if edge.get('method') == 'direct-strategy' else 'held-shares'
         groups[(edge['chain_id'], edge['strategy'].lower(), kind)].append(edge)
@@ -255,7 +257,7 @@ def _account(snapshots, positions, *, include_curation, deduct_internal_curation
 
     rows = []
     for key, s in by_key.items():
-        row = dict(s)
+        row = dict(s, accounting_unresolved=bool(s.get('bridge_target_chain') in chains and decimal(s.get('tvl_usd'))))
         value = decimal(s.get('tvl_usd'))
         row['overlap_usd'] = str(adjustments[key]) if value is not None else None
         row['external_tvl_usd'] = str(max(Decimal(0), value - adjustments[key])) if value is not None else None
