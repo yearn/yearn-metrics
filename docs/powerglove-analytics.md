@@ -71,7 +71,9 @@ analytics publication.
   This is an adapter reconstruction, not a DefiLlama-supplied vault balance feed.
   Unknown queue/debt reads or missing creation evidence cannot prove inclusion or
   absence. Unsupported finance chain-scope changes fail collection rather than
-  silently extending the reconstruction.
+  silently extending the reconstruction. Missing strategy-count evidence is unknown;
+  an observed zero count remains distinct. Unsupported curation and factory source
+  shapes fail collection explicitly.
 - Fee configuration: retain Kong's declared fee metadata as diagnostic evidence;
   validate supported current rates through on-chain V2/Tokenized Strategy getters,
   standard Accountant `getVaultConfig(vault)` and Morpho V1/V2 getters. Morpho WAD
@@ -84,7 +86,8 @@ analytics publication.
   along each path under a common annual/capital basis, then capital-weighted.
   These are configured-rate illustrations: Accountant caps, refunds and differing
   realization times can change actual charged fees. Unsupported or unresolved
-  paths have null effective rates. External root fractions determine the stack
+  paths have null effective rates. Capital-exhausted branches are reported under
+  `truncatedAllocations`; a child capped by an observed zero TVL is not truncation. External root fractions determine the stack
   capital summary; nested roots do not each contribute their full gross capital.
 - Profitability: use the trailing 365 UTC days ending at the earlier supported
   financial/TVL cutoff, with equal-duration daily capital observations. The
@@ -109,6 +112,11 @@ analytics publication.
 - Unpriced current vaults remain in comparable coverage as `unavailableTvlVaults`;
   confirmed zero counted TVL is excluded from the positive-capital comparison.
   Fee-stack nodes expose stored contract-family evidence (or null if unknown).
+- Chain and category profitability rows include contribution counts for TVL, fees,
+  and annualized yield. Partial fee subtotals distinguish contributing vaults from
+  vaults with complete fee observations.
+- Collector summary counts describe the stored input IDs, including retained
+  observations; `attemptCoverage` separately describes the latest acquisition.
 - Fees charged at different layers remain distinct. Earnings are incident-adjusted
   contract-level reported gains, not consolidated nested economic yield. Summary
   profitability denominators are gross contract capital and are labeled as such;
