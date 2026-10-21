@@ -158,6 +158,9 @@ def test_cross_chain_graph_and_chain_summary_account_before_filtering(source, mo
     _,_,positions,diagnostics=revised.frames((DAY,))[0]
     assert positions[0]['reason']=='selected_child_block_mismatch'
     assert diagnostics['status']=='incomplete' and revised.summary(10)['overlapExcluded']==0
+    assert revised.graph(1)['diagnostics']['unresolvedPositions'] == 1
+    assert revised.graph(10)['diagnostics']['unresolvedPositions'] == 1
+    assert revised.graph(137)['diagnostics']['unresolvedPositions'] == 0
 
 
 def test_graph_does_not_replace_unpriced_vault_with_synthetic_priced_strategy(source):
@@ -212,3 +215,11 @@ def test_graph_unavailable_nodes_follow_scope_without_fabricating_strategy(sourc
     assert graph['diagnostics']['unavailableNodes'] == ([{'nodeId':f'1:{CHILD}','reason':'missing_valuation'}] if expected else [])
     assert all(n['address'] != CHILD for n in graph['nodes'])
     assert graph['edges'] == []
+
+
+@pytest.mark.parametrize('chain,category,expected', [(None,None,1),(1,None,1),(10,None,0),(None,'v2',0),(None,'v3',1)])
+def test_graph_unresolved_positions_follow_scope(source, chain, category, expected):
+    conn,path,root=source
+    run(conn,1,DAY,[(PARENT,'100'),(CHILD,None)],[(CHILD,'80')])
+    graph=TvlStore(path,root).get().graph(chain_id=chain,category=category)
+    assert graph['diagnostics']['unresolvedPositions'] == expected
