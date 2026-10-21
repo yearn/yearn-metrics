@@ -124,6 +124,22 @@ interruption can be retried. Repeating the command skips completed preparation.
 The cache is keyed by immutable dataset ID and accounting version. Bump the cache
 version when changing the accounting used to produce these rows.
 
+For an inventory-only quote-rejection update, use the previous prepared TVL
+publication as the source instead of recomputing every date:
+
+```bash
+yearn-data --env /path/to/.env --db neon tvl prepare-history \
+  --publication data/tvl-neon --previous-dataset-id <previous-dataset-id>
+```
+
+The command publishes the current inventory with the existing TVL policy, then
+copies unchanged prepared dates and recalculates newly rejected dates. Use the
+same `--current-bridge-policy` as the previous publication. Source history and
+totals must both be complete; every other accounting input must match. Quote
+rejections cannot be removed or conflict at the same chain/asset/date. The old
+publication remains intact. Without `--previous-dataset-id`, preparation retains
+its full-history behavior.
+
 The API reads prepared values without reconstructing raw snapshots and positions
 for each request. It still serves unprepared datasets through the original path,
 so **a new publication needs this preparation step to retain fast chart loading**.

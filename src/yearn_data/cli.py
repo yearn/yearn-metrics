@@ -115,6 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     tvl_sub = tvl_p.add_subparsers(dest="tvl_command", required=True)
     tvl_prepare=tvl_sub.add_parser('prepare-history',help='Prepare immutable TVL chart rows for fast reads')
     tvl_prepare.add_argument('--publication',required=True,type=Path)
+    tvl_prepare.add_argument('--previous-dataset-id',help='Copy this prepared dataset and recompute only newly rejected quote dates')
     tvl_prepare.add_argument('--current-bridge-policy',choices=['none','retired-registry'],default='retired-registry')
     tvl_discover = tvl_sub.add_parser("discover", help="Create or refresh the TVL catalog independently")
     tvl_discover.add_argument("--sources", nargs="+", choices=["kong", "v1", "curation"], help="Default: all sources")
@@ -330,9 +331,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command=='tvl' and args.tvl_command=='prepare-history':
         from .tvl_api import TvlStore
-        from .tvl_history_cache import prepare
-        dataset=TvlStore(args.db,args.publication,current_bridge_policy=args.current_bridge_policy).get()
-        print(json.dumps(prepare(dataset,progress=progress),sort_keys=True))
+        from .tvl_history_cache import prepare, prepare_price_repair
+        store=TvlStore(args.db,args.publication,current_bridge_policy=args.current_bridge_policy)
+        dataset=store.get()
+        result=(prepare_price_repair(dataset,store.get(args.previous_dataset_id))
+                if args.previous_dataset_id else prepare(dataset,progress=progress))
+        print(json.dumps(result,sort_keys=True))
         return 0
     conn = open_db(args.db)
     event_source = get_event_source()
