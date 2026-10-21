@@ -53,6 +53,14 @@ def save_release(conn, financial, tvl, analytics_id):
     return release_id
 
 
+class PublicationCleanupError(RuntimeError):
+    """A coherent release was published, but subsequent consolidation failed."""
+
+    def __init__(self, release_id):
+        self.release_id = release_id
+        super().__init__(f'Release {release_id} was published before consolidation failed; inspect the current selection before recovery')
+
+
 def publish(database, financial_directory, tvl_directory, analytics_id=None, *, prepare_analytics=False):
     """Import validated completed selections. Never invoked by an HTTP request."""
     from .pairing import PairingStore
@@ -104,7 +112,10 @@ def publish(database, financial_directory, tvl_directory, analytics_id=None, *, 
     # A verification failure rolls back consolidation and keeps both revisions
     # for inspection; the newly published, already validated release stays usable.
     from .canonical_history import consolidate
-    consolidate(database, apply=True)
+    try:
+        consolidate(database, apply=True)
+    except Exception as exc:
+        raise PublicationCleanupError(release) from exc
     return release
 
 

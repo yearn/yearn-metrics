@@ -562,7 +562,8 @@ class TvlDataset:
         timestamp, all_rows, positions, _ = self.frames((self.as_of(),), chain_id, True)[0]
         selected = [r for r in all_rows if self.catalog.get(key(r),{}).get('active',1) and
                     (r.get('category')=='curation' or key(r) in self.allocators)]
-        rows, edges, _ = account(selected, positions, include_curation=True)
+        rows, edges, _ = account(selected, positions, include_curation=True,
+                                 vault_policies=self.manifest.get('vaultPolicies', []))
         def family(row):
             return 'morpho_curated' if row.get('category')=='curation' else 'v3_allocator'
         def totals(rs):

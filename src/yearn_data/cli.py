@@ -155,8 +155,8 @@ def build_parser() -> argparse.ArgumentParser:
     hosted_p.add_argument('--tvl-publication', type=Path, required=True)
     hosted_choice = hosted_p.add_mutually_exclusive_group()
     hosted_choice.add_argument('--analytics-publication-id')
-    hosted_choice.add_argument('--prepare-analytics', action='store_true', help='Prepare coherent analytics without changing the legacy selection')
-    restore_p = sub.add_parser('select-hosted-release', help='Select a retained hosted API release for rollback')
+    hosted_choice.add_argument('--prepare-analytics', action='store_true', help='Prepare matching analytics; successful consolidation also updates the legacy selection')
+    restore_p = sub.add_parser('select-hosted-release', help='Select a still-retained release; successful consolidation retires older releases')
     restore_p.add_argument('--release-id', required=True)
 
     collect_p = sub.add_parser('collect-analytics', help='Collect owned DefiLlama references, membership and declared fee configurations')
@@ -341,9 +341,15 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({'releaseId':select_release(args.db, args.release_id)}))
         return 0
     if args.command == 'publish-hosted':
-        from .hosted_publications import publish
-        print(json.dumps({'releaseId': publish(args.db, args.publication, args.tvl_publication,
-                                               args.analytics_publication_id, prepare_analytics=args.prepare_analytics)}))
+        from .hosted_publications import publish, PublicationCleanupError
+        try:
+            release = publish(args.db, args.publication, args.tvl_publication,
+                              args.analytics_publication_id, prepare_analytics=args.prepare_analytics)
+        except PublicationCleanupError as exc:
+            print(json.dumps({'releaseId': exc.release_id, 'published': True,
+                              'consolidated': False, 'error': str(exc)}))
+            return 1
+        print(json.dumps({'releaseId': release}))
         return 0
     if args.command == 'collect-analytics':
         from .analytics_collect import collect
