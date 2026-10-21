@@ -43,7 +43,7 @@ def recompute_canonical_fees(conn, mode, chains=None, limit=None, version=None, 
                 from .yvusd_fees import applies, accounting
                 from .ybold_fees import applies as is_ybold, accounting as ybold_accounting
                 from .yeth_fees import applies as is_yeth, accounting as yeth_accounting
-                if applies(dict(r)):
+                if applies(dict(r)) or is_ybold(dict(r)) or is_yeth(dict(r)):
                     failure_reason = 'cached_distribution_evidence_missing_or_invalid'
                 amounts = (yeth_accounting(r, evidence['yeth']) if is_yeth(dict(r)) else
                            ybold_accounting(r, evidence['ybold']) if is_ybold(dict(r)) else
