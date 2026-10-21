@@ -33,6 +33,22 @@ def js_array(source,name):
     return set(a.lower() for a in re.findall(r'0x[0-9a-fA-F]{40}',match[1]))
 
 
+def curation_addresses(text, name, *, required=False):
+    """Parse a supported literal array; missing or changed evidence is not empty."""
+    match=re.search(r'\b'+name+r':\s*\[([^]]*)\]',text)
+    if not match:
+        if required or re.search(r'\b'+name+r'\s*:',text):
+            raise ValueError('unsupported curation configuration: '+name)
+        return set()
+    values=match[1].strip().rstrip(',').split(',') if match[1].strip() else []
+    addresses=set()
+    for value in values:
+        item=re.fullmatch(r"['\"](0x[0-9a-fA-F]{40})['\"]",value.strip())
+        if not item:raise ValueError('unsupported curation address array: '+name)
+        addresses.add(item[1].lower())
+    return addresses
+
+
 def rules(source,curation):
     # Fail closed when the supported accounting contract is no longer present.
     for marker in ('buildNestedDebtByVault','subtractNestedDebt','get_default_queue','withdrawalQueue','list/vaults/${api.chainId}?origin=yearn'):
@@ -46,12 +62,14 @@ def rules(source,curation):
     curation=re.sub(r'//[^\n]*','',curation)
     owners={};explicit={}
     for chain,name in CURATION_CHAINS.items():
-        block=re.search(r'\b'+name+r':\s*\{([\s\S]*?)\n\s*\}',curation)
-        text=block[1] if block else ''
-        owner=re.search(r'morphoVaultOwners:\s*\[([\s\S]*?)\]',text)
-        vaults=re.search(r'turtleclub_erc4626:\s*\[([\s\S]*?)\]',text)
-        owners[chain]=set(a.lower() for a in re.findall(r'0x[0-9a-fA-F]{40}',owner[1] if owner else ''))
-        explicit[chain]=set(a.lower() for a in re.findall(r'0x[0-9a-fA-F]{40}',vaults[1] if vaults else ''))
+        block=re.search(r'\b'+name+r':\s*\{([^{}]*)\}',curation)
+        if not block:raise ValueError('unsupported curation configuration: missing or unparsed '+name)
+        text=block[1]
+        fields=set(re.findall(r'\b(\w+)\s*:',text))
+        if fields-{'morphoVaultOwners','turtleclub_erc4626'}:
+            raise ValueError('unsupported curation configuration fields: '+name)
+        owners[chain]=curation_addresses(text,'morphoVaultOwners',required=True)
+        explicit[chain]=curation_addresses(text,'turtleclub_erc4626')
     return {'v1':js_array(source,'v1Vaults'),'blacklist':js_array(source,'blacklist')|js_array(source,'v1Vaults'),
             'cross':cross,'owners':owners,'explicit':explicit}
 
@@ -111,6 +129,9 @@ def creation_owner(chain,row,factories):
 
 
 def membership_chain(chain,local,candidates,policy,creation):
+    if chain not in FINANCE_CHAINS and chain not in CURATION_CHAINS:
+        return [{'chainId':chain,'address':r['address'].lower(),'included':None,
+                 'reason':'chain outside finance and curation adapter scope'} for r in local]
     observations=[]
     reader=Reader(chain)
     addresses=[r['address'].lower() for r in local]
@@ -142,9 +163,14 @@ def membership_chain(chain,local,candidates,policy,creation):
     for row,address in zip(local,addresses):
         finance_state,reason=finance_included(address)
         curation_state=False
+        curated=(row.get('tvl_category')=='curation' or row.get('category')=='curation'
+                 or row.get('protocol')=='curation' or row.get('version','').startswith('morpho'))
+        if curated and chain not in CURATION_CHAINS:
+            curation_state=None
+            reason='chain outside curation adapter scope'
         if chain in CURATION_CHAINS:
             if address in policy['explicit'][chain]:curation_state=True
-            elif row.get('tvl_category')=='curation' or row.get('version','').startswith('morpho'):
+            elif curated:
                 event=creation.get((chain,address))
                 if event is None:
                     try:event=creation_owner(chain,row,policy['factories'])
@@ -333,7 +359,11 @@ def collect(database,progress=print):
                 members=[{'chainId':chain,'address':r['address'].lower(),'included':None,'reason':'RPC membership acquisition unavailable'} for r in grouped[chain]]
             return config,members
         except (requests.RequestException,ValueError,KeyError):
-            return [],[{'chainId':chain,'address':r['address'].lower(),'included':None,'reason':'Kong membership candidates unavailable'} for r in grouped[chain]]
+            config=[{'chainId':chain,'address':r['address'].lower(),'performanceFee':None,
+                     'managementFee':None,'fixedRateSupported':False,'availability':'unavailable',
+                     'observedAt':now,'failureKind':'acquisition_failed',
+                     'failureReason':'Kong configuration candidates unavailable'} for r in grouped[chain]]
+            return config,[{'chainId':chain,'address':r['address'].lower(),'included':None,'reason':'Kong membership candidates unavailable'} for r in grouped[chain]]
     with ThreadPoolExecutor(max_workers=4) as executor:
         for config,members in executor.map(acquire,grouped):configs.extend(config);membership.extend(members)
     source_info={'financeAdapter':ADAPTER_URL,'financeAdapterSha256':hashlib.sha256(source.encode()).hexdigest(),
