@@ -30,11 +30,20 @@ def test_rejects_unbound_or_unreconciled_splits(mutation):
     if mutation=='amount': fee['topics'][3]='0x'+format(1,'064x')
     if mutation=='missing': receipt['logs'].remove(fee)
     if mutation=='duplicate': receipt['logs'].append(copy.deepcopy(fee))
-    if mutation=='protocol': r['protocol_fees_raw']='1'
+    if mutation=='protocol':
+        from eth_abi import decode, encode
+        r['protocol_fees_raw']='1'
+        log=next(l for l in receipt['logs'] if l['logIndex']==r['log_index'])
+        values=list(decode(['uint256']*6,bytes.fromhex(log['data'][2:])))
+        values[3]=1;log['data']='0x'+encode(['uint256']*6,values).hex()
     if mutation=='prior_report':
         previous=copy.deepcopy(next(l for l in receipt['logs'] if l['logIndex']==r['log_index']))
-        previous['logIndex']=r['log_index']-1; receipt['logs'].append(previous)
-    with pytest.raises(ValueError): accounting(r,e)
+        for log in receipt['logs']:
+            if log['logIndex']>=r['log_index']:log['logIndex']+=1
+        r['log_index']+=1;receipt['logs'].append(previous)
+        assert len({l['logIndex'] for l in receipt['logs']})==len(receipt['logs'])
+    expected='unreconciled yvUSD fee split' if mutation in ('protocol','prior_report') else None
+    with pytest.raises(ValueError, match=expected): accounting(r,e)
 
 def test_target_cannot_silently_fall_back_to_raw_deductions():
     with pytest.raises(ValueError): normalize_allocator_fees(CASES[0]['report'])
@@ -107,14 +116,20 @@ def test_explicit_refresh_reacquires_rejected_accountant(tmp_path, monkeypatch):
                      [r[field] for field in fields])
         fetch = lambda *args: e['receipt']
         assert fees.index_canonical_fees(conn, receipt_fetcher=fetch) == 1
-        assert conn.execute('SELECT status FROM canonical_fee_reports').fetchone()[0] == 'unresolved'
+        assert tuple(conn.execute('SELECT status,reason FROM canonical_fee_reports').fetchone()) == ('unresolved','rejected_yvusd_accountant')
         # Ordinary retries can replay retained evidence without another RPC call.
         assert fees.index_canonical_fees(conn, retry_unresolved=True, receipt_fetcher=fetch) == 1
         assert len(calls) == 1
-        assert conn.execute('SELECT status FROM canonical_fee_reports').fetchone()[0] == 'unresolved'
+        assert tuple(conn.execute('SELECT status,reason FROM canonical_fee_reports').fetchone()) == ('unresolved','rejected_yvusd_accountant')
         assert fees.index_canonical_fees(conn, retry_unresolved=True, refresh_evidence=True, receipt_fetcher=fetch) == 1
         assert calls == [e['receipt']['blockHash']] * 2
         result = conn.execute('SELECT status,accounting_json,evidence_json FROM canonical_fee_reports').fetchone()
         assert result['status'] == 'ok'
         assert json.loads(result['accounting_json'])['total_fees_paid_raw'] == '703573'
         assert json.loads(result['evidence_json'])['yvusd']['accountant'] == e['accountant']
+
+
+def test_normalizer_independently_rejects_protocol_charged_locker_split():
+    report=dict(CASES[-1]['report'],protocol_fees_raw='1')
+    with pytest.raises(ValueError,match='unreconciled locker distribution'):
+        normalize_allocator_fees(report,locker_split=(0,0,int(report['total_fees_raw'])))
