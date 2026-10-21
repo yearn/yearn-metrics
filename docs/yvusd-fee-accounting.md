@@ -97,3 +97,10 @@ Offline replay distinguishes `cached_distribution_evidence_missing_or_invalid`
 `cached_allocator_inputs_missing_or_changed` (changed source report inputs).
 The former requires acquiring valid receipt/accountant evidence through indexing;
 offline replay itself never fetches it.
+
+A retained accountant outside the verified allowlist records
+`rejected_yvusd_accountant`. Ordinary `--retry-unresolved` retains that pinned
+evidence. Use `index-fees --canonical --version v3 --retry-unresolved
+--refresh-evidence` with a reliable historical provider to reacquire it. If the
+same address remains, verify the new implementation before expanding the
+allowlist; refreshing alone does not establish its safety.

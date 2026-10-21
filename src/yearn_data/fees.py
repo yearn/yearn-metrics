@@ -353,7 +353,7 @@ def index_canonical_fees(conn, chains=None, limit=None, retry_unresolved=False, 
                                 raise ValueError('historical yBOLD configuration unavailable') from None
                         amounts = accounting(report, evidence['ybold'])
                     elif is_yvusd(dict(report)):
-                        from .yvusd_fees import accounting
+                        from .yvusd_fees import ACCOUNTANTS, accounting
                         previous = json.loads(report['previous_evidence'] or '{}').get('yvusd')
                         if previous and not refresh_evidence and previous.get('receipt', {}).get('blockHash') == _hex(receipt['blockHash']):
                             accountant = previous['accountant']
@@ -368,7 +368,10 @@ def index_canonical_fees(conn, chains=None, limit=None, retry_unresolved=False, 
                             accountant = '0x' + bytes(raw).hex()[-40:]
                         from web3 import Web3
                         evidence['yvusd'] = {'accountant': accountant, 'receipt': json.loads(Web3.to_json(receipt))}
-                        amounts = accounting(report, evidence['yvusd'])
+                        if accountant.lower() not in ACCOUNTANTS:
+                            reason = 'rejected_yvusd_accountant'
+                        else:
+                            amounts = accounting(report, evidence['yvusd'])
                     else:
                         amounts = normalize_allocator_fees(report)
                     event_index = report['log_index']
