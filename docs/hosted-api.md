@@ -181,7 +181,7 @@ Follow-up local measurements, same snapshot:
 
 No Neon publication, existing preview, or Vercel deployment was changed.
 
-## Repeatable Neon publication and rollback
+## Repeatable Neon publication and recovery
 
 After collectors and analyses finish, select the completed financial runs and TVL
 manifest using the existing workflow. Run the following with writer credentials:
@@ -193,23 +193,39 @@ PYTHONPATH=src .venv/bin/python -m yearn_data.cli --db neon publish-hosted \
 ```
 
 This validates the selected fee/earnings cohort, requires prepared TVL history,
-prepares analytics for those exact dataset IDs without changing the legacy
-`analytics_selection`, prepares compact financial rows, and atomically selects the
-hosted release. Retain the printed release ID in the update job's logs. Failed
-preparation leaves the previous hosted selection active; completed intermediate
-publications may remain stored and can be reused on retry. Existing collectors
-and scheduling are not changed or enabled by this command.
+and prepares analytics for those exact dataset IDs. Preparation itself does not
+change `analytics_selection`. After preparing compact financial rows, the command
+atomically selects the coherent hosted release, then consolidates the database
+into one canonical history. Successful consolidation also aligns the legacy
+`analytics_selection` with that hosted release and retires superseded releases,
+analytics and serving rows. Legacy analytics consumers therefore see the new
+publication after consolidation. Existing collectors and scheduling are not
+changed or enabled by this command.
 
-Rollback uses a previously recorded release ID:
+Keep the printed release ID for audit, not as a promise of rollback. A subsequent
+successful publication retires the old release: recording its ID does not retain
+its data. Canonical historical dates remain available, but old publication pins
+return 410. See [canonical history](canonical-history.md) for retention semantics.
+
+Failures before hosted selection leave the previous hosted release active;
+completed intermediate preparations may remain stored for reuse on retry. If
+consolidation fails **after selection**, the new coherent release was already
+published. The CLI exits with status 1 and prints JSON containing its `releaseId`,
+`published: true`, `consolidated: false`, and a recovery message. A consolidation
+transaction failure rolls back cleanup, not the earlier release selection. Inspect
+`/api/publication` before recovery, resolve the cleanup failure and retry
+consolidation, or select a still-retained coherent release:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m yearn_data.cli --db neon select-hosted-release \
-  --release-id <previous-release-id>
+  --release-id <still-retained-release-id>
 ```
 
-The command checks that referenced prepared datasets and matching analytics exist
-before changing selection. API processes read selection on every request; no
-restart is needed. CDN TTLs still apply after deployment.
+This command checks that referenced prepared datasets and matching analytics exist
+before changing hosted selection; it cannot restore a release retired by successful
+consolidation and does not independently change the legacy analytics selection.
+API processes read selection on every request; no restart is needed. CDN TTLs
+still apply after deployment. Verify the selected release after recovery.
 
 Use separate read-only credentials for the API. The dedicated `powerglove_api_reader`
 role has SELECT on serving tables only: `api_manifests`, `api_releases`,
@@ -230,8 +246,9 @@ mode-600 `data/hosted-api-neon/api.env`; receipts are under
 
 The initial hosted release is
 `63b1d2520ffe771fd3a81c38335305291826eb91cb2686b6a4f7c21b08a1563f`.
-Preparation retained the existing legacy analytics selection. Permission checks
-confirmed zero writable public tables, no access to raw analysis outputs and no
+At that rollout, preparation retained the existing legacy analytics selection.
+The current canonical consolidation step aligns that selection as described above.
+Permission checks confirmed zero writable public tables, no access to raw analysis outputs and no
 CREATE privilege on the public schema for the reader.
 
 Eight financial/TVL routes matched the existing API after metadata/order

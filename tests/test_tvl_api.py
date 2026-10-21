@@ -405,3 +405,30 @@ def test_chain_drilldown_reuses_all_chain_valuations_and_references(source, monk
     assert sum(v for k,v in optimism['actualChart'][0].items() if k!='timestamp') == main['actualChart'][0]['Optimism']
     assert len(optimism['references']) == 1
     assert optimism['references'][0]['vault'] == '10:'+CHILD
+
+
+@pytest.mark.parametrize('policy_field', [True, False])
+def test_curation_preserves_manifest_policy_over_packaged_inventory(source, policy_field):
+    from yearn_data import tvl_policy
+    from yearn_data.tvl_api import TvlDataset
+    conn, path, root = source
+    parent = tvl_policy.VAULT_POLICIES[0]['address'].lower()
+    conn.execute("INSERT INTO tvl_vaults(chain_id,address,version,active,updated_at) VALUES (1,?,'v3',1,1)", (parent,))
+    run(conn, 1, DAY, [(parent, '100'), (CHILD, '110')], [(CHILD, '50')])
+    edge = json.loads(conn.execute('SELECT data_json FROM tvl_positions').fetchone()[0])
+    edge['parent'] = parent
+    conn.execute('UPDATE tvl_positions SET parent=?,data_json=?', (parent, json.dumps(edge)))
+    for stored in conn.execute('SELECT vault,data_json FROM tvl_snapshots').fetchall():
+        row = json.loads(stored['data_json']); row['category'] = 'curation'
+        conn.execute('UPDATE tvl_snapshots SET data_json=? WHERE vault=?', (json.dumps(row), stored['vault']))
+    conn.commit()
+    manifest = dict(TvlStore(path, root).get().manifest)
+    if policy_field:
+        manifest['vaultPolicies'] = []
+    else:
+        manifest.pop('vaultPolicies')
+    dataset = TvlDataset(manifest)
+    assert dataset.summary()['totalTvl'] == 160
+    assert dataset.graph()['totalTvlUsd'] == 160
+    assert dataset.curation()['totalTvlUsd'] == 160
+    assert {v['address'] for v in dataset.curation()['vaults']} == {parent, CHILD}
