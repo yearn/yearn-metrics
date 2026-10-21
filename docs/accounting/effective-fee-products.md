@@ -104,3 +104,12 @@ yBOLD/yvUSD grouping, raw nested chains, stack statistics, profitability,
 comparison and membership payloads are unchanged. Curve DOLA-sUSDe Factory
 yVault now appears with 1000 basis points performance fee, zero management
 fee and $12,931,950.31586179 external TVL. The prior release is retained for rollback.
+
+The yBOLD staker and yETH recovery distributions use the same valuation coverage
+contract as yvUSD locker distributions. Known zero fees remain zero; a positive
+unpriced distribution increments `unpriced_distribution_events` and keeps grouped
+pricing/fee-USD completeness false. Canonical CSV exports always declare all three
+distribution columns and the original deduction, leaving unrelated values blank.
+Malformed report payloads remain unresolved in indexing and offline replay, and
+receipt-dependent product reports retain the receipt-unavailability reason without
+suppressing ordinary V3 reports in the same transaction.
