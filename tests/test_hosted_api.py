@@ -257,16 +257,59 @@ def test_release_rollback_rejects_unknown_and_restores_selection(published):
     assert registry.selection() == previous
 
 
-def test_prepare_analytics_does_not_switch_legacy_selection(published, monkeypatch):
+def new_analytics_revision(database):
+    with closing(connect(database)) as conn, conn:
+        body = json.loads(conn.execute('SELECT body_json FROM analytics_publications').fetchone()[0])
+        body['meta']['publicationId'] = 'b'*64
+        conn.execute('INSERT INTO analytics_publications VALUES (?,1,?)', ('b'*64, json.dumps(body)))
+    return 'b'*64
+
+
+def test_prepare_then_publish_aligns_legacy_selection_and_retires_old_release(published, monkeypatch):
     from yearn_data import analytics
-    database, financial, history, _ = published
+    from yearn_data.hosted_publications import select_release
+    database, financial, history, old_release = published
     old = Registry(database).selection()
     def prepare_owned(db, fees, tvl, *, select):
         assert select is False
         assert fees.id == old['feesDatasetId'] and tvl.id == old['tvlDatasetId']
-        return old['analyticsPublicationId']
+        new_id = new_analytics_revision(database)
+        with closing(connect(database)) as conn:
+            assert conn.execute('SELECT publication_id FROM analytics_selection').fetchone()[0] == old['analyticsPublicationId']
+        return new_id
     monkeypatch.setattr(analytics, 'prepare', prepare_owned)
-    assert publish(database, financial, history, prepare_analytics=True) == old['releaseId']
+    new_release = publish(database, financial, history, prepare_analytics=True)
+    assert new_release != old_release
+    assert Registry(database).selection()['analyticsPublicationId'] == 'b'*64
+    with closing(connect(database)) as conn:
+        assert conn.execute('SELECT publication_id FROM analytics_selection').fetchone()[0] == 'b'*64
+        assert [r[0] for r in conn.execute('SELECT id FROM api_releases')] == [new_release]
+    with pytest.raises(ValueError, match='unknown releaseId'):
+        select_release(database, old_release)
+
+
+def test_publish_cli_reports_selected_release_when_cleanup_fails(published, monkeypatch, capsys):
+    from yearn_data import canonical_history
+    from yearn_data.cli import main
+    from yearn_data.hosted_publications import select_release
+    database, financial, history, old_release = published
+    new_id = new_analytics_revision(database)
+    def fail(*args, **kwargs):
+        raise RuntimeError('postgres://secret-password')
+    monkeypatch.setattr(canonical_history, 'consolidate', fail)
+    result = main(['--db', str(database), 'publish-hosted', '--publication', str(financial),
+                   '--tvl-publication', str(history), '--analytics-publication-id', new_id])
+    assert result == 1
+    output = capsys.readouterr()
+    body = json.loads(output.out)
+    current = Registry(database).selection()['releaseId']
+    assert current != old_release
+    assert body['releaseId'] == current
+    assert body['published'] is True and body['consolidated'] is False
+    assert 'secret-password' not in output.out + output.err
+    # The failed cleanup leaves the prior coherent release available for recovery.
+    assert select_release(database, old_release) == old_release
+    assert Registry(database).selection()['releaseId'] == old_release
 
 
 def test_hosted_date_index_does_not_scan_vault_rows(published):
