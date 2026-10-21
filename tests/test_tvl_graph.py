@@ -64,6 +64,30 @@ def test_curation_flow_is_visible_without_changing_headline_policy(source):
     assert g['totalTvlUsd']==200 and g['totalOverlapTvlUsd']==0
 
 
+def test_graph_recalculation_preserves_pinned_mapping_policy(source, monkeypatch):
+    from yearn_data import tvl_api
+    from yearn_data.tvl_policy import TARGET_CORRECTIONS
+
+    conn,path,root=source
+    holder='0x6164217caa4ff58fb722d726391875ac0c5fb541'
+    old_child='0x182863131f9a4630ff9e27830d945b1413e347e8'
+    run(conn,1,DAY,[(PARENT,'100'),(old_child,'100')])
+    router(conn,child=old_child,holder=holder,debt='50',owned='80')
+    monkeypatch.setattr(tvl_api,'TARGET_CORRECTIONS',[])
+    original=TvlStore(path,root).get()
+    monkeypatch.setattr(tvl_api,'TARGET_CORRECTIONS',TARGET_CORRECTIONS)
+    current=TvlStore(path,root).get()
+    assert current.id != original.id
+    assert current.graph()['edges'] == []
+    assert current.graph()['diagnostics']['status'] == 'incomplete'
+
+    pinned=TvlStore(path,root).get(original.id).graph()
+    flow=next(e for e in pinned['edges'] if e['kind']=='registry')
+    assert flow['tvlUsd'] == flow['deductedTvlUsd'] == 50
+    assert pinned['totalOverlapTvlUsd'] == 50
+    assert pinned['diagnostics']['status'] == 'complete'
+
+
 def test_unknowns_are_diagnostics_not_zero_value_nodes_and_dataset_is_pinned(source):
     conn,path,root=source
     run(conn,1,DAY,[(PARENT,'100'),(CHILD,None)])
