@@ -16,7 +16,7 @@ from .tvl_api import CHAINS, encoded, key, money
 
 DAY = 86400
 YEAR = 365 * DAY
-VERSION = 'powerglove-analytics-6'
+VERSION = 'powerglove-analytics-9'
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS analytics_inputs (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, observed_at INTEGER NOT NULL,
@@ -39,18 +39,26 @@ def put_input(conn, kind, body, status='available', observed_at=None):
             return row['protocol'] if kind=='defillama' else (row['chainId'],row['address'].lower())
         old = {identity(row):row for row in previous['body'].get(field,[])}
         merged = dict(old)
+        if kind == 'defillama':
+            merged = {k: row | {'retainedAfterUnavailableRetry': True,
+                      'retainedFromInputId': previous['id'],
+                      'retainedObservedAt': row.get('retainedObservedAt', previous['observed_at'])}
+                      for k, row in old.items()}
         for row in body.get(field,[]):
             key = identity(row)
             if kind=='membership' and row.get('included') is None and key in old and old[key].get('included') is not None:
                 row = old[key] | {'retainedAfterUnavailableRetry':True,'retainedFromInputId':previous['id']}
             elif kind=='fee-config' and key in old:
-                row = dict(row)
-                for name in ('performanceFee','managementFee'):
-                    if row.get(name) is None and old[key].get(name) is not None:
-                        row[name]=old[key][name]
-                        row['retainedAfterUnavailableRetry']=True
-                        row['retainedFromInputId']=previous['id']
-                        row['retainedObservedAt']=old[key].get('observedAt')
+                prior = old[key]
+                missing = any(row.get(name) is None for name in ('performanceFee','managementFee'))
+                rejected = row.get('failureKind') == 'verification_rejected'
+                changed = row.get('accountant') is not None and row.get('accountant') != prior.get('accountant')
+                known = all(prior.get(name) is not None for name in ('performanceFee','managementFee'))
+                if missing and known and prior.get('fixedRateSupported', True) and not rejected and not changed:
+                    row = prior | {'retainedAfterUnavailableRetry': True,
+                                   'retainedFromInputId': previous['id'],
+                                   'retainedObservedAt': prior.get('observedAt'),
+                                   'unavailableRetry': dict(row)}
             merged[key]=row
         body[field]=list(merged.values())
     data = {'kind':kind,'observedAt':observed_at,'status':status,'body':body}
@@ -123,7 +131,10 @@ def fee_stack(rows, positions, configurations):
         fee_known = perf is not None and mgmt is not None and cfg.get('fixedRateSupported',True)
         if not fee_known:complete=False
         from .fee_views import fee_display_name
-        return {'vault':{'address':identity[1],'chainId':identity[0],'name':fee_display_name(identity[0], identity[1], row.get('name'))},
+        return {'vault':{'address':identity[1],'chainId':identity[0],'name':fee_display_name(identity[0], identity[1], row.get('name')),
+                         'version':row.get('version'),'category':row.get('category'),
+                         'apiVersion':cfg.get('apiVersion'),
+                         'contractFamily':cfg.get('contractFamily') or (row.get('version') if row.get('version') in ('v1','v2','morpho-v1','morpho-v2','erc4626') else None)},
                 'feeAvailability':{'state':'available' if fee_known else 'unavailable'},
                 'capitalUsd':capital,'perfFee':perf,'mgmtFee':mgmt,'children':children,
                 'availability':{'state':'available' if complete else 'partial'}}
@@ -167,19 +178,26 @@ def fee_stack(rows, positions, configurations):
 
 def comparable(rows, membership):
     observations={(r['chainId'],r['address'].lower()):r for r in membership.get('vaults',[])}
-    missing=[]; verified=[]; unknown=[]
+    missing=[]; verified=[]; unknown=[]; unavailable=[]
     for row in rows:
+        identity=key(row)
         value=row.get('external_tvl_usd')
-        if value is None or float(value)<=0:continue
-        identity=key(row); match=observations.get(identity,{})
+        if value is None:
+            unavailable.append({'vaultAddress':identity[1],'chainId':identity[0],
+                                'name':row.get('name'),'countedTvlUsd':None,
+                                'reason':'counted TVL unavailable'})
+            continue
+        if float(value)<=0:continue
+        match=observations.get(identity,{})
         entry={'vaultAddress':identity[1],'chainId':identity[0],'chainName':CHAINS.get(identity[0],str(identity[0])),
                'name':row.get('name'),'category':row.get('category'),'countedTvlUsd':float(value)}
         if match.get('included') is True:verified.append(entry)
         elif match.get('included') is False:missing.append(entry)
         else:unknown.append(entry|{'reason':match.get('reason','membership not observed')})
     return {'diff':{'missingFromDefillama':missing},'includedVaults':verified,
-            'availability':{'state':'available' if not unknown else 'partial','unknownVaults':unknown,
-                            'known':len(missing)+len(verified),'expected':len(missing)+len(verified)+len(unknown)}}
+            'availability':{'state':'available' if not unknown and not unavailable else 'partial','unknownVaults':unknown,
+                            'unavailableTvlVaults':unavailable,
+                            'known':len(missing)+len(verified),'expected':len(missing)+len(verified)+len(unknown)+len(unavailable)}}
 
 
 def capital_period(points, start, end):
@@ -258,7 +276,12 @@ def profitability(financial, rows, history, configurations, cutoff, chain_id=Non
         return result
     annual=sum(v['annualizedFeeRevenue'] for v in eligible) if eligible else None
     gross_capital=sum(v['timeWeightedTvlUsd'] for v in eligible) if eligible else None
-    return {'vaults':vaults,'protocolFeeYield':ratio(annual,gross_capital),'feeCaptureRate':ratio(amount(vaults,'totalFeeRevenue'),amount(vaults,'totalGainUsd')) if all(v['availability']['fees']['state']==v['availability']['gains']['state']=='available' for v in vaults) else None,
+    capture = [v for v in vaults if v['availability']['fees']['state']==v['availability']['gains']['state']=='available']
+    capture_coverage = {'state':'available' if len(capture)==len(vaults) and capture else 'partial' if capture else 'unavailable',
+                        'contributingVaults':len(capture),'expectedVaults':len(vaults),
+                        'basis':'vaults with complete fee and gain observations in the calculation period'}
+    return {'vaults':vaults,'protocolFeeYield':ratio(annual,gross_capital),'feeCaptureRate':ratio(amount(capture,'totalFeeRevenue'),amount(capture,'totalGainUsd')) if capture else None,
+            'feeCaptureCoverage':capture_coverage,
             'medianVaultFeeYield':yield_median,'totalAnnualizedFees':annual,'totalTvl':amount(vaults,'tvlUsd'),
             'vaultCount':len(vaults),'lastUpdated':__import__('datetime').datetime.fromtimestamp(cutoff,__import__('datetime').timezone.utc).isoformat(),'byChain':group('chainId'),'byCategory':group('category'),
             'quadrants':quadrants,'quadrantThresholds':{'tvlUsd':tvl_median,'feeYield':yield_median,'cohortSize':len(displayed),'capitalBasis':'current gross TVL','minTvlUsd':1e4,'maxTvlUsd':1e8,'highYieldRule':'strictly greater than median'},'period':{'startTimestamp':start,'endTimestamp':cutoff,'trendSplitTimestamp':middle},
@@ -319,6 +342,7 @@ def owned_comparison(tvl, rows, snapshots):
     refs={r['protocol']:r for r in snapshots}
     totals=[refs.get(p,{}).get('total') for p in ('yearn-finance','yearn-curating')]
     available=all(v is not None for v in totals)
+    retained=any(r.get('retainedAfterUnavailableRetry') for r in refs.values())
     total=sum(totals) if available else None
     ours=money(rows,'external_tvl_usd')
     difference=ours-total if ours is not None and total is not None else None
@@ -335,8 +359,11 @@ def owned_comparison(tvl, rows, snapshots):
     summary=tvl.summary()
     return {'ourTotal':ours,'defillamaTotal':total,'difference':difference,'differencePercent':ratio(difference,total)*100 if ratio(difference,total) is not None else None,
         'retiredTvl':summary['retiredVaultTvl'],'overlapDeducted':summary['overlapExcluded'],'crossChainOverlap':summary['vaultBridgeExcluded'],
-        'grossTvl':money(rows,'tvl_usd'),'gapComponents':[],'retiredTvlByChain':{},'notes':[], 'byChain':by_chain,'byCategory':categories,
-        'datasetId':tvl.id,'availability':{'state':'available' if available else 'unavailable','references':snapshots}}
+        'grossTvl':money(rows,'tvl_usd'),'gapComponents':[],
+        'retiredTvlByChain':{name:money([r for r in rows if CHAINS.get(r['chain_id'],f"Chain {r['chain_id']}")==name
+                            and not getattr(tvl,'catalog',{}).get(key(r),{}).get('active',1)],'tvl_usd')
+                           for name in summary.get('tvlByChain',{})},'notes':[], 'byChain':by_chain,'byCategory':categories,
+        'datasetId':tvl.id,'availability':{'state':'partial' if available and retained else 'available' if available else 'unavailable','references':snapshots}}
 
 
 class AnalyticsStore:
