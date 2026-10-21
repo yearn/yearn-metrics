@@ -57,7 +57,7 @@ def split(report, evidence):
             if len(pending) != 1 or sum(pending[0]) != values[4] or values[3] != 0:
                 raise ValueError('unreconciled yvUSD fee split')
             return tuple(pending[0])
-        pending = []  # Never reuse a split consumed by an earlier vault report.
+        pending = []  # Both allowed accountants serve only yvUSD; consume each prior yvUSD split.
     raise ValueError('report missing from receipt')
 
 
