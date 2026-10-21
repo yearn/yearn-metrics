@@ -330,3 +330,24 @@ def test_real_postgres_analytics_pins_inputs_and_preserves_failed_selection(pg):
         prepare('neon',financial,tvl)
     assert store.get()['meta']['publicationId']==old
     assert store.get(old)['meta']['inputIds']['membership']==old_input
+
+
+def test_real_postgres_incremental_price_repair_preserves_source(pg,tmp_path):
+    from copy import deepcopy
+    from test_tvl_api import run,DAY,PARENT,CHILD
+    from yearn_data.tvl_api import TvlStore,TvlDataset
+    from yearn_data.tvl_history_cache import prepare,prepare_price_repair,totals_ready
+    conn,_=pg;init_db(conn)
+    run(conn,1,DAY,[(PARENT,'100'),(CHILD,'100')],[(CHILD,'50')])
+    run(conn,2,DAY+86400,[(PARENT,'200'),(CHILD,'200')],[(CHILD,'100')])
+    previous=TvlStore('neon',tmp_path/'publication').get();prepare(previous)
+    manifest=deepcopy(previous.manifest);manifest['datasetId']='f'*64
+    manifest['priceRejections'].append({'chainId':1,'asset':'0x'+'aa'*20,
+        'timestamp':DAY,'priceUsd':'10','reason':'fixture'})
+    repaired=TvlDataset(manifest)
+    assert prepare_price_repair(repaired,previous)['recomputedDates']==[DAY]
+    assert totals_ready(repaired)
+    assert TvlDataset(previous.manifest).history(interval='daily')['chart'][0]['Ethereum']==150
+    chart=TvlDataset(manifest).history(interval='daily')['chart']
+    assert chart[0].get('Ethereum') is None and chart[1]['Ethereum']==300
+    assert prepare_price_repair(TvlDataset(manifest),previous)['status']=='already-prepared'
