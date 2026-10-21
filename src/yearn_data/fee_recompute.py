@@ -40,9 +40,11 @@ def recompute_canonical_fees(conn, mode, chains=None, limit=None, version=None, 
             try:
                 if evidence.get('allocator_inputs') != allocator_inputs(r):
                     raise ValueError('allocator inputs missing or changed')
-                from .yvusd_fees import applies, accounting
+                from .yvusd_fees import ACCOUNTANTS, applies, accounting
                 if applies(dict(r)):
                     failure_reason = 'cached_distribution_evidence_missing_or_invalid'
+                    if evidence['yvusd']['accountant'].lower() not in ACCOUNTANTS:
+                        failure_reason = 'rejected_yvusd_accountant'
                     amounts = accounting(r, evidence['yvusd'])
                 else:
                     amounts = normalize_allocator_fees(r)

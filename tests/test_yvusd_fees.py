@@ -121,6 +121,10 @@ def test_explicit_refresh_reacquires_rejected_accountant(tmp_path, monkeypatch):
         assert fees.index_canonical_fees(conn, retry_unresolved=True, receipt_fetcher=fetch) == 1
         assert len(calls) == 1
         assert tuple(conn.execute('SELECT status,reason FROM canonical_fee_reports').fetchone()) == ('unresolved','rejected_yvusd_accountant')
+        from yearn_data.fee_recompute import recompute_canonical_fees
+        for mode in ('formulas','policy'):
+            assert recompute_canonical_fees(conn,mode)['unavailable']==1
+            assert conn.execute('SELECT reason FROM canonical_fee_reports').fetchone()[0]=='rejected_yvusd_accountant'
         assert fees.index_canonical_fees(conn, retry_unresolved=True, refresh_evidence=True, receipt_fetcher=fetch) == 1
         assert calls == [e['receipt']['blockHash']] * 2
         result = conn.execute('SELECT status,accounting_json,evidence_json FROM canonical_fee_reports').fetchone()
