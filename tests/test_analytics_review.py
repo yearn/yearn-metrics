@@ -173,3 +173,47 @@ def test_analytics_requires_prepared_selection_before_http_start(tmp_path, monke
     monkeypatch.setattr(pairing,'PairingStore',lambda path:SimpleNamespace(get=lambda:SimpleNamespace(database=database)))
     with pytest.raises(ValueError,match='analytics have not been published'):
         pairing.serve_pairing('unused',analytics=True)
+
+
+def test_comparison_unknown_chain_reconciles_and_matches_retired_label():
+    chain=123456
+    rows=[{'chain_id':chain,'vault':A,'tvl_usd':40,'external_tvl_usd':30},
+          {'chain_id':1,'vault':B,'tvl_usd':20,'external_tvl_usd':20}]
+    tvl=SimpleNamespace(id='a'*64,catalog={(chain,A):{'active':False}},
+        summary=lambda:{'retiredVaultTvl':40,'overlapExcluded':10,'vaultBridgeExcluded':0,
+                        'tvlByChain':{'Chain 123456':40,'Ethereum':20}})
+    result=owned_comparison(tvl,rows,[])
+    assert sum(r['ours'] for r in result['byChain'])==result['ourTotal']==50
+    assert next(r for r in result['byChain'] if r['chain']=='Chain 123456')['ours']==30
+    assert result['retiredTvlByChain']['Chain 123456']==40
+
+
+def test_trend_requires_capital_history_for_each_periods_events():
+    events=[{'chain_id':1,'vault_address':A,'block_timestamp':day*DAY,
+             'total_fees_paid_usd':10,'gross_gain_usd':100} for day in (40,120,200,300)]
+    financial=SimpleNamespace(fees=events,earnings=events,vault_names={})
+    current=[{'chain_id':1,'vault':A,'tvl_usd':10000}]
+    # Enough annual coverage remains, but the recent half lacks capital at day 200.
+    incomplete={(1,A):[(d*DAY+DAY-1,10000) for d in range(365) if d<183 or d>=253]}
+    vault=profitability(financial,current,incomplete,{},YEAR)['vaults'][0]
+    assert vault['feeYield'] is not None
+    assert vault['previousPeriodFeeYield'] is not None
+    assert vault['currentPeriodFeeYield'] is None
+    assert vault['trend']=='insufficient_data' and vault['trendDelta'] is None
+    complete={(1,A):[(d*DAY+DAY-1,10000) for d in range(365)]}
+    vault=profitability(financial,current,complete,{},YEAR)['vaults'][0]
+    assert vault['previousPeriodFeeYield'] is not None and vault['currentPeriodFeeYield'] is not None
+    assert vault['trend']=='stable'
+    # The same guard applies to the first half, and to gain evidence as well.
+    financial.fees=events[1:]
+    first_half_gap={(1,A):[(d*DAY+DAY-1,10000) for d in range(70,365)]}
+    assert profitability(financial,current,first_half_gap,{},YEAR)['vaults'][0]['previousPeriodFeeYield'] is None
+
+
+def test_explicit_none_chain_filter_is_rejected():
+    from yearn_data.analytics import analytics_response
+    store=SimpleNamespace(get=lambda identity:{'meta':{'publicationId':'a'*64},'profitability':{'None':{'scope':'all'},'1':{'scope':'ethereum'}}})
+    assert analytics_response(store,'/api/profitability')[1]['scope']=='all'
+    assert analytics_response(store,'/api/profitability?chainId=1')[1]['scope']=='ethereum'
+    for value in ('None','null','','0','-1'):
+        assert analytics_response(store,'/api/profitability?chainId='+value)[0]==400
