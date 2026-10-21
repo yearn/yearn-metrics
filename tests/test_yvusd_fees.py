@@ -86,3 +86,35 @@ def test_multiple_reports_each_consume_their_own_fee_event():
     fee['logIndex']-=10;report['logIndex']-=10
     e['receipt']['logs'].extend([fee,report])
     assert accounting(r,e)['locker_bonus_raw']=='25035988'
+
+
+def test_explicit_refresh_reacquires_rejected_accountant(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from yearn_data.storage import connect, init_db
+    from yearn_data import fees
+    case = CASES[0]; r = case['report']; e = case['evidence']; calls = []
+    def call(transaction, block_identifier):
+        calls.append(block_identifier)
+        address = '0x'+'11'*20 if len(calls) == 1 else e['accountant']
+        return bytes.fromhex('00'*12+address[2:])
+    monkeypatch.setattr(fees, 'web3_for', lambda chain: SimpleNamespace(eth=SimpleNamespace(call=call)))
+    with connect(tmp_path/'refresh.sqlite') as conn:
+        init_db(conn)
+        conn.execute('INSERT INTO vaults(chain_id,address,version,api_version,updated_at) VALUES (1,?,?,?,1)',
+                     (r['vault_address'], 'v3', r['api_version']))
+        fields = [row['name'] for row in conn.execute('PRAGMA table_info(strategy_reports)') if row['name'] in r]
+        conn.execute('INSERT INTO strategy_reports ('+','.join(fields)+') VALUES ('+','.join('?' for _ in fields)+')',
+                     [r[field] for field in fields])
+        fetch = lambda *args: e['receipt']
+        assert fees.index_canonical_fees(conn, receipt_fetcher=fetch) == 1
+        assert conn.execute('SELECT status FROM canonical_fee_reports').fetchone()[0] == 'unresolved'
+        # Ordinary retries can replay retained evidence without another RPC call.
+        assert fees.index_canonical_fees(conn, retry_unresolved=True, receipt_fetcher=fetch) == 1
+        assert len(calls) == 1
+        assert conn.execute('SELECT status FROM canonical_fee_reports').fetchone()[0] == 'unresolved'
+        assert fees.index_canonical_fees(conn, retry_unresolved=True, refresh_evidence=True, receipt_fetcher=fetch) == 1
+        assert calls == [e['receipt']['blockHash']] * 2
+        result = conn.execute('SELECT status,accounting_json,evidence_json FROM canonical_fee_reports').fetchone()
+        assert result['status'] == 'ok'
+        assert json.loads(result['accounting_json'])['total_fees_paid_raw'] == '703573'
+        assert json.loads(result['evidence_json'])['yvusd']['accountant'] == e['accountant']
