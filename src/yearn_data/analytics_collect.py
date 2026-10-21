@@ -202,21 +202,23 @@ def observed_configs(chain, local, declared):
                       performanceFee=None,managementFee=None,fixedRateSupported=False,
                       source='onchain-current-fee-config',blockNumber=int(reader.block['number']),observedAt=int(reader.block['timestamp']))
         version=row.get('version','');api=row.get('api_version') or ''
+        config.update(apiVersion=api or config.get('apiVersion'),contractFamily=None)
         if version=='morpho-v1' and morpho:
-            config.update(performanceFee=morpho[0]/10**14,managementFee=0,fixedRateSupported=True)
+            config.update(performanceFee=morpho[0]/10**14,managementFee=0,fixedRateSupported=True,contractFamily='morpho-v1')
         elif version=='morpho-v2' and perf and mgmt:
-            config.update(performanceFee=perf[0]/10**14,managementFee=mgmt[0]/10**14,fixedRateSupported=True)
+            config.update(performanceFee=perf[0]/10**14,managementFee=mgmt[0]/10**14,fixedRateSupported=True,contractFamily='morpho-v2')
         elif (version=='v2' or api.startswith('0.')) and perf and mgmt:
-            config.update(performanceFee=perf[0],managementFee=mgmt[0],fixedRateSupported=True)
+            config.update(performanceFee=perf[0],managementFee=mgmt[0],fixedRateSupported=True,contractFamily='v2')
         elif accountant:
             config['accountant']=accountant[0].lower()
+            config['contractFamily']='v3_allocator'
             if int(accountant[0],16)==0:
                 config.update(performanceFee=0,managementFee=0,fixedRateSupported=True)
             else:
                 accountants.append((accountant[0],'getVaultConfig(address)',['address'],[address],['uint16']*6+['bool']))
                 slots.append(config)
         elif perf and api.startswith('3.'):
-            config.update(performanceFee=perf[0],managementFee=0,fixedRateSupported=True)
+            config.update(performanceFee=perf[0],managementFee=0,fixedRateSupported=True,contractFamily='tokenized_strategy')
         config['availability']='available' if config['fixedRateSupported'] else 'unavailable'
         by_address[address]=config
     for config,value in zip(slots,reader.call(accountants)):
@@ -225,7 +227,7 @@ def observed_configs(chain, local, declared):
                           maxGain=value[4],maxLoss=value[5],customVaultConfig=value[6],fixedRateSupported=True,availability='available')
     for config in by_address.values():
         if any(config.get(k) is not None and not math_is_rate(config[k]) for k in ('performanceFee','managementFee')):
-            config.update(performanceFee=None,managementFee=None,fixedRateSupported=False,availability='unavailable')
+            config.update(performanceFee=None,managementFee=None,fixedRateSupported=False,availability='unavailable',failureKind='verification_rejected')
     return list(by_address.values())
 
 
@@ -251,7 +253,7 @@ def collect(database,progress=print):
                               'byChainTimestamps':{k:v['tvl'][-1]['date'] for k,v in body.get('chainTvls',{}).items() if '-' not in k and v.get('tvl')},'source':'https://api.llama.fi/protocol/'+protocol,'payloadSha256':hashlib.sha256(response.content).hexdigest()})
         except (requests.RequestException,ValueError,KeyError,IndexError):failures.append(protocol)
     with closing(connect(database)) as conn:
-        ref_id=put_input(conn,'defillama',{'snapshots':snapshots,'failedProtocols':failures},'partial' if failures else 'available',now) if snapshots else None
+        ref_id=put_input(conn,'defillama',{'snapshots':snapshots,'failedProtocols':failures},'partial' if failures else 'available',now)
     source=fetch(ADAPTER_URL).text;curation=fetch(CURATION_URL).text;factory_source=fetch(FACTORIES_URL).text;policy=rules(source,curation);policy['factories']=curator_factories(factory_source)
     configs=[];membership=[]
     grouped={c:[r for r in catalog if r['chain_id']==c] for c in sorted({r['chain_id'] for r in catalog})}

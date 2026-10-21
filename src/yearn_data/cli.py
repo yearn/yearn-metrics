@@ -322,7 +322,8 @@ def main(argv: list[str] | None = None) -> int:
         from .pairing import PairingStore
         from .tvl_api import TvlStore
         financial = PairingStore(args.publication).get()
-        if str(financial.database) != str(args.db):
+        from .storage import database_reference
+        if database_reference(financial.database) != database_reference(args.db):
             raise ValueError('financial publication database must match --db')
         tvl = TvlStore(args.db, args.tvl_publication, current_bridge_policy='retired-registry').get()
         print(json.dumps({'publicationId':prepare(args.db,financial,tvl)}))
