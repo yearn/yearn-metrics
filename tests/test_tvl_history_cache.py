@@ -112,6 +112,7 @@ def test_price_only_repair_preserves_old_publication_and_recalculates_deductions
         run(conn,2,DAY+86400,[(PARENT,'200'),(CHILD,'200')],[(CHILD,'100')])
     old=TvlStore(path,tmp_path/'publication').get();prepare(old)
     manifest=deepcopy(old.manifest);manifest['datasetId']='f'*64
+    manifest['publishedAt']+=1;manifest['diagnostics']={'note':'updated rejection diagnostics'}
     manifest['priceRejections'].append({'chainId':1,'asset':'0x'+'aa'*20,'timestamp':DAY,'priceUsd':'10','reason':'verified quote'})
     repaired=TvlDataset(manifest)
     result=prepare_price_repair(repaired,old)
@@ -175,4 +176,94 @@ def test_price_repair_resumes_interrupted_destination_totals(tmp_path, monkeypat
     assert ready(repaired) and not cache.totals_ready(repaired)
     assert cache.prepare_price_repair(repaired, old)['status'] == 'already-prepared'
     assert cache.totals_ready(repaired)
-    assert repaired.history(interval='daily')['chart'] == expected
+    fresh=TvlDataset(manifest)
+    monkeypatch.setattr(fresh,'iter_frames',lambda *a,**k:pytest.fail('resumed chart bypassed prepared totals'))
+    assert fresh.history(interval='daily')['chart'] == expected
+    with closing(connect(path,readonly=True)) as conn:
+        assert [row[0] for row in conn.execute('SELECT value FROM tvl_chart_totals WHERE dataset_id=? ORDER BY timestamp,group_by,mode,series',(fresh.id,))]==['200']*4
+
+
+def test_price_repair_keeps_unknown_chain_series_across_multiple_dates(tmp_path):
+    from copy import deepcopy
+    from yearn_data.tvl_history_cache import prepare_price_repair
+    path=tmp_path/'unknown-chain.sqlite'
+    with closing(connect(path)) as conn:
+        init_db(conn)
+        for offset in range(3):
+            timestamp=DAY+offset*86400
+            run(conn,offset+1,timestamp,[(PARENT,'100')])
+            row={'chain_id':146,'vault':CHILD,'timestamp':timestamp,'block_number':100+offset,
+                 'version':'v2','category':'v2','asset':'0x'+'bb'*20,'asset_units':'10',
+                 'tvl_usd':str(100*(offset+1)),'price_usd':str(10*(offset+1))}
+            conn.execute('INSERT INTO tvl_snapshots VALUES (?,?,?,?,?,?)',
+                         (offset+1,146,CHILD,timestamp,100+offset,json.dumps(row)))
+            conn.commit()
+    old=TvlStore(path,tmp_path/'publication').get();prepare(old)
+    manifest=deepcopy(old.manifest);manifest['datasetId']='f'*64
+    manifest['priceRejections'] += [{'chainId':1,'asset':'0x'+'aa'*20,'timestamp':DAY+offset*86400,
+                                    'priceUsd':'10','reason':'verified fixture'} for offset in (0,1)]
+    fresh=TvlDataset(manifest)
+    result=prepare_price_repair(fresh,old)
+    assert result['recomputedDates']==[DAY,DAY+86400]
+    chart=TvlDataset(manifest).history(interval='daily')['chart']
+    assert [r['Chain 146'] for r in chart]==[100,200,300]
+    assert not any('146' in r for r in chart)
+    assert old.history(interval='daily')['chart'][0]['Ethereum']==100
+    assert chart[0].get('Ethereum') is None and chart[2]['Ethereum']==100
+    categories=TvlDataset(manifest).history(interval='daily',group='category')['chart']
+    assert [r['v2'] for r in categories]==[100,200,300]
+
+
+def test_prepare_history_cli_uses_incremental_repair(tmp_path,monkeypatch,capsys):
+    from yearn_data import cli,tvl_api
+    path=tmp_path/'cli-repair.sqlite';publication=tmp_path/'publication'
+    with closing(connect(path)) as conn:
+        init_db(conn)
+        run(conn,1,DAY,[(PARENT,'100')])
+        run(conn,2,DAY+86400,[(PARENT,'200')])
+    old=TvlStore(path,publication).get();prepare(old)
+    monkeypatch.setattr(tvl_api,'PRICE_REJECTIONS',tvl_api.PRICE_REJECTIONS+[
+        {'chainId':1,'asset':'0x'+'aa'*20,'timestamp':DAY,'priceUsd':'10','reason':'fixture'}])
+    new=TvlStore(path,publication).get()
+    assert new.id!=old.id
+    calls=[];original=TvlDataset.iter_frames
+    def frames(dataset,dates,*args,**kwargs):
+        calls.append(tuple(dates))
+        yield from original(dataset,dates,*args,**kwargs)
+    monkeypatch.setattr(TvlDataset,'iter_frames',frames)
+    monkeypatch.setattr(cli,'load_environment',lambda path:None)
+    assert cli.main(['--db',str(path),'tvl','prepare-history','--publication',str(publication),
+                     '--current-bridge-policy','none','--previous-dataset-id',old.id])==0
+    receipt=json.loads(capsys.readouterr().out)
+    assert receipt['datasetId']==new.id and receipt['recomputedDates']==[DAY]
+    assert calls==[(DAY,)]
+    stored=TvlDataset(new.manifest)
+    assert stored.history(interval='daily')['chart'][0].get('Ethereum') is None
+    assert stored.history(interval='daily')['chart'][1]['Ethereum']==200
+    assert old.history(interval='daily')['chart'][0]['Ethereum']==100
+
+
+def test_repair_rejects_conflicting_quote_that_would_undo_prior_rejection(tmp_path):
+    from copy import deepcopy
+    from yearn_data.tvl_history_cache import prepare_price_repair
+    path=tmp_path/'conflicting.sqlite'
+    with closing(connect(path)) as conn:
+        init_db(conn);run(conn,1,DAY,[(PARENT,'100')])
+    original=TvlStore(path,tmp_path/'publication').get()
+    manifest=deepcopy(original.manifest);manifest['datasetId']='d'*64
+    rejected={'chainId':1,'asset':'0x'+'aa'*20,'timestamp':DAY,'priceUsd':'10','reason':'fixture'}
+    manifest['priceRejections'].append(rejected)
+    previous=TvlDataset(manifest);prepare(previous)
+    updated=deepcopy(manifest);updated['datasetId']='e'*64
+    updated['priceRejections'].append(rejected|{'priceUsd':'12'})
+    target=TvlDataset(updated)
+    with pytest.raises(ValueError,match='conflicting quotes'):
+        prepare_price_repair(target,previous)
+    assert not ready(target)
+    assert previous.history(interval='daily')['chart'][0].get('Ethereum') is None
+
+
+def test_quote_rejection_inventory_has_unique_coordinates():
+    from yearn_data.tvl_api import PRICE_REJECTIONS
+    coordinates=[(r['chainId'],r['asset'].lower(),r['timestamp']) for r in PRICE_REJECTIONS]
+    assert len(coordinates)==len(set(coordinates))
