@@ -320,3 +320,54 @@ def test_hosted_date_index_does_not_scan_vault_rows(published):
         conn.execute('DROP TABLE tvl_chart_rows')
         conn.commit()
     assert registry.tvl(identity).dates() == (DAY, DAY+7*86400)
+
+
+@pytest.mark.parametrize('pin', ['datasetId', 'publicationId'])
+def test_comparison_superseded_pin_identifies_current_release(published, pin):
+    database, _, _, release = published
+    status, body = HostedAPI(database).response('/api/comparison?' + pin + '=' + 'f'*64)
+    assert status == 410
+    assert body['releaseId'] == release
+
+
+@pytest.mark.parametrize('query', [
+    'datasetId=bad', 'datasetId=', 'datasetId=' + 'F'*64,
+    'datasetId=' + 'f'*64 + '&unknown=yes',
+    'datasetId=' + 'f'*64 + '&datasetId=' + 'e'*64,
+    'datasetId=' + 'f'*64 + '&publicationId=bad',
+    'publicationId=' + 'f'*64 + '&datasetId=bad',
+])
+def test_comparison_rejects_invalid_filters_before_pin_expiry(published, query):
+    assert HostedAPI(published[0]).response('/api/comparison?' + query)[0] == 400
+
+
+def test_republish_regenerated_tvl_manifest_preserves_first_metadata(published, monkeypatch):
+    from yearn_data import tvl_api
+    database, financial, history, release = published
+    registry = Registry(database)
+    selection = registry.selection()
+    original = registry.manifest('tvl', selection['tvlDatasetId'])
+    expected = HostedAPI(database).response('/api/tvl/history/runs/latest')
+    shutil.rmtree(history)
+    monkeypatch.setattr(tvl_api.time, 'time', lambda: original['publishedAt'] + 60)
+    regenerated = TvlStore(database, history).get()
+    assert regenerated.id == original['datasetId']
+    assert regenerated.manifest['publishedAt'] != original['publishedAt']
+    assert publish(database, financial, history) == release
+    assert Registry(database).manifest('tvl', regenerated.id) == original
+    assert HostedAPI(database).response('/api/tvl/history/runs/latest') == expected
+
+
+@pytest.mark.parametrize('field,value', [('publishedAt', 1), ('asOfTimestamp', 1), ('diagnostics', {'changed': True})])
+def test_existing_tvl_manifest_ignores_only_identity_excluded_metadata(published, field, value):
+    database, _, _, release = published
+    registry = Registry(database); selection = registry.selection()
+    fees = registry.manifest('fees', selection['feesDatasetId'])
+    original = registry.manifest('tvl', selection['tvlDatasetId'])
+    changed = dict(original, **{field: value})
+    with closing(connect(database)) as conn:
+        assert save_release(conn, fees, changed, selection['analyticsPublicationId']) == release
+        changed['currentBridgePolicy'] = 'changed'
+        with pytest.raises(ValueError, match='immutable'):
+            save_release(conn, fees, changed, selection['analyticsPublicationId'])
+    assert Registry(database).manifest('tvl', original['datasetId']) == original
