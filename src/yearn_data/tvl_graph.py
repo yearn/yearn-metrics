@@ -27,6 +27,7 @@ def _build_graph(dataset, rows, positions, diagnostics, *, chain_id, category):
                           target_corrections=dataset.manifest.get('targetCorrections',[]))
     deductions = {(p['chain_id'],p['parent'],p['strategy'],p['child']):p.get('overlap_usd') for p in positions}
     nodes, bridges, unavailable = {}, [], []
+    unavailable_ids = set()
     gross_by_id = {node_id(r['chain_id'],r['vault']):decimal(r.get('tvl_usd')) for r in rows}
     for row in rows:
         identity = node_id(row['chain_id'],row['vault'])
@@ -38,7 +39,10 @@ def _build_graph(dataset, rows, positions, diagnostics, *, chain_id, category):
                             'label':'Dated pre-deposit migration' if row.get('bridge_migration_timestamp') is not None else 'Retired bridge registry'})
             continue
         if row.get('tvl_usd') is None:
-            unavailable.append({'nodeId':identity,'reason':row.get('reason','missing_valuation')})
+            unavailable_ids.add(identity)
+            if ((chain_id is None or row['chain_id']==chain_id)
+                    and (category is None or row.get('category',row['version'])==category)):
+                unavailable.append({'nodeId':identity,'reason':row.get('reason','missing_valuation')})
             continue
         nodes[identity] = {'id':identity,'chainId':row['chain_id'],'address':row['vault'],
                            'name':row.get('name') or row['vault'],'nodeType':'vault',
@@ -49,7 +53,6 @@ def _build_graph(dataset, rows, positions, diagnostics, *, chain_id, category):
                            'upstreamOwnedTvlUsd':amount(row['overlap_usd']),
                            'isRetired':not meta.get('active',1)}
 
-    unavailable_ids = {r['nodeId'] for r in unavailable}
     allocations = {}
     reserved = defaultdict(lambda: Decimal(0))
     direct_flows = defaultdict(lambda: Decimal(0))

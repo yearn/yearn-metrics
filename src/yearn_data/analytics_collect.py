@@ -246,6 +246,10 @@ def default_debts(reader,active):
 
 
 
+class AccountantVerificationError(ValueError):
+    """Observed accountant evidence contradicts a pinned product constraint."""
+
+
 def custom_accountant_config(reader, config):
     """Recognize product accountants by pinned code and recipient/asset evidence."""
     from eth_utils import keccak
@@ -258,21 +262,25 @@ def custom_accountant_config(reader, config):
         return None
     expected = ACCOUNTANT if address == YBOLD else locked
     if accountant != expected:
-        raise ValueError('unknown product accountant')
+        raise AccountantVerificationError('unknown product accountant')
     block = reader.block['hash']
     code_hash = '0x' + keccak(reader.w3.eth.get_code(Web3.to_checksum_address(accountant), block_identifier=block)).hex()
     if code_hash != (CODE_HASH if address == YBOLD else locked_hash):
-        raise ValueError('unknown product accountant implementation')
+        raise AccountantVerificationError('unknown product accountant implementation')
     if address == YBOLD:
         recipient = reader.call([(accountant, 'feeRecipient()', [], [], ['address'])])[0]
-        if not recipient or recipient[0].lower() != STAKER:
-            raise ValueError('unknown yBOLD distribution recipient')
+        if not recipient:
+            raise ValueError('unavailable yBOLD distribution recipient')
+        if recipient[0].lower() != STAKER:
+            raise AccountantVerificationError('unknown yBOLD distribution recipient')
         amounts = {'managementFee': 0, 'performanceFee': 0, 'stakerRecipient': STAKER}
     else:
         asset, rates = reader.call([(accountant, 'asset()', [], [], ['address']),
                                    (accountant, 'feeConfig()', [], [], ['uint16'] * 3)])
-        if not asset or asset[0].lower() != YVUSD or rates is None:
+        if not asset or rates is None:
             raise ValueError('unavailable yvUSD accountant configuration')
+        if asset[0].lower() != YVUSD:
+            raise AccountantVerificationError('unknown yvUSD accountant asset')
         amounts = {'managementFee': rates[0], 'performanceFee': rates[1], 'lockerBonus': rates[2]}
     return amounts | {'fixedRateSupported': True, 'availability': 'available',
                       'source': 'verified-product-accountant-config', 'accountantCodeHash': code_hash,
@@ -310,8 +318,13 @@ def observed_configs(chain, local, declared):
             else:
                 try:
                     custom = custom_accountant_config(reader, config)
-                except Exception:
-                    custom = {'fixedRateSupported': False, 'availability': 'unavailable'}
+                except AccountantVerificationError as error:
+                    custom = {'fixedRateSupported': False, 'availability': 'unavailable',
+                              'failureKind': 'verification_rejected', 'failureReason': str(error)}
+                except Exception as error:
+                    # Keep provider details (which can include credentials) out of stored evidence.
+                    custom = {'fixedRateSupported': False, 'availability': 'unavailable',
+                              'failureKind': 'acquisition_failed', 'failureReason': type(error).__name__}
                 if custom is not None:
                     config.update(custom)
                 else:
