@@ -22,7 +22,9 @@ Use the existing imported financial publications; selecting different financial
 analyses remains the existing `select-pairing` operation. Do not pass
 `--comparison-db` for this cutover. Collection and preparation are explicit worker
 operations. Refresh them after updating core financial/TVL inputs; API requests do
-not initiate a refresh of these prepared analytics.
+not initiate a refresh of these prepared analytics. `--analytics` requires
+`--current-bridge-policy retired-registry`; startup rejects `none` to prevent
+comparison and TVL routes from using different accounting policies.
 
 Configure Powerglove's local target as
 `VITE_YEARN_DATA_API_TARGET=http://127.0.0.1:3493`. A deployed consumer instead needs
@@ -40,7 +42,12 @@ imported TVL, fees, reports and prepared daily TVL chart rows.
 
 Known zero rates/amounts are preserved. An unavailable retry retains a previous
 known observation and records the retained observation's age; it does not erase
-known inputs. Source coverage remains partial when collection fails. A preparation
+known inputs. Retained fee configurations preserve the full supported observation,
+including its block and contract family, and record the unavailable retry separately.
+A changed accountant or rejected verification cannot reuse old supported rates.
+Retained external references keep their timestamps and mark comparison availability
+partial, including when both protocol requests fail. Source coverage remains partial
+when collection fails. A preparation
 failure leaves the previous selected publication usable.
 
 `GET /api/analytics/publication` returns the selected metadata. The three new
@@ -96,6 +103,12 @@ analytics publication.
   fee yield on the yield axis. High yield is strictly above the cohort median.
   Explicitly observed zero fees remain low yield; missing fee observations are
   unavailable and excluded from classification.
+- Fee capture summaries use only vaults with complete fee and gain observations.
+  `feeCaptureCoverage` states the contributing and expected vault counts and labels
+  a subset partial; it is not a complete protocol-wide capture claim.
+- Unpriced current vaults remain in comparable coverage as `unavailableTvlVaults`;
+  confirmed zero counted TVL is excluded from the positive-capital comparison.
+  Fee-stack nodes expose stored contract-family evidence (or null if unknown).
 - Fees charged at different layers remain distinct. Earnings are incident-adjusted
   contract-level reported gains, not consolidated nested economic yield. Summary
   profitability denominators are gross contract capital and are labeled as such;

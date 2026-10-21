@@ -306,3 +306,27 @@ def test_failed_fee_refresh_preserves_quote_on_postgres(pg):
     before = dict(conn.execute('SELECT * FROM fee_daily_prices').fetchone())
     save_price(conn, target, (None, 'retryable', {'provider': 'yearn-prices'}))
     assert dict(conn.execute('SELECT * FROM fee_daily_prices').fetchone()) == before
+
+
+def test_real_postgres_analytics_pins_inputs_and_preserves_failed_selection(pg):
+    from types import SimpleNamespace
+    from yearn_data.analytics import SCHEMA, AnalyticsStore, prepare, put_input, YEAR
+    conn,_=pg
+    conn.executescript(SCHEMA)
+    put_input(conn,'membership',{'vaults':[]},observed_at=1)
+    financial=SimpleNamespace(id='f'*64,cutoff=YEAR,fees=[],earnings=[],vault_names={})
+    tvl=SimpleNamespace(id='a'*64,as_of=lambda:YEAR-1,frames=lambda dates:[(YEAR-1,[],[],{})],
+        dates=lambda:[],history_prepared=lambda:False,history_rows=lambda dates,chain:[],
+        summary=lambda:{'retiredVaultTvl':0,'overlapExcluded':0,'vaultBridgeExcluded':0,'tvlByChain':{}})
+    old=prepare('neon',financial,tvl)
+    assert prepare('neon',financial,tvl)==old
+    store=AnalyticsStore('neon')
+    assert store.get()['meta']['publicationId']==old
+    old_input=store.get(old)['meta']['inputIds']['membership']
+    put_input(conn,'membership',{'vaults':[]},observed_at=2)
+    def fail(dates):raise RuntimeError('injected preparation failure')
+    tvl.frames=fail
+    with pytest.raises(RuntimeError,match='injected preparation failure'):
+        prepare('neon',financial,tvl)
+    assert store.get()['meta']['publicationId']==old
+    assert store.get(old)['meta']['inputIds']['membership']==old_input
