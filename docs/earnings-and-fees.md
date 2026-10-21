@@ -170,3 +170,12 @@ A missing price affects the USD value, not the stored raw fee amount.
 
 Use `--deferred-manifest` only to label unresolved accounting with a validated manifest.
 The manifest cannot supply a fee amount or override accepted current evidence.
+
+### Positive components on zero-fee events
+
+Known zero fees remain zero when another amount, such as a refund, cannot be
+priced. Such events use `zero_fee_unpriced_component` (or retain
+`metadata_unavailable`). Aggregate `unpriced_component_events` counts positive
+amounts without USD values across every exported amount field; pricing and
+fee-USD completeness remain false until they are valued. Missing optional
+components do not imply a positive amount and do not change completeness.
