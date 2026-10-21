@@ -31,6 +31,13 @@ address rules. Both yvUSD roots remain available to inspect; their allocated
 capital is not additive across layers. Historical product earnings and fees use
 the existing `scope=product` rules and are unchanged by this display policy.
 
+Product-accountant failures are recorded in the stored `fee-config` input.
+`failureKind: acquisition_failed` identifies a provider error or missing getter
+result; `failureReason` records only the exception type. `verification_rejected`
+identifies evidence that contradicts the pinned accountant, runtime hash,
+recipient or asset, with the failed check recorded as its reason. Both leave the
+current rate unavailable; neither substitutes a stale rate for current evidence.
+
 ## Verification and publication
 
 Finalized Ethereum block **26178806** confirms a 10% staked yBOLD fee and zero own
@@ -49,8 +56,9 @@ earnings run 15, financial history, the TVL dataset and the cutoff are retained.
 - yvUSD combined external TVL: $11,989,399.785465341.
 
 The hosted API serves immutable analytics bodies from Neon; it needs no code
-deployment for these additive fee-view fields. Prior publications remain intact
-for rollback. Tests cover incomplete allocations, genuine zero fees, grouped
+deployment for these additive fee-view fields. At this historical rollout, prior
+publications were retained. Current [canonical consolidation](../canonical-history.md)
+retires older releases, so recorded release IDs do not guarantee rollback. Tests cover incomplete allocations, genuine zero fees, grouped
 external TVL, unknown recipients/code, changing product rates and locker bonuses.
 
 ## Carry-forward onto the newer TVL publication
@@ -65,7 +73,7 @@ The resulting selected release is
 dataset `9f5d1262367eb80c55793f6041c7973d9ecdee383b0d5ae7fb665c48e1de1f57`.
 The financial dataset is unchanged, as are the product fee rates and combined
 yvUSD external TVL. The previous TVL release
-`b04af26bf93ac8065d439063d2c788abb9274f3728b80d2ba0b6faba8c32c113` is retained.
+`b04af26bf93ac8065d439063d2c788abb9274f3728b80d2ba0b6faba8c32c113` was retained at that rollout.
 
 Future publication jobs must use `powerglove-analytics-5` from this change so
 refreshing the TVL dataset also retains the canonical fee entries.
