@@ -320,9 +320,18 @@ def test_real_postgres_incremental_price_repair_preserves_source(pg,tmp_path):
     manifest=deepcopy(previous.manifest);manifest['datasetId']='f'*64
     manifest['priceRejections'].append({'chainId':1,'asset':'0x'+'aa'*20,
         'timestamp':DAY,'priceUsd':'10','reason':'fixture'})
+    # Keep the regression independent of background autovacuum timing.
+    conn.raw.execute('ALTER TABLE tvl_chart_rows SET (autovacuum_enabled = false)')
+    def estimated_rows():
+        return conn.execute("SELECT reltuples FROM pg_class WHERE oid='tvl_chart_rows'::regclass").fetchone()[0]
+    source_rows=conn.execute('SELECT COUNT(*) FROM tvl_chart_rows').fetchone()[0]
+    assert estimated_rows()==source_rows
     repaired=TvlDataset(manifest)
     assert prepare_price_repair(repaired,previous)['recomputedDates']==[DAY]
     assert totals_ready(repaired)
+    total_rows=conn.execute('SELECT COUNT(*) FROM tvl_chart_rows').fetchone()[0]
+    assert total_rows==2*source_rows
+    assert estimated_rows()==total_rows
     assert TvlDataset(previous.manifest).history(interval='daily')['chart'][0]['Ethereum']==150
     chart=TvlDataset(manifest).history(interval='daily')['chart']
     assert chart[0].get('Ethereum') is None and chart[1]['Ethereum']==300
