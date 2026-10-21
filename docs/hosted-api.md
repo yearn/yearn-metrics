@@ -229,7 +229,7 @@ still apply after deployment. Verify the selected release after recovery.
 
 Use separate read-only credentials for the API. The dedicated `powerglove_api_reader`
 role has SELECT on serving tables only: `api_manifests`, `api_releases`,
-`api_selection`, `api_fee_rows`, `api_fee_datasets`, `analytics_publications`,
+`api_selection`, `api_tvl_dates`, `api_fee_rows`, `api_fee_datasets`, `analytics_publications`,
 `tvl_snapshots`, `tvl_positions`, `tvl_chart_rows`, `tvl_chart_totals`,
 `tvl_chart_publications`. It does not receive access to raw analysis outputs or
 write privileges. Keep credentials in private environment files, never manifests

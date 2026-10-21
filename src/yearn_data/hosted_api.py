@@ -17,6 +17,11 @@ ANALYTICS_PATHS = {'/api/analytics/publication', '/api/fees/stack', '/api/profit
                    '/api/comparison', '/api/comparison/defillama-comparable'}
 
 
+def valid_pin(values):
+    return (len(values) == 1 and len(values[0]) == 64
+            and all(c in '0123456789abcdef' for c in values[0]))
+
+
 class SelectedStore:
     def __init__(self, load, selected):
         self.load, self.selected = load, selected
@@ -42,15 +47,22 @@ class HostedAPI:
             if urlsplit(url).query:
                 return 400, {'error': 'unsupported filter'}
             return 200, selection
-        query = parse_qs(urlsplit(url).query)
+        query = parse_qs(urlsplit(url).query, keep_blank_values=True)
         field = ('feesDatasetId' if path in FEE_PATHS else
                  'tvlDatasetId' if path in TVL_PATHS else 'analyticsPublicationId')
         pin = 'publicationId' if path in ANALYTICS_PATHS else 'datasetId'
-        identity = query.get(pin, [])
-        if (len(identity) == 1 and len(identity[0]) == 64
-                and all(c in '0123456789abcdef' for c in identity[0]) and identity[0] != selection[field]):
-            return 410, {'error': 'Data was updated. Reload the page to use the current history.',
-                         'releaseId': selection['releaseId']}
+        pins = {pin: field}
+        if path == '/api/comparison':
+            pins['datasetId'] = 'tvlDatasetId'
+            # Both pins are supported here. Validate the full query before a
+            # stale pin can turn a malformed request into a reload response.
+            if set(query) - pins.keys() or any(not valid_pin(v) for v in query.values()):
+                return 400, {'error': 'invalid or unsupported comparison filter'}
+        for pin, field in pins.items():
+            identity = query.get(pin, [])
+            if valid_pin(identity) and identity[0] != selection[field]:
+                return 410, {'error': 'Data was updated. Reload the page to use the current history.',
+                             'releaseId': selection['releaseId']}
         if path in FEE_PATHS:
             from .pairing import pairing_response
             response = pairing_response(SelectedStore(self.registry.fees, selection['feesDatasetId']), url)
