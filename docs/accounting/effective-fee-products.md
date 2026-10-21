@@ -113,3 +113,10 @@ distribution columns and the original deduction, leaving unrelated values blank.
 Malformed report payloads remain unresolved in indexing and offline replay, and
 receipt-dependent product reports retain the receipt-unavailability reason without
 suppressing ordinary V3 reports in the same transaction.
+
+Indexing reports `rejected_ybold_accountant` or `rejected_yeth_accountant` when
+retained accountant identities fail their product allowlist. Ordinary retries
+reuse pinned evidence; `index-fees --canonical --version v3 --retry-unresolved
+--refresh-evidence` reacquires it. If a new address persists, verify its
+implementation before expanding the allowlist. This diagnosis is separate from
+configured-rate acquisition and verification statuses.

@@ -96,3 +96,20 @@ def test_product_offline_replay_reason_identifies_evidence_gap(product, damage):
     assert recompute_canonical_fees(conn,'formulas')['unavailable']==1
     reason='cached_allocator_inputs_missing_or_changed' if damage=='inputs' else 'cached_distribution_evidence_missing_or_invalid'
     assert tuple(conn.execute('SELECT accounting_json,reason FROM canonical_fee_reports').fetchone())==(None,reason)
+
+
+def test_rejected_product_accountant_has_refresh_diagnostic(product):
+    conn,case,_,name=product
+    expected=case['evidence']['accountant'];bad='0x'+'11'*20
+    case['evidence']['accountant']=bad
+    assert index(conn,case)==1
+    assert tuple(conn.execute('SELECT status,reason FROM canonical_fee_reports').fetchone())==('unresolved','rejected_'+name+'_accountant')
+    case['evidence']['accountant']=expected
+    fetch=lambda *args:case['evidence']['receipt']
+    assert fees.index_canonical_fees(conn,retry_unresolved=True,receipt_fetcher=fetch)==1
+    assert tuple(conn.execute('SELECT status,reason FROM canonical_fee_reports').fetchone())==('unresolved','rejected_'+name+'_accountant')
+    assert json.loads(conn.execute('SELECT evidence_json FROM canonical_fee_reports').fetchone()[0])[name]['accountant']==bad
+    assert fees.index_canonical_fees(conn,retry_unresolved=True,refresh_evidence=True,receipt_fetcher=fetch)==1
+    row=conn.execute('SELECT status,reason,evidence_json FROM canonical_fee_reports').fetchone()
+    assert row['status']=='ok' and row['reason'] is None
+    assert json.loads(row['evidence_json'])[name]['accountant']==expected
