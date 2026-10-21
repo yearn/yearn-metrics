@@ -215,3 +215,87 @@ def test_explicit_none_chain_filter_is_rejected():
     assert analytics_response(store,'/api/profitability?chainId=1')[1]['scope']=='ethereum'
     for value in ('None','null','','0','-1'):
         assert analytics_response(store,'/api/profitability?chainId='+value)[0]==400
+
+
+def finance_adapter_fixture():
+    from yearn_data.analytics_collect import FINANCE_CHAINS
+    return '''buildNestedDebtByVault subtractNestedDebt get_default_queue withdrawalQueue
+list/vaults/${api.chainId}?origin=yearn
+const v1Vaults = [];
+const blacklist = [];
+''' + 'const chains = [' + ','.join(repr(name) for name in FINANCE_CHAINS.values()) + '];'
+
+
+def test_curation_parser_rejects_missing_changed_and_malformed_evidence():
+    from pathlib import Path
+    from yearn_data.analytics_collect import rules
+    source=(Path(__file__).parent/'fixtures/analytics/curation-frozen.js').read_text()
+    parsed=rules(finance_adapter_fixture(),source)
+    assert len(parsed['owners'][1])==3 and len(parsed['explicit'][1])==4
+    assert parsed['explicit'][8453]==set()
+    for broken in (source.replace('hyperliquid:', 'unsupported:'),
+                   source.replace('morphoVaultOwners:', 'renamedOwners:'),
+                   source.replace('turtleclub_erc4626:', 'renamedVaults:'),
+                   source.replace('morphoVaultOwners: [', 'morphoVaultOwners: loadOwners(['),
+                   source.replace('0xFc5F89d29CCaa86e5410a7ad9D9d280d4455C12B','not-an-address')):
+        with pytest.raises(ValueError,match='unsupported curation'):
+            rules(finance_adapter_fixture(),broken)
+    empty='\n'.join(f'{name}: {{ morphoVaultOwners: [], turtleclub_erc4626: [] }},'
+                    for name in ('ethereum','base','katana','arbitrum','hyperliquid'))
+    assert all(not addresses for addresses in rules(finance_adapter_fixture(),empty)['owners'].values())
+
+
+def test_membership_scope_unknown_is_distinct_from_verified_absence(monkeypatch):
+    from yearn_data import analytics_collect as collect
+    class Reader:
+        block={'number':100,'timestamp':200}
+        def __init__(self,chain):assert chain in collect.FINANCE_CHAINS or chain in collect.CURATION_CHAINS
+        def call(self,calls):assert not calls;return []
+    monkeypatch.setattr(collect,'Reader',Reader)
+    policy={'blacklist':set(),'v1':set(),'cross':{},'owners':{1:set()},'explicit':{1:set()},'factories':[]}
+    for chain in (100,4663):
+        observations=collect.membership_chain(chain,[{'address':A}],[],policy,{})
+        assert observations[0]['included'] is None and 'scope' in observations[0]['reason']
+        result=comparable([{'chain_id':chain,'vault':A,'external_tvl_usd':100}],{'vaults':observations})
+        assert result['diff']['missingFromDefillama']==[]
+        assert result['availability']['unknownVaults'][0]['vaultAddress']==A
+    assert collect.membership_chain(10,[{'address':A,'version':'morpho-v1'}],[],policy,{})[0]['included'] is None
+    assert collect.membership_chain(10,[{'address':A,'version':'v3'}],[],policy,{})[0]['included'] is False
+    curated=collect.membership_chain(1,[{'address':A,'version':'morpho-v1'}],[],policy,{(1,A):{'owner':B}})
+    assert curated[0]['included'] is False
+
+
+def test_kong_chain_failure_retains_fee_retry_evidence(tmp_path,monkeypatch):
+    from yearn_data import analytics_collect as collect
+    from yearn_data.storage import init_db
+    import requests
+    db=tmp_path/'analytics.sqlite';conn=connect(db);init_db(conn);conn.executescript(SCHEMA)
+    for chain,address in ((1,A),(10,B)):
+        conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,updated_at) VALUES (?,'v3',?,1)",(chain,address))
+    conn.commit()
+    old=[{'chainId':chain,'address':address,'performanceFee':1000,'managementFee':0,
+          'fixedRateSupported':True,'availability':'available','observedAt':1} for chain,address in ((1,A),(10,B))]
+    put_input(conn,'fee-config',{'vaults':old},observed_at=1)
+    monkeypatch.setattr(collect.time,'time',lambda:2)
+    def fetch(url):
+        if '/vaults/1?' in url:raise requests.RequestException('offline fixture')
+        if '/vaults/10?' in url:return SimpleNamespace(json=lambda:[{'address':B,'fees':{'performanceFee':900,'managementFee':0}}])
+        if 'api.llama.fi' in url:return SimpleNamespace(json=lambda:{'tvl':[{'date':2,'totalLiquidityUSD':10}]},content=b'fixture')
+        return SimpleNamespace(text='fixture')
+    monkeypatch.setattr(collect,'fetch',fetch)
+    monkeypatch.setattr(collect,'rules',lambda *args:{})
+    monkeypatch.setattr(collect,'curator_factories',lambda source:[])
+    monkeypatch.setattr(collect,'observed_configs',lambda chain,local,declared:[r|{'fixedRateSupported':True} for r in declared])
+    monkeypatch.setattr(collect,'membership_chain',lambda chain,local,*args:[{'chainId':chain,'address':r['address'],'included':True} for r in local])
+    collect.collect(db,progress=lambda message:None)
+    latest=selected_input(conn,'fee-config')
+    assert latest['status']=='partial'
+    rows={(r['chainId'],r['address']):r for r in latest['body']['vaults']}
+    retained,fresh=rows[(1,A)],rows[(10,B)]
+    assert retained['performanceFee']==1000 and retained['observedAt']==1
+    assert retained['retainedAfterUnavailableRetry'] is True
+    assert retained['retainedFromInputId']
+    assert retained['unavailableRetry']['observedAt']==2
+    assert retained['unavailableRetry']['failureKind']=='acquisition_failed'
+    assert fresh['performanceFee']==900 and fresh['observedAt']==2
+    assert not fresh.get('retainedAfterUnavailableRetry')
