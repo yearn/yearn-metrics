@@ -30,6 +30,11 @@ def identifier(value):
     return value
 
 
+def tvl_identity_context(manifest):
+    return {key: value for key, value in manifest.items()
+            if key not in {'datasetId', 'publishedAt', 'asOfTimestamp', 'diagnostics'}}
+
+
 def save_release(conn, financial, tvl, analytics_id):
     """Commit immutable manifests and their selection together; caller validates inputs."""
     selection = {'feesDatasetId': identifier(financial['datasetId']),
@@ -44,7 +49,11 @@ def save_release(conn, financial, tvl, analytics_id):
                          (kind, manifest['datasetId'], body))
             existing = conn.execute('SELECT body_json FROM api_manifests WHERE kind=? AND id=?',
                                     (kind, manifest['datasetId'])).fetchone()
-            if existing[0] != body:
+            # Preserve the first published metadata for stable pinned responses.
+            # Regenerating a local TVL manifest may change metadata outside its ID.
+            differs = (encoded(tvl_identity_context(json.loads(existing[0]))) != encoded(tvl_identity_context(manifest))
+                       if kind == 'tvl' else existing[0] != body)
+            if differs:
                 raise ValueError('immutable publication manifest changed')
         conn.execute('INSERT INTO api_releases VALUES (?,?) ON CONFLICT(id) DO NOTHING',
                      (release_id, encoded(selection)))
@@ -74,8 +83,7 @@ def publish(database, financial_directory, tvl_directory, analytics_id=None, *, 
     manifest = json.loads((root/'datasets'/f'{selected}.json').read_text())
     if manifest['datasetId'] != selected:
         raise ValueError('TVL manifest identity mismatch')
-    context = {key: value for key, value in manifest.items()
-               if key not in {'datasetId', 'publishedAt', 'asOfTimestamp', 'diagnostics'}}
+    context = tvl_identity_context(manifest)
     if hashlib.sha256(encoded(context).encode()).hexdigest() != selected:
         raise ValueError('TVL manifest content does not match datasetId')
     tvl = TvlDataset(manifest)
