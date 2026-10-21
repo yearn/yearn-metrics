@@ -10,6 +10,19 @@ block-hash-pinned `accountant()` call. A split cannot be reused across reports.
 Both historical accountants are supported; unknown implementations remain
 unresolved until verified. Zero deductions without a split event are known zero.
 
+The two allowed accountants serve **only this yvUSD vault**. Their verified
+`report(address,uint256,uint256)` implementations require the caller to equal
+`address(asset)`; `asset` is immutable in `BaseStrategy`, and both constructor
+arguments bind it to `0x696d02Db93291651ED510704c9b286841d506987`:
+
+- [Accountant 0xaaafea48 verified source and constructor](https://eth.blockscout.com/address/0xaaafea48472f77563961cdb53291dedfb46f9040?tab=contract).
+- [Accountant 0xab9018a6 verified source and constructor](https://eth.blockscout.com/address/0xab9018a699003a777d690c156045dfc4a7ef3a96?tab=contract).
+
+Each has one `FeesReported` emission, inside that guarded report function.
+Consequently, a permitted accountant cannot emit a fee split for another vault;
+consuming pending splits at each yvUSD report is sufficient. Other emitters are
+ignored. This invariant must be reverified before adding another accountant.
+
 For an accepted split:
 
 - `total_fees_paid_raw` / `totalFeesPaidUsd` include actual management and performance fees.
@@ -78,3 +91,9 @@ receipts, not a claim about today's selected publication. The review replays the
 438 retained report/receipt pairs offline for raw reconciliation; the committed
 public fixtures and regression tests cover classification, valuation, export,
 query scoping and pairing without needing the operator database.
+
+Offline replay distinguishes `cached_distribution_evidence_missing_or_invalid`
+(missing or unreconciled accountant evidence) from
+`cached_allocator_inputs_missing_or_changed` (changed source report inputs).
+The former requires acquiring valid receipt/accountant evidence through indexing;
+offline replay itself never fetches it.
