@@ -135,9 +135,13 @@ yearn-data --env /path/to/.env --db neon tvl prepare-history \
 The command publishes the current inventory with the existing TVL policy, then
 copies unchanged prepared dates and recalculates newly rejected dates. Use the
 same `--current-bridge-policy` as the previous publication. Source history and
-totals must both be complete; every other accounting input must match. Quote
+totals must both be complete; every other accounting input and the effective
+accounting close must match. Quote
 rejections cannot be removed or conflict at the same chain/asset/date. The old
-publication remains intact. Without `--previous-dataset-id`, preparation retains
+publication remains intact. Evidence-only metadata updates copy all dates without
+recalculation. On Postgres, full preparation and repair share the single-builder
+lock; an overlapping build reports that preparation is already running.
+Without `--previous-dataset-id`, preparation retains
 its full-history behavior.
 
 The API reads prepared values without reconstructing raw snapshots and positions

@@ -351,3 +351,35 @@ def test_real_postgres_incremental_price_repair_preserves_source(pg,tmp_path):
     chart=TvlDataset(manifest).history(interval='daily')['chart']
     assert chart[0].get('Ethereum') is None and chart[1]['Ethereum']==300
     assert prepare_price_repair(TvlDataset(manifest),previous)['status']=='already-prepared'
+
+
+def test_real_postgres_repair_uses_full_preparation_builder_lock(pg,tmp_path):
+    from copy import deepcopy
+    import threading
+    from test_tvl_api import run,DAY,PARENT
+    from yearn_data.tvl_api import TvlStore,TvlDataset
+    from yearn_data.tvl_history_cache import prepare,prepare_price_repair,totals_ready
+    conn,_=pg;init_db(conn)
+    run(conn,1,DAY,[(PARENT,'100')]);run(conn,2,DAY+86400,[(PARENT,'200')])
+    previous=TvlStore('neon',tmp_path/'publication').get();prepare(previous)
+    manifest=deepcopy(previous.manifest);manifest['datasetId']='f'*64
+    manifest['priceRejections'].append({'chainId':1,'asset':'0x'+'aa'*20,
+        'timestamp':DAY,'priceUsd':'10','reason':'fixture'})
+    entered=threading.Event();release=threading.Event();errors=[]
+    def pause(message):
+        entered.set()
+        if not release.wait(10):raise RuntimeError('builder test timed out')
+    def build():
+        try:prepare(TvlDataset(manifest),progress=pause)
+        except BaseException as error:errors.append(error)
+    worker=threading.Thread(target=build,daemon=True);worker.start()
+    try:
+        assert entered.wait(5),'full builder never acquired its lock'
+        with pytest.raises(ValueError,match='TVL chart preparation is already running'):
+            prepare_price_repair(TvlDataset(manifest),previous)
+    finally:
+        release.set();worker.join(10)
+    assert not worker.is_alive() and not errors
+    assert totals_ready(TvlDataset(manifest))
+    chart=TvlDataset(manifest).history(interval='daily')['chart']
+    assert chart[0].get('Ethereum') is None and chart[1]['Ethereum']==200
