@@ -80,3 +80,19 @@ def test_product_receipt_failure_retains_reason_and_normal_report(product):
     target=results[case['report']['log_index']]
     assert target['status']=='unresolved' and target['reason']=='receipt_unavailable_or_invalid'
     assert results[case['report']['log_index']+1]['status']=='ok'
+
+
+@pytest.mark.parametrize('damage', ['missing', 'invalid', 'inputs'])
+def test_product_offline_replay_reason_identifies_evidence_gap(product, damage):
+    conn,case,_,name=product;assert index(conn,case)==1
+    evidence=json.loads(conn.execute('SELECT evidence_json FROM canonical_fee_reports').fetchone()[0])
+    if damage=='missing':
+        evidence.pop(name)
+    elif damage=='invalid':
+        evidence[name]['receipt']['status']=0
+    else:
+        evidence['allocator_inputs']['total_fees_raw']='123'
+    conn.execute('UPDATE canonical_fee_reports SET evidence_json=?',(json.dumps(evidence),));conn.commit()
+    assert recompute_canonical_fees(conn,'formulas')['unavailable']==1
+    reason='cached_allocator_inputs_missing_or_changed' if damage=='inputs' else 'cached_distribution_evidence_missing_or_invalid'
+    assert tuple(conn.execute('SELECT accounting_json,reason FROM canonical_fee_reports').fetchone())==(None,reason)
