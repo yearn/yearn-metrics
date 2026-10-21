@@ -127,6 +127,8 @@ def test_registered_route_is_checked_without_invalidating_other_vaults(monkeypat
 
     # A bad Finance route cannot erase independent explicit curation membership.
     monkeypatch.setattr(analytics_collect, 'Reader', lambda chain: reader)
+    # These route fixtures provide complete queue evidence, including observed counts.
+    for address,row in active.items():row['strategiesCount']=len(debts[address])
     monkeypatch.setattr(analytics_collect, 'default_debts', lambda *args: debts)
     monkeypatch.setattr(analytics_collect, 'CURATION_CHAINS', {10: 'optimism'})
     rules['explicit'][10].add(PARENT)
@@ -194,6 +196,8 @@ def test_ethereum_remote_deduction_and_failed_evidence(monkeypatch, sender_prese
         position = {'chain_id': 1, 'parent': parent, 'strategy': sender, 'child_chain_id': 747474, 'child': child}
         assert finance_overlap_status(position, recognized) == 'handled'
 
+    # These route fixtures provide complete queue evidence, including observed counts.
+    for address,row in active.items():row['strategiesCount']=len(debts[address])
     monkeypatch.setattr(analytics_collect, 'default_debts', lambda *args: debts)
     rules = policy()
     rules['explicit'][1] = set()

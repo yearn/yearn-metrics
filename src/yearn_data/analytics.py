@@ -16,7 +16,7 @@ from .tvl_api import CHAINS, encoded, key, money
 
 DAY = 86400
 YEAR = 365 * DAY
-VERSION = 'powerglove-analytics-13'
+VERSION = 'powerglove-analytics-16'
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS analytics_inputs (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, observed_at INTEGER NOT NULL,
@@ -111,6 +111,7 @@ def fee_stack(rows, positions, configurations):
         row=by_key[identity]; cfg=configs.get(identity,{})
         perf,mgmt=cfg.get('performanceFee'),cfg.get('managementFee')
         complete = not any(x['parent']==list(identity) for x in issues)
+        truncated=[]
         if identity in visited or len(visited)>=10:
             complete=False
             children=[]
@@ -121,7 +122,12 @@ def fee_stack(rows, positions, configurations):
             for child,debt,strategy in sorted(by_parent[identity]):
                 child_gross=by_key[child]['tvl_usd']
                 if child_gross is None:complete=False;continue
-                allocated=min(remaining,debt*share,float(child_gross))
+                requested=min(debt*share,float(child_gross))
+                allocated=min(remaining,requested)
+                if allocated<requested:
+                    complete=False
+                    truncated.append({'child':list(child),'strategy':strategy,
+                                      'requestedCapitalUsd':requested,'attributedCapitalUsd':allocated})
                 if allocated<=0:continue
                 remaining-=allocated
                 node=build(child,allocated,visited|{identity})
@@ -137,7 +143,7 @@ def fee_stack(rows, positions, configurations):
                          'contractFamily':cfg.get('contractFamily') or (row.get('version') if row.get('version') in ('v1','v2','morpho-v1','morpho-v2','erc4626') else None)},
                 'feeAvailability':{'state':'available' if fee_known else 'unavailable'},
                 'capitalUsd':capital,'perfFee':perf,'mgmtFee':mgmt,'children':children,
-                'availability':{'state':'available' if complete else 'partial'}}
+                'availability':{'state':'available' if complete else 'partial','truncatedAllocations':truncated}}
     def effective(root):
         leaves=[]
         def walk(node,product,management):
@@ -278,8 +284,13 @@ def profitability(financial, rows, history, configurations, cutoff, chain_id=Non
         for identity in sorted({v[field] for v in vaults}):
             items=[v for v in vaults if v[field]==identity];valid=[v for v in items if v['annualizedFeeRevenue'] is not None]
             capital=sum(v['timeWeightedTvlUsd'] for v in valid);annual=sum(v['annualizedFeeRevenue'] for v in valid)
+            fee_coverage=coverage(items,'totalFeeRevenue')
+            fee_coverage['complete']=sum(v['availability']['fees']['state']=='available' for v in items)
+            if fee_coverage['known'] and fee_coverage['complete']<len(items):fee_coverage['state']='partial'
             result.append(({'chainId':identity,'chain':CHAINS.get(identity,str(identity))} if field=='chainId' else {'category':identity})|
-                          {'tvl':amount(items,'tvlUsd'),'fees':amount(items,'totalFeeRevenue'),'feeYield':ratio(annual,capital),'vaultCount':len(items)})
+                          {'tvl':amount(items,'tvlUsd'),'fees':amount(items,'totalFeeRevenue'),'feeYield':ratio(annual,capital),'vaultCount':len(items),
+                           'availability':{'tvl':coverage(items,'tvlUsd'),'fees':fee_coverage,
+                                           'feeYield':coverage(items,'annualizedFeeRevenue')}})
         return result
     annual=sum(v['annualizedFeeRevenue'] for v in eligible) if eligible else None
     gross_capital=sum(v['timeWeightedTvlUsd'] for v in eligible) if eligible else None

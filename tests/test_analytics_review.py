@@ -280,6 +280,7 @@ def test_kong_chain_failure_retains_fee_retry_evidence(tmp_path,monkeypatch):
     old=[{'chainId':chain,'address':address,'performanceFee':1000,'managementFee':0,
           'fixedRateSupported':True,'availability':'available','observedAt':1} for chain,address in ((1,A),(10,B))]
     put_input(conn,'fee-config',{'vaults':old},observed_at=1)
+    put_input(conn,'membership',{'vaults':[{'chainId':chain,'address':a,'included':True} for chain,a in ((1,A),(10,B))]},observed_at=1)
     monkeypatch.setattr(collect.time,'time',lambda:2)
     def fetch(url):
         if '/vaults/1?' in url:raise requests.RequestException('offline fixture')
@@ -291,7 +292,9 @@ def test_kong_chain_failure_retains_fee_retry_evidence(tmp_path,monkeypatch):
     monkeypatch.setattr(collect,'curator_factories',lambda source:[])
     monkeypatch.setattr(collect,'observed_configs',lambda chain,local,declared:[r|{'fixedRateSupported':True} for r in declared])
     monkeypatch.setattr(collect,'membership_chain',lambda chain,local,*args:[{'chainId':chain,'address':r['address'],'included':True} for r in local])
-    collect.collect(db,progress=lambda message:None)
+    summary=collect.collect(db,progress=lambda message:None)
+    assert summary['configuredVaults']==summary['verifiedMembershipVaults']==2
+    assert summary['attemptCoverage']=={'configuredVaults':1,'verifiedMembershipVaults':1}
     latest=selected_input(conn,'fee-config')
     assert latest['status']=='partial'
     rows={(r['chainId'],r['address']):r for r in latest['body']['vaults']}
@@ -303,3 +306,35 @@ def test_kong_chain_failure_retains_fee_retry_evidence(tmp_path,monkeypatch):
     assert retained['unavailableRetry']['failureKind']=='acquisition_failed'
     assert fresh['performanceFee']==900 and fresh['observedAt']==2
     assert not fresh.get('retainedAfterUnavailableRetry')
+
+
+@pytest.mark.parametrize('child_capital', [0,25,100])
+def test_stack_truncation_is_partial_but_known_zero_child_is_complete(child_capital):
+    points=[{'chain_id':1,'vault':a,'tvl_usd':capital,'external_tvl_usd':capital if a==A else 0}
+            for a,capital in ((A,100),(B,100),(C,child_capital))]
+    configurations={'vaults':[{'chainId':1,'address':a,'performanceFee':1000,'managementFee':0} for a in (A,B,C)]}
+    positions=[{'chain_id':1,'parent':A,'child':a,'strategy':a,'debt_usd':100,'status':'ok'} for a in (B,C)]
+    result=fee_stack(points,positions,configurations)['chains'][0]
+    if child_capital:
+        assert result['root']['availability']['state']=='partial'
+        assert result['effectivePerfFee'] is None and result['effectiveMgmtFee'] is None
+        assert result['root']['availability']['truncatedAllocations']==[{
+            'child':[1,C],'strategy':C,'requestedCapitalUsd':child_capital,'attributedCapitalUsd':0}]
+    else:
+        assert result['root']['availability']['state']=='available'
+        assert result['effectivePerfFee']==pytest.approx(1900)
+        assert result['root']['availability']['truncatedAllocations']==[]
+
+
+def test_profitability_groups_explain_partial_subtotals():
+    rows=[{'chain_id':1,'vault':a,'category':'v3','tvl_usd':value} for a,value in ((A,100),(B,None),(C,0))]
+    fees=[{'chain_id':1,'vault_address':a,'block_timestamp':DAY,'total_fees_paid_usd':fee}
+          for a,fee in ((A,20),(A,None),(C,0))]
+    financial=SimpleNamespace(fees=fees,earnings=[],vault_names={})
+    result=profitability(financial,rows,{}, {},YEAR)
+    for group in (result['byChain'][0],result['byCategory'][0]):
+        assert group['vaultCount']==3 and group['tvl']==100 and group['fees']==20
+        assert group['availability']['tvl']=={'state':'partial','known':2,'expected':3}
+        assert group['availability']['fees']=={'state':'partial','known':2,'expected':3,'complete':1}
+        assert group['availability']['feeYield']=={'state':'unavailable','known':0,'expected':3}
+    assert result['vaults'][0]['availability']['fees']=={'state':'partial','known':1,'expected':2}
