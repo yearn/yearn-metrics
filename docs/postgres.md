@@ -139,8 +139,12 @@ totals must both be complete; every other accounting input and the effective
 accounting close must match. Quote
 rejections cannot be removed or conflict at the same chain/asset/date. The old
 publication remains intact. Evidence-only metadata updates copy all dates without
-recalculation. On Postgres, full preparation and repair share the single-builder
-lock; an overlapping build reports that preparation is already running.
+recalculation. Copied and recomputed dates are bounded by the publication close;
+unpublished partial closes are excluded from the repair receipt.
+On Postgres, full preparation and repair share the single-builder lock. A held
+lock reports that preparation is already running. If another builder finishes
+before the repair writes, its complete output is reused; an interrupted total
+build can be retried. An older cache version requires full preparation.
 Without `--previous-dataset-id`, preparation retains
 its full-history behavior.
 
