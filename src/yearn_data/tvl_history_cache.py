@@ -222,5 +222,7 @@ def prepare_price_repair(dataset, previous):
         conn.executemany('INSERT INTO tvl_chart_totals VALUES (?,?,?,?,?,?)',sums)
         count=conn.execute('SELECT COUNT(*) FROM tvl_chart_rows WHERE dataset_id=?',(dataset.id,)).fetchone()[0]
         conn.execute('INSERT INTO tvl_chart_publications VALUES (?,?,?,?)',(dataset.id,VERSION+'+totals',count,int(time.time())))
+        if hasattr(conn,'raw'):
+            conn.raw.execute('ANALYZE tvl_chart_rows')
     dataset._prepared=True
     return {'status':'prepared','datasetId':dataset.id,'recomputedDates':list(changed),'rows':count}
