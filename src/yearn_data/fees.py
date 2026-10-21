@@ -306,13 +306,13 @@ def index_canonical_fees(conn, chains=None, limit=None, retry_unresolved=False, 
             candidate, decision = None, None
             evidence = {'report_log_index':report['log_index'], 'report_inputs':report_inputs(report)}
             try:
-                if report['version']=='v3':
+                if report['version']=='v3' and is_yvusd(dict(report)) and receipt_error:
+                    reason = receipt_error
+                elif report['version']=='v3':
                     if is_yvusd(dict(report)):
                         from .yvusd_fees import accounting
-                        if receipt_error:
-                            raise ValueError(receipt_error)
                         previous = json.loads(report['previous_evidence'] or '{}').get('yvusd')
-                        if previous and previous.get('receipt', {}).get('blockHash') == _hex(receipt['blockHash']):
+                        if previous and not refresh_evidence and previous.get('receipt', {}).get('blockHash') == _hex(receipt['blockHash']):
                             accountant = previous['accountant']
                         else:
                             from eth_utils import keccak
@@ -476,7 +476,8 @@ def _write_canonical_outputs(conn, run_id):
             'block_number':r['block_number'],'block_timestamp':r['block_timestamp'],'asset':r['asset'],
             'asset_decimals':r['asset_decimals'],'status':state,'reason':r['reason'],
             'contract_family':r['contract_family'],'api_version':r['api_version'],'method_version':r['method_version'],
-            **{k:None for k in _amounts(0,0,0)}, **(amounts or {}),
+            **{k:None for k in _amounts(0,0,0)},
+            'locker_bonus_raw':None, 'reported_total_fees_raw':None, **(amounts or {}),
             'evidence_json':r['evidence_json']}
         evidence = json.loads(r['evidence_json']) if r['evidence_json'] else {}
         reconstruction = json.loads(r['candidate_json']) if r['candidate_json'] else {}

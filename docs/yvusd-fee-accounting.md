@@ -24,7 +24,7 @@ the same known-amount summation policy as existing component fields.
 Acceptance requires the split sum to equal the final vault deduction exactly,
 with zero protocol fees. Capped, rounded, protocol-charged, missing, or ambiguous
 splits remain unresolved instead of receiving a guessed proportional allocation.
-All 438 reports through October 8, 2026 pass this rule: 395 positive deductions
+The retained October 8, 2026 reconciliation contains 438 reports that pass this rule: 395 positive deductions
 and 43 zero deductions. There are two historical accountant contracts.
 The raw totals are 1.502736 USDC actual fees and 30,213.781411 USDC locker yield.
 
@@ -54,3 +54,27 @@ The exact USD totals are **1.5020913785179192510715** actual fees and
 **30208.3417791514335400091614** locker distributions, reconciling to the
 previous **30209.8438705299514592602329** deduction total. All non-yvUSD
 fee-event fields were compared against run 16 and remain unchanged.
+
+
+## Review and unavailable values
+
+A known zero fee remains zero even when its positive locker distribution cannot
+be valued. Such a row reports `zero_fee_unpriced_distribution` (or
+`metadata_unavailable` for missing asset metadata). Grouped output counts
+`unpriced_distribution_events` and leaves pricing/fee-USD completeness false
+until those distributions are valued. Optional component fields absent from
+unrelated contracts do not imply missing positive distributions.
+
+Canonical CSV exports include `locker_bonus_raw` and `reported_total_fees_raw`
+regardless of row order, with blank values for contracts where they do not apply.
+Malformed report payloads remain unresolved in both indexing and offline replay.
+Receipt acquisition failures retain `receipt_unavailable_or_invalid`; normal V3
+reports in the same transaction can still use their own report inputs. An explicit
+`--refresh-evidence` also reacquires the historical accountant at the receipt block
+hash, while ordinary retries can reuse retained evidence.
+
+The run IDs, dataset ID and USD reconciliation above are historical operator
+receipts, not a claim about today's selected publication. The review replays the
+438 retained report/receipt pairs offline for raw reconciliation; the committed
+public fixtures and regression tests cover classification, valuation, export,
+query scoping and pairing without needing the operator database.
