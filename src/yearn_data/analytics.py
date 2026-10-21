@@ -16,7 +16,7 @@ from .tvl_api import CHAINS, encoded, key, money
 
 DAY = 86400
 YEAR = 365 * DAY
-VERSION = 'powerglove-analytics-9'
+VERSION = 'powerglove-analytics-12'
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS analytics_inputs (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, observed_at INTEGER NOT NULL,
@@ -210,6 +210,13 @@ def capital_period(points, start, end):
             'eligible':days>=90 and days/expected>=0.8}
 
 
+def history_covers_events(points, events, start, end):
+    """Never annualize events from before the supported capital history."""
+    earliest=min((r['block_timestamp'] for r in events if start<=r['block_timestamp']<end),default=end)
+    first=min((t for t,v in points if start<=t<end and v is not None and float(v)>=0),default=end)
+    return earliest>=first-DAY
+
+
 def profitability(financial, rows, history, configurations, cutoff, chain_id=None):
     start=cutoff-YEAR; middle=start+(cutoff-start)//2
     current={(r['chain_id'],r['vault'].lower()):r for r in rows}
@@ -225,9 +232,7 @@ def profitability(financial, rows, history, configurations, cutoff, chain_id=Non
         fee_rows=fees[identity];gain_rows=gains[identity];points=history.get(identity,[])
         cap=capital_period(points,start,cutoff)
         eligibility=cap['eligible'] and cap['average'] is not None and cap['average']>0
-        earliest=min((r['block_timestamp'] for r in fee_rows+gain_rows),default=cutoff)
-        first=min((t for t,v in points if start<=t<cutoff and v is not None),default=cutoff)
-        if earliest<first-DAY:eligibility=False
+        eligibility=eligibility and history_covers_events(points,fee_rows+gain_rows,start,cutoff)
         fee=amount(fee_rows,'total_fees_paid_usd') if fee_rows else None;gain=amount(gain_rows,'gross_gain_usd') if gain_rows else None
         fcoverage=coverage(fee_rows,'total_fees_paid_usd');gcoverage=coverage(gain_rows,'gross_gain_usd')
         if not fee_rows:fcoverage={'state':'unavailable','known':0,'expected':0,'reason':'no fee observations in calculation period'}
@@ -238,7 +243,9 @@ def profitability(financial, rows, history, configurations, cutoff, chain_id=Non
         def period_yield(a,b):
             capital=capital_period(points,a,b);reports=[r for r in fee_rows if a<=r['block_timestamp']<b]
             value=amount(reports,'total_fees_paid_usd')
-            if not capital['eligible'] or not reports or coverage(reports,'total_fees_paid_usd')['state']!='available':return None
+            if (not capital['eligible'] or not reports or
+                not history_covers_events(points,fee_rows+gain_rows,a,b) or
+                coverage(reports,'total_fees_paid_usd')['state']!='available'):return None
             return ratio(value*365/capital['expectedDays'],capital['average']) if value is not None else None
         previous=period_yield(start,middle);recent=period_yield(middle,cutoff)
         delta=recent-previous if previous is not None and recent is not None else None
@@ -347,8 +354,9 @@ def owned_comparison(tvl, rows, snapshots):
     ours=money(rows,'external_tvl_usd')
     difference=ours-total if ours is not None and total is not None else None
     by_chain=[]
-    for chain in sorted(set(CHAINS.values())|{name for r in snapshots for name in r.get('byChain',{})}):
-        local=money([r for r in rows if CHAINS.get(r['chain_id'])==chain],'external_tvl_usd')
+    local_chains={CHAINS.get(r['chain_id'],f"Chain {r['chain_id']}") for r in rows}
+    for chain in sorted(set(CHAINS.values())|local_chains|{name for r in snapshots for name in r.get('byChain',{})}):
+        local=money([r for r in rows if CHAINS.get(r['chain_id'],f"Chain {r['chain_id']}")==chain],'external_tvl_usd')
         external=sum(r.get('byChain',{}).get(chain,0) for r in snapshots) if available else None
         by_chain.append({'chain':chain,'ours':local,'defillama':external,'difference':local-external if local is not None and external is not None else None})
     categories=[]
@@ -398,7 +406,7 @@ def analytics_response(store,url):
         payload=publication[paths[request.path]]
         if paths[request.path]=='profitability':
             chain=query.get('chainId',['None'])[0]
-            if chain!='None' and not re.fullmatch('[1-9][0-9]*',chain):raise ValueError('chainId must be a positive integer')
+            if 'chainId' in query and not re.fullmatch('[1-9][0-9]*',chain):raise ValueError('chainId must be a positive integer')
             if chain not in payload:raise ValueError('chainId is not in the selected publication')
             payload=payload[chain]
         if 'includeVaultBreakdown' in query and query['includeVaultBreakdown'][0] not in ('true','false'):raise ValueError('includeVaultBreakdown must be true or false')
