@@ -109,6 +109,9 @@ def test_rejected_product_accountant_has_refresh_diagnostic(product):
     assert fees.index_canonical_fees(conn,retry_unresolved=True,receipt_fetcher=fetch)==1
     assert tuple(conn.execute('SELECT status,reason FROM canonical_fee_reports').fetchone())==('unresolved','rejected_'+name+'_accountant')
     assert json.loads(conn.execute('SELECT evidence_json FROM canonical_fee_reports').fetchone()[0])[name]['accountant']==bad
+    for mode in ('formulas','policy'):
+        assert recompute_canonical_fees(conn,mode)['unavailable']==1
+        assert conn.execute('SELECT reason FROM canonical_fee_reports').fetchone()[0]=='rejected_'+name+'_accountant'
     assert fees.index_canonical_fees(conn,retry_unresolved=True,refresh_evidence=True,receipt_fetcher=fetch)==1
     row=conn.execute('SELECT status,reason,evidence_json FROM canonical_fee_reports').fetchone()
     assert row['status']=='ok' and row['reason'] is None
