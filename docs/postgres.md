@@ -145,6 +145,8 @@ On Postgres, full preparation and repair share the single-builder lock. A held
 lock reports that preparation is already running. If another builder finishes
 before the repair writes, its complete output is reused; an interrupted total
 build can be retried. An older cache version requires full preparation.
+A successful Postgres repair refreshes chart-table planner statistics before
+committing, matching full preparation after its bulk load.
 Without `--previous-dataset-id`, preparation retains
 its full-history behavior.
 
