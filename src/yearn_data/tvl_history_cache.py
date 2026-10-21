@@ -167,8 +167,16 @@ def prepare_price_repair(dataset, previous):
     after={k:v for k,v in dataset.manifest.items() if k not in excluded}
     if encoded(before)!=encoded(after):
         raise ValueError('price repair must preserve all other publication inputs')
-    old={(r['chainId'],r['asset'].lower(),r['timestamp'],r['priceUsd']) for r in previous.manifest.get('priceRejections',[])}
-    new={(r['chainId'],r['asset'].lower(),r['timestamp'],r['priceUsd']) for r in dataset.manifest.get('priceRejections',[])}
+    def rejection_set(manifest):
+        quotes={}
+        for row in manifest.get('priceRejections',[]):
+            coordinate=(row['chainId'],row['asset'].lower(),row['timestamp'])
+            if coordinate in quotes and quotes[coordinate]!=row['priceUsd']:
+                raise ValueError('price repair cannot use conflicting quotes at one rejection coordinate')
+            quotes[coordinate]=row['priceUsd']
+        return {(*coordinate,price) for coordinate,price in quotes.items()}
+    old=rejection_set(previous.manifest)
+    new=rejection_set(dataset.manifest)
     if not old<=new:raise ValueError('price repair cannot remove previous rejections')
     changed=tuple(sorted({r[2] for r in new-old}))
     if ready(dataset):
@@ -185,7 +193,7 @@ def prepare_price_repair(dataset, previous):
             repaired.append((dataset.id,timestamp,*values))
             for mode,field in [('raw','tvl_usd'),('external','external_tvl_usd')]:
                 if row.get(field) is None:continue
-                for group,series in [('chain',CHAINS.get(row['chain_id'],str(row['chain_id']))),('category',row.get('category',row['version']))]:
+                for group,series in [('chain',CHAINS.get(row['chain_id'],f"Chain {row['chain_id']}")),('category',row.get('category',row['version']))]:
                     grouped[(group,mode,series)].append(Decimal(str(row[field])))
         with localcontext() as ctx:
             ctx.prec=78
