@@ -180,7 +180,9 @@ def prepare_price_repair(dataset, previous):
     old=rejection_set(previous.manifest)
     new=rejection_set(dataset.manifest)
     if not old<=new:raise ValueError('price repair cannot remove previous rejections')
-    changed=tuple(sorted({r[2] for r in new-old}))
+    close=dataset.as_of()
+    published_dates={date for date in dataset.dates() if date<=close}
+    changed=tuple(sorted({r[2] for r in new-old}&published_dates))
     if ready(dataset):
         prepare_totals(dataset)
         return {'status':'already-prepared','datasetId':dataset.id}
@@ -204,11 +206,19 @@ def prepare_price_repair(dataset, previous):
         if hasattr(conn,'raw'):
             if not conn.execute('SELECT pg_try_advisory_xact_lock(743219889)').fetchone()[0]:
                 raise ValueError('TVL chart preparation is already running')
+        existing=conn.execute('SELECT version FROM tvl_chart_publications WHERE dataset_id=?',(dataset.id,)).fetchone()
+        if existing:
+            if existing['version']==VERSION+'+totals':
+                dataset._prepared=True
+                return {'status':'already-prepared','datasetId':dataset.id}
+            if existing['version']==VERSION:
+                raise ValueError('TVL chart preparation is already running; retry to complete totals')
+            raise ValueError('existing chart rows require full history preparation')
         marks=','.join('?' for _ in changed)
         unchanged=f' AND timestamp NOT IN ({marks})' if changed else ''
-        conn.execute(f'INSERT INTO tvl_chart_rows SELECT ?,timestamp,{",".join(FIELDS)} FROM tvl_chart_rows WHERE dataset_id=?{unchanged}',(dataset.id,previous.id,*changed))
+        conn.execute(f'INSERT INTO tvl_chart_rows SELECT ?,timestamp,{",".join(FIELDS)} FROM tvl_chart_rows WHERE dataset_id=? AND timestamp<=?{unchanged}',(dataset.id,previous.id,close,*changed))
         conn.executemany('INSERT INTO tvl_chart_rows VALUES (?,?,?,?,?,?,?,?,?,?)',repaired)
-        conn.execute(f'INSERT INTO tvl_chart_totals SELECT ?,timestamp,group_by,mode,series,value FROM tvl_chart_totals WHERE dataset_id=?{unchanged}',(dataset.id,previous.id,*changed))
+        conn.execute(f'INSERT INTO tvl_chart_totals SELECT ?,timestamp,group_by,mode,series,value FROM tvl_chart_totals WHERE dataset_id=? AND timestamp<=?{unchanged}',(dataset.id,previous.id,close,*changed))
         conn.executemany('INSERT INTO tvl_chart_totals VALUES (?,?,?,?,?,?)',sums)
         count=conn.execute('SELECT COUNT(*) FROM tvl_chart_rows WHERE dataset_id=?',(dataset.id,)).fetchone()[0]
         conn.execute('INSERT INTO tvl_chart_publications VALUES (?,?,?,?)',(dataset.id,VERSION+'+totals',count,int(time.time())))
