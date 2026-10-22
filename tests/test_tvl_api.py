@@ -282,22 +282,6 @@ def test_curation_and_audit_require_positive_allocator_evidence(source):
     assert audit[PARENT]['strategies'][0]['debtUsd'] == 50
 
 
-def test_comparison_uses_native_totals_only(source, tmp_path):
-    conn, path, root = source
-    run(conn,1,DAY,[(PARENT,'100'),(CHILD,'100')],[(CHILD,'50')])
-    reference_path = 'staging'
-    with connect('staging') as reference:
-        reference.execute('CREATE TABLE defillama_snapshots (id INTEGER,protocol TEXT,chain TEXT,tvl_usd REAL,timestamp INTEGER)')
-        reference.executemany('INSERT INTO defillama_snapshots VALUES (?,?,?,?,?)',
-                             [(1,'yearn-finance',None,120,DAY),(2,'yearn-finance','Ethereum',120,DAY),
-                              (3,'yearn-curating',None,10,DAY),(4,'yearn-curating','Ethereum',10,DAY)])
-    result = TvlStore(path,root).get().comparison(reference_path)
-    assert result['ourTotal'] == 150
-    assert result['defillamaTotal'] == 130
-    assert result['difference'] == 20
-    assert result['byChain'] == [{'chain':'Ethereum','ours':150,'defillama':130,'difference':20}]
-
-
 def test_rejected_provider_quote_is_not_served_or_used_as_reference(source, monkeypatch):
     import yearn_data.tvl_api as api
     conn, path, root = source

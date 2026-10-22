@@ -2,9 +2,9 @@
 
 The read-only pairing server can serve TVL alongside fees and reported earnings from
 Postgres (`neon` or `staging`). Powerglove's `codex/stats-page` uses this source for current TVL,
-history, constant-price history, curation products, the vault audit tree and the
-Yearn side of the DefiLlama comparison. With `--analytics`, prepared fee-stack,
-profitability and DefiLlama membership/comparison results also come from Postgres.
+history, constant-price history, curation products and the vault audit tree.
+With `--analytics`, prepared fee-stack, profitability and DefiLlama
+membership/comparison results also come from Postgres.
 See [owned Powerglove analytics](powerglove-analytics.md) for the complete cutover.
 Unused supplementary graph routes retain their fallback configuration.
 
@@ -111,7 +111,11 @@ addressable after a subsequent collection publishes another one.
 | `/api/tvl/curation-products` | Morpho and positively identified V3 allocator products |
 | `/api/tvl/graph` | Dated vault/holder/child flows with the same TVL accounting |
 | `/api/audit/tree` | Dated vault/strategy positions and current bridge exclusions |
-| `/api/comparison` | Native Yearn figures versus stored DefiLlama references |
+
+`/api/comparison` belongs to the prepared `--analytics` surface; it is not
+a TVL pairing route. See [owned analytics comparison](powerglove-analytics.md)
+for its response contract and `publicationId` pin. Without `--analytics`, this
+server returns 404 for comparison requests.
 
 Filters include `datasetId`, `chainId`, inclusive `from`/`to`, `groupBy`
 (`chain`, `category`, `type`, `vault`), `mode` (`external`, `raw`) and `interval`

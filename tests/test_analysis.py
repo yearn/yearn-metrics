@@ -411,7 +411,10 @@ def test_vault_volume_sums_user_and_strategy_gross_flows(tmp_path):
     assert Decimal(output["gross_total_volume_usd"]) == Decimal("3.750")
 
 
-def test_vault_fees_uses_v3_report_fee_fields(tmp_path):
+@pytest.mark.parametrize('protocol_raw,total_raw,refunds_raw', [
+    (1000000,2500000,500000), (10**18,0,0), (0,10**18,0), (0,0,10**18),
+])
+def test_vault_fees_uses_v3_report_fee_fields(tmp_path,protocol_raw,total_raw,refunds_raw):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -436,9 +439,9 @@ def test_vault_fees_uses_v3_report_fee_fields(tmp_path):
         VALUES (1, 'v3', '0x0000000000000000000000000000000000000001',
                 '0x0000000000000000000000000000000000000003',
                 '0xabc', 0, 10, 100, '0x0000000000000000000000000000000000000002',
-                6, '10000000', '0', '10000000', '0', '1000000', '2500000',
-                '500000', '{}')
-        """
+                6, '10000000', '0', '10000000', '0', ?, ?, ?, '{}')
+        """,
+        (str(protocol_raw),str(total_raw),str(refunds_raw)),
     )
     conn.execute(
         """
@@ -455,10 +458,10 @@ def test_vault_fees_uses_v3_report_fee_fields(tmp_path):
     ).fetchone()
     output = from_json(row["row_json"])
     assert output["events"] == 1
-    assert Decimal(output["v3_protocol_fees_usd"]) == Decimal("2.00")
-    assert Decimal(output["v3_total_fees_usd"]) == Decimal("5.00")
-    assert Decimal(output["v3_total_refunds_usd"]) == Decimal("1.00")
-    assert Decimal(output["total_fees_usd"]) == Decimal("5.00")
+    assert Decimal(output["v3_protocol_fees_usd"]) == Decimal(protocol_raw)*2/10**6
+    assert Decimal(output["v3_total_fees_usd"]) == Decimal(total_raw)*2/10**6
+    assert Decimal(output["v3_total_refunds_usd"]) == Decimal(refunds_raw)*2/10**6
+    assert Decimal(output["total_fees_usd"]) == Decimal(total_raw)*2/10**6
 
 
 @pytest.mark.parametrize('fee_raw',['3000000000000000000',str(2**255)])

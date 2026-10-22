@@ -607,43 +607,6 @@ class TvlDataset:
                 'potentialV2':{'grossTvlUsd':gross_v2,'knownPassThroughTvlUsd':passed,'incrementalTvlUsd':incremental,'vaultCount':len(v2),
                                'note':'Potential V2 product attribution remains separate from V3 and Morpho products'},'limitations':[], 'datasetId':self.id}
 
-    def comparison(self, reference_database):
-        """Only DefiLlama reference observations come from the external source."""
-        if reference_database is None:
-            raise ValueError('DefiLlama reference database is not configured')
-        summary = self.summary()
-        if summary['totalTvl'] is None:
-            raise ValueError('no available TVL total for comparison')
-        reference = {}
-        with closing(read_db(reference_database)) as conn:
-            for protocol in ('yearn-finance','yearn-curating'):
-                latest = conn.execute('SELECT timestamp FROM defillama_snapshots WHERE protocol=? ORDER BY id DESC LIMIT 1',(protocol,)).fetchone()
-                if latest is None:
-                    raise ValueError('no stored DefiLlama reference for '+protocol)
-                reference[protocol] = {row['chain'] or 'total':row['tvl_usd'] for row in conn.execute(
-                    'SELECT chain,tvl_usd FROM defillama_snapshots WHERE protocol=? AND timestamp=?',(protocol,latest[0]))}
-        dl_total = sum(reference[p]['total'] for p in reference)
-        by_chain = []
-        names = set(summary['tvlByChain']) | {c for rs in reference.values() for c in rs if c!='total'}
-        for name in sorted(names):
-            gross = summary['tvlByChain'].get(name,0)
-            ours = gross-summary['overlapByChain'].get(name,0)-summary['crossChainOverlapByChain'].get(name,0) if gross is not None else None
-            dl = sum(rs.get(name,0) for rs in reference.values())
-            by_chain.append({'chain':name,'ours':ours,'defillama':dl,'difference':ours-dl if ours is not None else None})
-        _, rows, _, _ = self.frames((self.as_of(),))[0]
-        categories = []
-        for label,protocol,curation in (('V1 + V2 + V3','yearn-finance',False),('Curation','yearn-curating',True)):
-            ours = money([r for r in rows if (r.get('category')=='curation')==curation],'external_tvl_usd')
-            dl = reference[protocol]['total']
-            categories.append({'category':label,'defillamaProtocol':protocol,'ours':ours,'defillama':dl,'difference':ours-dl if ours is not None else None})
-        return {'ourTotal':summary['totalTvl'],'defillamaTotal':dl_total,'difference':summary['totalTvl']-dl_total,
-                'differencePercent':(summary['totalTvl']/dl_total-1)*100 if dl_total else None,
-                'retiredTvl':summary['retiredVaultTvl'],'overlapDeducted':summary['overlapExcluded'],
-                'crossChainOverlap':summary['vaultBridgeExcluded'],'grossTvl':money(rows,'tvl_usd'),
-                'gapComponents':[],'retiredTvlByChain':{name:money([r for r in rows if CHAINS.get(r['chain_id'],f"Chain {r['chain_id']}")==name and not self.catalog.get(key(r),{}).get('active',1)],'tvl_usd') for name in summary['tvlByChain']},
-                'notes':[],'byChain':by_chain,'byCategory':categories,'datasetId':self.id}
-
-
 class TvlStore:
     def __init__(self, database, publication, *, current_bridge_policy='none', refresh_seconds=30, auto_publish=True):
         self.database, self.root = database, Path(publication)
