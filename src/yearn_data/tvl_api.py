@@ -645,10 +645,9 @@ class TvlDataset:
 
 
 class TvlStore:
-    def __init__(self, database, publication, *, current_bridge_policy='none', refresh_seconds=30, comparison_database=None, auto_publish=True):
+    def __init__(self, database, publication, *, current_bridge_policy='none', refresh_seconds=30, auto_publish=True):
         self.database, self.root = database, Path(publication)
         self.policy, self.refresh_seconds = current_bridge_policy, refresh_seconds
-        self.comparison_database = comparison_database
         self.auto_publish = auto_publish
         self.lock = threading.RLock()
         self.last_check = 0
@@ -688,7 +687,7 @@ class TvlStore:
 def tvl_response(store, url):
     request = urlsplit(url)
     paths = {'/api/tvl','/api/tvl/','/api/tvl/history/runs/latest','/api/tvl/history/runs/latest/constant-price',
-             '/api/tvl/curation-products','/api/tvl/graph','/api/audit/tree','/api/comparison'}
+             '/api/tvl/curation-products','/api/tvl/graph','/api/audit/tree'}
     if request.path not in paths:
         return 404, {'error':'Not found'}
     try:
@@ -736,8 +735,6 @@ def tvl_response(store, url):
             result = dataset.curation(chain_id)
         elif request.path == '/api/audit/tree':
             result = dataset.audit(chain_id)
-        elif request.path == '/api/comparison':
-            result = dataset.comparison(store.comparison_database)
         else:
             result = dataset.summary(chain_id)
         return 200, result

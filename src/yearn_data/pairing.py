@@ -344,7 +344,7 @@ def pairing_response(store, url):
 
 
 def serve_pairing(publication, *, host='127.0.0.1', port=3490, cors_origin=None,
-                  tvl_publication=None, current_bridge_policy='retired-registry', comparison_database=None,
+                  tvl_publication=None, current_bridge_policy='retired-registry',
                   published_tvl_only=False, analytics=False):
     if analytics and current_bridge_policy != 'retired-registry':
         raise ValueError('analytics bridge policy mismatch: prepared analytics require retired-registry')
@@ -354,7 +354,7 @@ def serve_pairing(publication, *, host='127.0.0.1', port=3490, cors_origin=None,
     if tvl_publication is not None:
         from .tvl_api import TvlStore, tvl_response
         tvl_store = TvlStore(dataset.database, tvl_publication, current_bridge_policy=current_bridge_policy,
-                             comparison_database=comparison_database, auto_publish=not published_tvl_only)
+                             auto_publish=not published_tvl_only)
 
     analytics_store = None
     if analytics:
@@ -367,7 +367,7 @@ def serve_pairing(publication, *, host='127.0.0.1', port=3490, cors_origin=None,
             try:
                 if analytics_store is not None and self.path.split('?')[0] in ('/api/analytics/publication','/api/fees/stack','/api/profitability','/api/comparison','/api/comparison/defillama-comparable'):
                     status, payload = analytics_response(analytics_store, self.path)
-                elif tvl_store is not None and (self.path.startswith('/api/tvl') or self.path.startswith('/api/audit/tree') or self.path.split('?')[0]=='/api/comparison'):
+                elif tvl_store is not None and (self.path.startswith('/api/tvl') or self.path.startswith('/api/audit/tree')):
                     status, payload = tvl_response(tvl_store, self.path)
                 else:
                     status, payload = pairing_response(store, self.path)

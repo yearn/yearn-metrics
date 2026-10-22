@@ -541,3 +541,42 @@ def test_curation_preserves_manifest_policy_over_packaged_inventory(source, poli
     assert dataset.graph()['totalTvlUsd'] == 160
     assert dataset.curation()['totalTvlUsd'] == 160
     assert {v['address'] for v in dataset.curation()['vaults']} == {parent, CHILD}
+
+
+@pytest.mark.parametrize('analytics_enabled', [False,True])
+def test_pairing_comparison_is_served_only_by_prepared_analytics(source,monkeypatch,analytics_enabled):
+    import inspect
+    import threading
+    from http.server import ThreadingHTTPServer
+    from types import SimpleNamespace
+    from urllib.error import HTTPError
+    from urllib.request import urlopen
+    from yearn_data import pairing, analytics
+    conn,database,publication=source
+    run(conn,1,DAY,[(PARENT,'100')])
+    store=TvlStore(database,publication)
+    assert tvl_response(store,'/api/comparison')[0]==404
+    assert 'comparison_database' not in inspect.signature(TvlStore).parameters
+    assert 'comparison_database' not in inspect.signature(pairing.serve_pairing).parameters
+    monkeypatch.setattr(pairing,'PairingStore',lambda _:SimpleNamespace(get=lambda:SimpleNamespace(database=database)))
+    monkeypatch.setattr(analytics,'AnalyticsStore',lambda _:SimpleNamespace(get=lambda:None))
+    monkeypatch.setattr(analytics,'analytics_response',lambda *_:(200,{'source':'prepared'}))
+    def create_server(address,handler):
+        server=ThreadingHTTPServer(('127.0.0.1',0),handler)
+        serve=server.serve_forever
+        def exercise():
+            thread=threading.Thread(target=serve,daemon=True);thread.start()
+            try:
+                url=f'http://127.0.0.1:{server.server_port}/api/comparison'
+                if analytics_enabled:
+                    with urlopen(url) as response:
+                        assert response.status==200 and json.load(response)=={'source':'prepared'}
+                else:
+                    with pytest.raises(HTTPError) as error:urlopen(url)
+                    assert error.value.code==404
+            finally:
+                server.shutdown();thread.join()
+        server.serve_forever=exercise
+        return server
+    monkeypatch.setattr(pairing,'ThreadingHTTPServer',create_server)
+    pairing.serve_pairing('unused',tvl_publication=publication,analytics=analytics_enabled)

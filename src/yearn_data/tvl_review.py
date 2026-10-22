@@ -18,6 +18,10 @@ class ReviewDataset(TvlDataset):
         super().__init__(manifest | {'datasetId': identity})
         points = deepcopy(rows)
         for row in points:
+            # Dated migration output adds a target even when the observation
+            # had none. Preserve unmarked targets acquired as raw evidence.
+            if row.get('bridge_migration_timestamp') is not None:
+                row.pop('bridge_target_chain', None)
             for field in ('overlap_usd','external_tvl_usd','bridge_excluded_usd','bridge_migration_timestamp'):
                 row.pop(field, None)
         points = [self.validate_price(row) for row in points]

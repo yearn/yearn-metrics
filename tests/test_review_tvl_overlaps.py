@@ -118,10 +118,32 @@ def test_review_reaccounts_stale_bridge_fields(source):
     rows[0].update(bridge_excluded_usd='100',bridge_target_chain=10,
                    bridge_migration_timestamp=DAY-1,external_tvl_usd='0')
     manifest=dataset.manifest|{'currentBridgePolicy':'none','bridgeMigrations':[]}
+    # A real target-chain observation makes stale routing affect completeness.
+    rows.append(dict(rows[0],chain_id=10,vault='0x'+'88'*20,tvl_usd='50',
+                     bridge_target_chain=None,bridge_excluded_usd=None,bridge_migration_timestamp=None))
     saved=ReviewDataset(manifest,DAY,rows,positions)
     _,revised,_,diagnostics=saved.frames((DAY,))[0]
     assert revised[0]['external_tvl_usd']=='100'
-    assert diagnostics['external_tvl_usd']=='100'
+    assert diagnostics['external_tvl_usd']=='150'
+    assert diagnostics['status']=='complete'
+    assert 'bridge_migration_timing_unverified' not in diagnostics['issues']
+    assert 'bridge_target_chain' not in revised[0]
     graph=saved.graph()
     assert not graph['bridgeExclusions']
-    assert graph['totalTvlUsd']==100
+    assert graph['totalTvlUsd']==150
+
+
+def test_review_preserves_an_observed_bridge_target(source):
+    from yearn_data.tvl_review import ReviewDataset
+    conn,database,publication=source
+    run(conn,1,DAY,[(PARENT,'100')])
+    dataset=TvlStore(database,publication).get()
+    _,rows,positions,_=dataset.frames((DAY,))[0]
+    # No dated migration marker: this target is raw evidence, not an output field.
+    rows[0]['bridge_target_chain']=10
+    rows.append(dict(rows[0],chain_id=10,vault='0x'+'88'*20,tvl_usd='50',bridge_target_chain=None))
+    review=ReviewDataset(dataset.manifest|{'bridgeMigrations':[]},DAY,rows,positions)
+    _,revised,_,diagnostics=review.frames((DAY,))[0]
+    assert revised[0]['bridge_target_chain']==10
+    assert diagnostics['status']=='incomplete'
+    assert 'bridge_migration_timing_unverified' in diagnostics['issues']
