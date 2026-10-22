@@ -373,7 +373,6 @@ def test_unified_discovery_runs_all_sources_and_retains_summary(db,monkeypatch):
         with conn:store_candidate(conn,1,addr(100),'v2','v2','kong',metadata={'asset':addr(90),'asset_decimals':6},status='ok')
         return {'source':'kong','status':'complete','discovered':1,'enriched':1,'failures':[]}
     monkeypatch.setattr('yearn_data.tvl_sources.refresh_kong_catalog',kong)
-    def forbidden(*args):raise AssertionError('old service must not be read')
     result=discover_catalog(db,chain_ids=[1],reader_factory=FactoryReader)
     assert result['status']=='complete' and result['catalog_vaults']==30
     assert [r['source'] for r in result['sources']]==['kong','v1-registry','curation-discovery','curation-relations']
@@ -502,7 +501,6 @@ def test_fresh_catalog_collect_and_export_without_migration(db,monkeypatch,tmp_p
     def request(query,variables):
         collection='vaultV2s' if 'vaultV2s(' in query else 'vaults'
         return {collection:{'items':[morpho_row(1 if collection=='vaultV2s' else 2)]}}
-    def forbidden(*args):raise AssertionError('old TVL service access forbidden')
     first=discover_catalog(db,chain_ids=[1],reader_factory=AdapterReader,request=request,chunk_size=10)
     second=discover_catalog(db,chain_ids=[1],reader_factory=AdapterReader,request=request,chunk_size=10)
     assert first['status']==second['status']=='complete'

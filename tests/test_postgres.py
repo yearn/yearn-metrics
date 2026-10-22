@@ -9,11 +9,9 @@ import json
 import psycopg
 import pytest
 
-from yearn_data.analysis import create_analysis_run, write_output
 from yearn_data.coverage import Scope, commit_range, missing_ranges
-from yearn_data.exports import export_analysis
 from yearn_data.postgres import parameters, schema_statements
-from yearn_data.storage import connect, init_db, database_reference, table_exists
+from yearn_data.storage import connect, init_db, database_reference
 
 
 def test_parameter_conversion_preserves_quoted_question_marks_and_modulo():
