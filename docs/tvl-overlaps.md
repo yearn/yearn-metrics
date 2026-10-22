@@ -7,15 +7,20 @@ selected Yearn Data TVL publication. It supports `chainId`, `category`
 for a retired dataset follow the existing HTTP 410 / reload contract.
 
 The response contains `snapshotAt`, `asOfTimestamp`, `datasetId`,
-`totalRawTvlUsd`, `totalOverlapTvlUsd`, `totalTvlUsd`, `nodes`, `edges`, and
+`totalRawTvlUsd`, `totalOverlapTvlUsd`, `totalBridgeExcludedTvlUsd`, `totalTvlUsd`, `nodes`, `edges`, and
 `bridgeExclusions`. The timestamp is the publication's stored close, not a
 current RPC read. No request performs discovery, RPC collection, or pricing.
 
 ## Accounting and display conditions
 
-- Only an included parent and child can generate a deduction. Retired-vault
-  exclusion runs before accounting. Category and chain filters select headline
-  contributions and graph roots, retaining connected upstream/downstream context.
+- Ownership is accounted across the full network before display filters.
+  `includeRetired=false` hides retired nodes and their displayed edges without
+  changing the accounting amounts of remaining vaults. Category and chain filters
+  select headline contributions and graph roots, retaining connected context
+  among visible nodes.
+- `totalOverlapTvlUsd` counts ownership deductions. Bridge exclusions are reported
+  separately in `totalBridgeExcludedTvlUsd` and `bridgeExclusions`, matching the
+  summary route's `overlapExcluded` and `vaultBridgeExcluded` distinction.
 - Recorded debt, shared ownership, and parent/child TVL caps use `tvl.account`.
   Synthetic intermediary nodes explain allocations but never add to aggregate TVL.
 - Each holder's ownership is split across parents and children once. The graph

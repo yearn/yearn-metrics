@@ -63,7 +63,10 @@ Reference: https://vercel.com/docs/functions/runtimes/python/api-directory
 ## Caching
 
 Successful unpinned responses receive a 30-second Vercel CDN TTL. Explicitly pinned
-responses receive a one-hour TTL. The cache key must retain the full query string,
+responses receive a one-hour TTL when the pin determines the response body.
+For `/api/comparison`, `publicationId` pins the analytics body; `datasetId` alone
+only checks TVL compatibility and retains the 30-second TTL because analytics can
+be republished against the same TVL dataset. The cache key must retain the full query string,
 including the publication identity and all filters. Browser responses revalidate;
 failed requests use `no-store`. CORS allows public read access without credentials.
 A publication change can take up to the unpinned TTL to become visible through the CDN.

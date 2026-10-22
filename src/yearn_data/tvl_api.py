@@ -291,7 +291,7 @@ class TvlDataset:
             edges = iter(groupby(self.selected_rows(conn, 'tvl_positions', timestamps, chain_id), lambda r: r['timestamp']))
             edge_group = next(edges, None)
             for timestamp, points in snapshots:
-                points = [p for p in points if include_retired or self.catalog.get(key(p),{}).get('active',1)]
+                points = list(points)
                 while edge_group and edge_group[0] < timestamp:
                     list(edge_group[1])
                     edge_group = next(edges, None)
@@ -348,12 +348,15 @@ class TvlDataset:
                     if diagnostics['external_tvl_usd'] is not None:
                         diagnostics['external_tvl_usd'] = str(max(Decimal(0),decimal(diagnostics['external_tvl_usd'])-bridge_amount))
                 diagnostics['position_count'] = len(positions)
+                # Retirement is a display filter, not an ownership boundary.
+                rows = [r for r in rows if include_retired or self.catalog.get(key(r),{}).get('active',1)]
                 yield timestamp, rows, positions, diagnostics
 
     def graph(self, chain_id=None, category=None, include_retired=True):
         from .tvl_graph import build_graph
-        _, rows, positions, diagnostics = self.frames((self.as_of(),), include_retired=include_retired)[0]
-        return build_graph(self, rows, positions, diagnostics, chain_id=chain_id, category=category)
+        _, rows, positions, diagnostics = self.frames((self.as_of(),))[0]
+        return build_graph(self, rows, positions, diagnostics, chain_id=chain_id, category=category,
+                           include_retired=include_retired)
 
     def sampled_dates(self, interval, start, end):
         dates = [t for t in self.dates() if t <= self.as_of() and (start is None or t >= start) and (end is None or t <= end)]

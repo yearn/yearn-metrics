@@ -87,9 +87,10 @@ def cache_headers(url, status):
         return {'Cache-Control': 'no-store'}
     request = urlsplit(url)
     query = parse_qs(request.query, keep_blank_values=True)
-    pins = (('publicationId','datasetId') if request.path == '/api/comparison' else
-            ('publicationId',) if request.path in ANALYTICS_PATHS else ('datasetId',))
-    pinned = any(valid_pin(query.get(pin, [])) for pin in pins)
+    # Comparison bodies belong to analytics publications. A dataset-only pin
+    # constrains TVL compatibility but does not freeze a new analytics selection.
+    pin = 'publicationId' if request.path in ANALYTICS_PATHS else 'datasetId'
+    pinned = valid_pin(query.get(pin, []))
     headers['Vercel-CDN-Cache-Control'] = 'public, s-maxage=3600' if pinned else 'public, s-maxage=30'
     return headers
 

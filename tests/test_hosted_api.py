@@ -125,7 +125,7 @@ def test_hosted_graph_uses_selected_tvl_release_and_rejects_retired_pin(publishe
     ('/api/profitability?datasetId='+'a'*64,200,'public, s-maxage=30'),
     ('/api/profitability?publicationId='+'a'*64,200,'public, s-maxage=3600'),
     ('/api/comparison',200,'public, s-maxage=30'),
-    ('/api/comparison?datasetId='+'a'*64,200,'public, s-maxage=3600'),
+    ('/api/comparison?datasetId='+'a'*64,200,'public, s-maxage=30'),
     ('/api/comparison?publicationId='+'a'*64,200,'public, s-maxage=3600'),
     ('/api/comparison?datasetId='+'a'*64+'&publicationId='+'b'*64,200,'public, s-maxage=3600'),
     ('/api/fees?datasetId='+'a'*64,400,None),
@@ -135,6 +135,33 @@ def test_cdn_policy(url,status,expected):
     headers = cache_headers(url,status)
     assert headers.get('Vercel-CDN-Cache-Control') == expected
     if status != 200:assert headers['Cache-Control']=='no-store'
+
+
+def test_comparison_dataset_pin_does_not_freeze_analytics_republication(published):
+    database,_,_,_=published
+    api=HostedAPI(database)
+    selected=api.registry.selection()
+    dataset_url='/api/comparison?datasetId='+selected['tvlDatasetId']
+    status,before=api.response(dataset_url)
+    assert status==200
+    new_id='b'*64
+    with closing(connect(database)) as conn:
+        body=json.loads(conn.execute('SELECT body_json FROM analytics_publications WHERE id=?',
+                                     (selected['analyticsPublicationId'],)).fetchone()[0])
+        body['meta']['publicationId']=new_id
+        body['comparison']['republished']=True
+        conn.execute('INSERT INTO analytics_publications VALUES (?,2,?)',(new_id,json.dumps(body)))
+        save_release(conn,api.registry.manifest('fees',selected['feesDatasetId']),
+                     api.registry.manifest('tvl',selected['tvlDatasetId']),new_id)
+    status,after=api.response(dataset_url)
+    assert status==200 and after!=before and after['republished'] is True
+    assert cache_headers(dataset_url,status)['Vercel-CDN-Cache-Control']=='public, s-maxage=30'
+    old_url=dataset_url+'&publicationId='+selected['analyticsPublicationId']
+    assert api.response(old_url)[0]==410
+    assert cache_headers(old_url,410)=={'Cache-Control':'no-store'}
+    for url in ['/api/comparison?publicationId='+new_id,dataset_url+'&publicationId='+new_id]:
+        assert api.response(url)==(200,after)
+        assert cache_headers(url,200)['Vercel-CDN-Cache-Control']=='public, s-maxage=3600'
 
 
 def test_http_failure_does_not_expose_credentials(monkeypatch):

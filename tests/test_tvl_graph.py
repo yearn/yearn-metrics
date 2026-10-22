@@ -33,7 +33,47 @@ def test_router_context_and_category_totals(source):
     assert g['snapshotAt']==DAY and g['datasetId']==store.get().id
     _,active=tvl_response(store,'/api/tvl/graph?category=v3&includeRetired=false')
     assert [n['address'] for n in active['nodes']]==[CHILD]
-    assert active['edges']==[] and active['totalTvlUsd']==500
+    assert active['edges']==[] and active['totalTvlUsd']==420
+    assert active['totalOverlapTvlUsd']==g['totalOverlapTvlUsd']==80
+    common=next(n for n in g['nodes'] if n['address']==CHILD)
+    assert active['nodes'][0]==common
+    _,rows,_,_=store.get().frames((DAY,),include_retired=False)[0]
+    assert [(r['vault'],r['external_tvl_usd']) for r in rows]==[(CHILD,'420')]
+
+
+def test_hidden_retired_child_cannot_reappear_as_a_synthetic_strategy(source):
+    conn,path,root=source
+    run(conn,1,DAY,[(PARENT,'100'),(CHILD,'500')],[(CHILD,'80')])
+    conn.execute('UPDATE tvl_vaults SET active=0 WHERE address=?',(CHILD,));conn.commit()
+    dataset=TvlStore(path,root).get()
+    full=dataset.graph()
+    active=dataset.graph(include_retired=False)
+    assert [n['address'] for n in active['nodes']]==[PARENT]
+    assert active['nodes'][0]==next(n for n in full['nodes'] if n['address']==PARENT)
+    assert active['edges']==[]
+    assert active['totalTvlUsd']==100 and active['totalOverlapTvlUsd']==0
+
+
+@pytest.mark.parametrize('chain,category,overlap,bridge',[
+    (None,None,80,50),(1,None,80,50),(None,'v3',80,0),(1,'v2',0,50),(10,None,0,0),
+])
+def test_graph_separates_ownership_overlap_from_bridge_exclusions(source,chain,category,overlap,bridge):
+    conn,path,root=source
+    run(conn,1,DAY,[(PARENT,'100'),(CHILD,'500'),(BRIDGE,'50')])
+    row=json.loads(conn.execute('SELECT data_json FROM tvl_snapshots WHERE vault=?',(BRIDGE,)).fetchone()[0])
+    row.update(version='v2',category='v2')
+    conn.execute('UPDATE tvl_snapshots SET data_json=? WHERE vault=?',(json.dumps(row),BRIDGE))
+    router(conn)
+    dataset=TvlStore(path,root,current_bridge_policy='retired-registry').get()
+    graph=dataset.graph(chain_id=chain,category=category)
+    assert graph['totalOverlapTvlUsd']==overlap
+    assert graph['totalBridgeExcludedTvlUsd']==bridge
+    assert sum(b['tvlUsd'] for b in graph['bridgeExclusions'])==bridge
+    assert graph['totalRawTvlUsd']-graph['totalTvlUsd']==overlap+bridge
+    if category is None:
+        summary=dataset.summary(chain)
+        assert graph['totalOverlapTvlUsd']==summary['overlapExcluded']
+        assert graph['totalBridgeExcludedTvlUsd']==summary['vaultBridgeExcluded']
 
 
 def test_shared_holder_does_not_duplicate_parent_debt_or_child_holdings(source):

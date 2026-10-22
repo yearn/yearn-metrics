@@ -13,13 +13,14 @@ def amount(value):
     return float(decimal(value)) if value is not None else None
 
 
-def build_graph(dataset, rows, positions, diagnostics, *, chain_id=None, category=None):
+def build_graph(dataset, rows, positions, diagnostics, *, chain_id=None, category=None, include_retired=True):
     with localcontext() as ctx:
         ctx.prec = 78
-        return _build_graph(dataset,rows,positions,diagnostics,chain_id=chain_id,category=category)
+        return _build_graph(dataset,rows,positions,diagnostics,chain_id=chain_id,category=category,
+                            include_retired=include_retired)
 
 
-def _build_graph(dataset, rows, positions, diagnostics, *, chain_id, category):
+def _build_graph(dataset, rows, positions, diagnostics, *, chain_id, category, include_retired):
     # Flows into curation exist even when that layer is intentionally counted
     # separately. Keep physical flow and headline deduction as distinct fields.
     _, flows, _ = account(rows, [p for p in positions if not p.get('accounting_excluded')], include_curation=True,
@@ -28,10 +29,14 @@ def _build_graph(dataset, rows, positions, diagnostics, *, chain_id, category):
     deductions = {(p['chain_id'],p['parent'],p['strategy'],p['child']):p.get('overlap_usd') for p in positions}
     nodes, bridges, unavailable = {}, [], []
     unavailable_ids = set()
+    hidden_ids = {node_id(r['chain_id'],r['vault']) for r in rows
+                  if not include_retired and not dataset.catalog.get((r['chain_id'],r['vault'].lower()),{}).get('active',1)}
     gross_by_id = {node_id(r['chain_id'],r['vault']):decimal(r.get('tvl_usd')) for r in rows}
     for row in rows:
         identity = node_id(row['chain_id'],row['vault'])
         meta = dataset.catalog.get((row['chain_id'],row['vault'].lower()),{})
+        if identity in hidden_ids:
+            continue
         if row.get('bridge_excluded_usd') is not None:
             bridges.append({'sourceNodeId':identity,'chainId':row['chain_id'],'address':row['vault'],
                             'name':row.get('name'),'category':row.get('category',row['version']),
@@ -88,7 +93,7 @@ def _build_graph(dataset, rows, positions, diagnostics, *, chain_id, category):
             add(source,target,holder,'auto',flow,deducted,'dated-strategy-debt')
             direct_flows[source] += decimal(flow) or Decimal(0)
         else:
-            if strategy in unavailable_ids:
+            if strategy in unavailable_ids or strategy in hidden_ids:
                 continue
             # One parent debt, however many downstream children it funds.
             allocations[(source,strategy,holder)] = debt
@@ -149,14 +154,15 @@ def _build_graph(dataset, rows, positions, diagnostics, *, chain_id, category):
     edges = [e for e in edges if e['sourceNodeId'] in included and e['targetNodeId'] in included]
     bridges = [b for b in bridges if in_scope(b)]
     scope_rows = [r for r in rows if (chain_id is None or r['chain_id']==chain_id)
-                  and (category is None or r.get('category',r['version'])==category)]
+                  and (category is None or r.get('category',r['version'])==category)
+                  and node_id(r['chain_id'],r['vault']) not in hidden_ids]
 
     def total(field):
         values = [decimal(r[field]) for r in scope_rows if r.get(field) is not None]
         return float(sum(values,Decimal(0))) if values or not scope_rows else None
 
     unresolved = diagnostics['unresolved_positions']
-    if chain_id is not None or category is not None:
+    if chain_id is not None or category is not None or not include_retired:
         scope_keys = {(r['chain_id'], r['vault'].lower()) for r in scope_rows}
         unresolved = sum(bool(r.get('accounting_unresolved')) for r in scope_rows)
         unresolved += sum(bool(p.get('accounting_unresolved')) for p in positions
@@ -166,7 +172,9 @@ def _build_graph(dataset, rows, positions, diagnostics, *, chain_id, category):
     raw, external = total('tvl_usd'), total('external_tvl_usd')
     return {'datasetId':dataset.id,'asOfTimestamp':dataset.as_of(),'snapshotAt':dataset.as_of(),
             'totalTvlUsd':external,'totalRawTvlUsd':raw,
-            'totalOverlapTvlUsd':raw-external if raw is not None and external is not None else None,
+            'totalOverlapTvlUsd':total('overlap_usd'),
+            'totalBridgeExcludedTvlUsd':float(sum((decimal(r['bridge_excluded_usd']) for r in scope_rows
+                                                 if r.get('bridge_excluded_usd') is not None),Decimal(0))),
             'nodes':sorted(selected,key=lambda n:(-n['rawTvlUsd'],n['id'])),
             'edges':sorted(edges,key=lambda e:(-e['tvlUsd'],e['id'])),
             'bridgeExclusions':sorted(bridges,key=lambda b:b['sourceNodeId']),
