@@ -128,6 +128,28 @@ def test_value_corruption_rolls_back_the_whole_consolidation(legacy,monkeypatch,
     assert database_rows(database)==before
 
 
+@pytest.mark.parametrize('initial,changed',[(None,None),(100,100),(100,101),(None,100),(100,None)])
+def test_snapshot_block_verification_is_null_safe_and_rolls_back(legacy,monkeypatch,initial,changed):
+    database=legacy[0]
+    with closing(connect(database)) as conn:
+        conn.execute('UPDATE tvl_snapshots SET block_number=?',(initial,));conn.commit()
+    before=database_rows(database)
+    original=canonical_history._delete_obsolete
+    def change_block(conn,selection,keep):
+        original(conn,selection,keep)
+        conn.execute('UPDATE tvl_snapshots SET block_number=?',(changed,))
+    monkeypatch.setattr(canonical_history,'_delete_obsolete',change_block)
+    if initial!=changed:
+        with pytest.raises(ValueError,match='canonical key/value verification failed'):
+            consolidate(database,apply=True)
+        assert database_rows(database)==before
+    else:
+        result=consolidate(database,apply=True)
+        assert result['observations']['tvl_snapshots']['missing_or_changed_keys']==0
+        with closing(connect(database)) as conn:
+            assert {r[0] for r in conn.execute('SELECT block_number FROM tvl_snapshots')}=={initial}
+
+
 def test_shorter_analysis_cannot_erase_earlier_event_keys(legacy):
     database=legacy[0]
     with closing(connect(database)) as conn:

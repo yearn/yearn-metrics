@@ -174,7 +174,10 @@ def _stage_analyses(conn, keep):
 def _verify_observations(conn, table, expected_rows):
     dimensions, _ = observation_selection(table)
     joins = ' AND '.join(f's.{key}=k.{key}' for key in dimensions.split(','))
-    extra = ' OR s.block_number IS DISTINCT FROM k.block_number' if table == 'tvl_snapshots' else ''
+    # SQLite's long-standing IS NOT is null-safe; the PostgreSQL spelling
+    # IS DISTINCT FROM was only added to SQLite in 3.39.
+    distinct = 'IS DISTINCT FROM' if hasattr(conn, 'raw') else 'IS NOT'
+    extra = f' OR s.block_number {distinct} k.block_number' if table == 'tvl_snapshots' else ''
     mismatches = conn.execute(f'''SELECT COUNT(*) FROM canonical_keep_{table} k
         LEFT JOIN {table} s ON {joins} AND s.run_id=k.run_id
         WHERE s.run_id IS NULL OR {_sha(conn, 's.data_json')}<>k.value_sha256{extra}''').fetchone()[0]
