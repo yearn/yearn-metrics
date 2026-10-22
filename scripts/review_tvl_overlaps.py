@@ -29,16 +29,29 @@ def review(publication, out):
     timestamp,rows,positions,before=dataset.frames((dataset.as_of(),))[0]
     points={(r['chain_id'],r['vault']):r for r in rows}
     edges={(p['chain_id'],p['parent'],p['strategy'],p['child']):p for p in positions}
-    candidates={}
+    candidates={};unresolved=[]
     for p in positions:
         if p['method']=='vault-asset':
             candidates[(p['chain_id'],p['parent'],p['strategy'],p['child'])]=p
     for entry in REGISTRY['targets']:
         if not entry.get('vaultGetter'):
             continue
-        chain,parent,strategy,child=(entry['chainId'],entry['sourceVaultAddress'].lower(),
-                                    entry['strategyAddress'].lower(),entry['targetVaultAddress'].lower())
-        if (chain,parent) in points and (chain,child) in points:
+        chain,strategy,child=(entry['chainId'],entry['strategyAddress'].lower(),
+                              entry['targetVaultAddress'].lower())
+        if (chain,child) not in points:
+            continue
+        parents=({entry['sourceVaultAddress'].lower()} if entry.get('sourceVaultAddress') else
+                 {p['parent'].lower() for p in positions
+                  if p['chain_id']==chain and p['strategy'].lower()==strategy})
+        if not parents:
+            unresolved.append({'chainId':chain,'strategyAddress':strategy,'targetVaultAddress':child,
+                               'reason':'source_parent_not_observed'})
+        for parent in sorted(parents):
+            if (chain,parent) not in points:
+                unresolved.append({'chainId':chain,'sourceVaultAddress':parent,
+                                   'strategyAddress':strategy,'targetVaultAddress':child,
+                                   'reason':'endpoint_outside_selection'})
+                continue
             candidates[(chain,parent,strategy,child)]={'chain_id':chain,'parent':parent,'strategy':strategy,
                 'child':child,'method':'service-registry','vault_getter':entry['vaultGetter']}
     for entry in REGISTRY.get('crossChainStrategies',[]):
@@ -91,7 +104,7 @@ def review(publication, out):
     for item in verified:
         p=item['edge'];item['revisedOverlapUsd']=after_by[(p['chain_id'],p['parent'],p['strategy'],p['child'])]['overlap_usd']
     result={'sourceDatasetId':identity,'reviewDatasetId':revised.id,'timestamp':timestamp,
-            'before':before,'after':after,'verifiedPositions':verified}
+            'before':before,'after':after,'verifiedPositions':verified,'unresolvedCandidates':unresolved}
     (out/'validation.json').write_text(json.dumps(result,indent=2)+'\n')
     (out/'graph.json').write_text(json.dumps(revised.graph(),indent=2)+'\n')
     return result

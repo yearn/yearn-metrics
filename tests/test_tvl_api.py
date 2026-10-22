@@ -148,6 +148,10 @@ def test_registry_correction_applies_to_history_and_is_pinned(source, monkeypatc
         assert edges[0]['overlap_usd'] == '0'
         assert diagnostics['status'] == 'incomplete'
         assert diagnostics['external_tvl_usd'] is None
+    # Excluded stale edges still contribute to unresolved accounting diagnostics.
+    for chain,category,expected in ((None,None,1),(1,None,1),(10,None,0),
+                                    (None,'v3',1),(None,'v2',0)):
+        assert corrected.graph(chain_id=chain,category=category)['diagnostics']['unresolvedPositions'] == expected
 
     # Recollect one date. The other stays explicitly unresolved; amounts are not
     # transferred from the old child. Failed retries cannot erase the repair.

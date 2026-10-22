@@ -98,6 +98,10 @@ The script reads the pinned source database and archive RPCs, saves a new
 single-close `review.sqlite`, a separate publication, `validation.json`, and
 `graph.json`. It refuses to overwrite an existing review database. It does not
 write to Neon, activate a hosted release, or rebuild the full historical series.
+Getter-backed routes without a fixed source vault use parent/strategy pairs
+observed in the pinned frame and reverify the destination and ownership at that
+close. A route whose source cannot be established is listed under
+`unresolvedCandidates` in `validation.json`; no parent or holding is invented.
 Use `PYTHONPATH=src` for this checkout: its existing virtualenv may have an
 editable installation pointing to another worktree.
 

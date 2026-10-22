@@ -68,6 +68,7 @@ def test_superseded_registry_position_needs_dated_replacement(replacement):
     assert positions[0]['overlap_usd'] == '0'
     assert positions[0]['accounting_excluded'] is True
     assert positions[0]['reason'] == 'superseded_registry_target'
+    assert positions[0]['accounting_unresolved'] is (replacement not in ('verified','zero'))
     if replacement in ('verified','zero'):
         assert total['status'] == 'complete'
         assert total['external_tvl_usd'] == ('250' if replacement == 'verified' else '300')

@@ -213,7 +213,7 @@ def _account(snapshots, positions, *, include_curation, deduct_internal_curation
             known_zero = edge.get('status') == 'ok' and decimal(edge.get('debt_usd')) == 0
             if (not known_zero and identity(edge,replacement) not in verified
                     and (edge['chain_id'],edge['parent'].lower()) in by_key):
-                edge.update(status='unavailable')
+                edge.update(status='unavailable',accounting_unresolved=True)
                 issues.append(edge['reason'])
             continue
         if edge.get('method') == 'strategy-allocation':
