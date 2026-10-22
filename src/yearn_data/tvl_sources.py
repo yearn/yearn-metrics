@@ -32,8 +32,6 @@ def seed_targets(conn):
             put_strategy(conn, entry['chainId'], entry['sourceVaultAddress'], entry['strategyAddress'], 'service-router-registry')
 
 
-
-
 def sync_strategies(conn):
     """Include old/revoked strategies seen in locally imported historical events."""
     for table in ('strategy_reports', 'strategy_debt_flows'):

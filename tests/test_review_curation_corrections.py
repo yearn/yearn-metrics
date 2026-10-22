@@ -10,14 +10,16 @@ from yearn_data.tvl_api import TvlStore
 from yearn_data.tvl_review import ReviewDataset
 
 
+@pytest.mark.parametrize('include_source', [True,False])
 @pytest.mark.parametrize('category,policy', [('v3',True),('curation',True),('curation',False),('curation',None)])
-def test_curation_review_preserves_source_and_reopens_json(source,tmp_path,category,policy):
+def test_curation_review_preserves_source_and_reopens_json(source,tmp_path,category,policy,include_source):
     conn,database,publication=source
     run(conn,1,DAY,[(PARENT,'100'),(CHILD,'100')])
     dataset=TvlStore(database,publication).get()
     _,rows,positions,_=dataset.frames((DAY,))[0]
     for row in rows:row['category']=category
     frame={'timestamp':DAY,'rows':rows,'positions':positions,**dataset.manifest}
+    if not include_source:frame.pop('database')
     if policy is None:frame.pop('deductInternalCuration')
     else:frame['deductInternalCuration']=policy
     added={'chain_id':1,'parent':PARENT,'strategy':CHILD,'child':CHILD,'timestamp':DAY,
@@ -42,6 +44,8 @@ def test_curation_review_preserves_source_and_reopens_json(source,tmp_path,categ
     assert graph['totalTvlUsd']==(200 if net else 250)
     assert graph['totalOverlapTvlUsd']==(50 if net else 0)
     revised=ReviewDataset.load(out/'frame.json')
+    assert revised.database==('staging' if include_source else 'captured-json')
+    assert revised.manifest['database']==revised.evidence['manifest']['database']==revised.database
     assert revised.manifest['deductInternalCuration']==(policy is not False)
     _,corrected,_,_=revised.frames((DAY,))[0]
     assert {r['vault']:r['external_tvl_usd'] for r in corrected}=={

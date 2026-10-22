@@ -1,8 +1,5 @@
 """Transaction hash spelling cannot create another observation identity."""
 
-import os
-import uuid
-
 import pytest
 
 import test_catchup_regressions as helpers
@@ -10,10 +7,9 @@ from yearn_data import catchup, envio
 from yearn_data.coverage import insert_checked
 from yearn_data.history_sources import HistoricalSource, inventory_targets, write_rows
 from yearn_data.indexing import insert_raw_event
-from yearn_data.storage import connect, init_db
+from yearn_data.storage import init_db
 
 MIXED = '0x' + 'cD' * 32
-
 
 
 @pytest.fixture

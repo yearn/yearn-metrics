@@ -39,7 +39,7 @@ def review(frame_path, positions_path, hyper_path, out):
     out.mkdir(parents=True,exist_ok=True)
     from yearn_data.tvl_policy import VAULT_POLICIES, TARGET_CORRECTIONS
     from yearn_data.tvl_api import BRIDGE_MIGRATIONS, PRICE_REJECTIONS
-    manifest={'database':'neon','runs':[{'id':1}], 'catalog':frame['catalog']+[hyper['catalog']],
+    manifest={'database':frame.get('database','captured-json'),'runs':[{'id':1}], 'catalog':frame['catalog']+[hyper['catalog']],
               'deductInternalCuration':frame.get('deductInternalCuration',True),
               'allocatorKeys':frame.get('allocatorKeys',[]),'currentBridgePolicy':frame.get('currentBridgePolicy','none'),
               'bridgeMigrations':frame.get('bridgeMigrations',BRIDGE_MIGRATIONS),

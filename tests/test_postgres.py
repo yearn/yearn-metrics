@@ -50,8 +50,6 @@ def test_publication_rejects_embedded_database_credentials():
     assert database_reference('neon') == 'neon'
 
 
-
-
 def test_real_postgres_atomic_coverage_and_readonly(pg):
     conn, _ = pg
     init_db(conn)
@@ -74,14 +72,6 @@ def test_real_postgres_atomic_coverage_and_readonly(pg):
             reader.execute('DELETE FROM block_timestamps')
 
 
-
-
-
-
-
-
-
-
 def test_existing_fee_pairing_contract_on_postgres(pg,tmp_path):
     from test_pairing import snapshots
     from yearn_data.pairing import PairingDataset, select_pairing, PairingStore
@@ -96,10 +86,6 @@ def test_existing_fee_pairing_contract_on_postgres(pg,tmp_path):
     assert selected['database'] == 'neon'
     assert 'postgresql://' not in json.dumps(selected)
     assert PairingStore(tmp_path/'fees').get().id == dataset.id
-
-
-
-
 
 
 @pytest.mark.parametrize('job', ['canonical', 'usd'])

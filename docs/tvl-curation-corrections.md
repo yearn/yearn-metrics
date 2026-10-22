@@ -91,6 +91,9 @@ PYTHONPATH=src .venv/bin/python scripts/review_curation_corrections.py \
 The script checks dates/blocks, captures a separate JSON review frame, and writes
 input hashes, before/after totals, graph and summary responses. It refuses to
 replace an existing review output directory and never changes the active publication.
+The saved manifest retains the input frame's source database reference. Older
+frames without a reference use `captured-json`, which denotes captured evidence
+and cannot select a live database.
 For production, apply catalogue corrections, collect the three new V2 positions
 and newly discovered Morpho vaults at requested closes, publish/prepare a new TVL
 dataset and matching analytics, then verify and activate that release. Historic
