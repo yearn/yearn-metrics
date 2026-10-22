@@ -87,8 +87,9 @@ def cache_headers(url, status):
         return {'Cache-Control': 'no-store'}
     request = urlsplit(url)
     query = parse_qs(request.query, keep_blank_values=True)
-    pin = 'publicationId' if request.path in ANALYTICS_PATHS else 'datasetId'
-    pinned = len(query.get(pin, [])) == 1 and len(query[pin][0]) == 64
+    pins = (('publicationId','datasetId') if request.path == '/api/comparison' else
+            ('publicationId',) if request.path in ANALYTICS_PATHS else ('datasetId',))
+    pinned = any(valid_pin(query.get(pin, [])) for pin in pins)
     headers['Vercel-CDN-Cache-Control'] = 'public, s-maxage=3600' if pinned else 'public, s-maxage=30'
     return headers
 

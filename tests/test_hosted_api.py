@@ -124,6 +124,10 @@ def test_hosted_graph_uses_selected_tvl_release_and_rejects_retired_pin(publishe
     ('/api/fees?datasetId='+'a'*64,200,'public, s-maxage=3600'),
     ('/api/profitability?datasetId='+'a'*64,200,'public, s-maxage=30'),
     ('/api/profitability?publicationId='+'a'*64,200,'public, s-maxage=3600'),
+    ('/api/comparison',200,'public, s-maxage=30'),
+    ('/api/comparison?datasetId='+'a'*64,200,'public, s-maxage=3600'),
+    ('/api/comparison?publicationId='+'a'*64,200,'public, s-maxage=3600'),
+    ('/api/comparison?datasetId='+'a'*64+'&publicationId='+'b'*64,200,'public, s-maxage=3600'),
     ('/api/fees?datasetId='+'a'*64,400,None),
     ('/api/publication',503,None),
 ])

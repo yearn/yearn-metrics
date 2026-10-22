@@ -50,6 +50,14 @@ partial, including when both protocol requests fail. Source coverage remains par
 when collection fails. A preparation
 failure leaves the previous selected publication usable.
 
+Finance route collection accounts for every entry in the declared registered-route
+array, independent of key order. Unsupported declarations fail collection instead
+of silently dropping deductions. Asset references from an external JavaScript
+module are retained under `unresolvedFields`; affected contributions stay
+unavailable until those assets can be established, while unrelated routes remain
+usable. Known-zero debt needs no asset conversion. No asset address is inferred
+from a constant name.
+
 `GET /api/analytics/publication` returns the selected metadata. The three new
 routes and `/api/comparison` accept `publicationId`; this pins their immutable
 result. Powerglove selects once per API origin and pins subsequent analytics

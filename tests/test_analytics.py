@@ -84,7 +84,7 @@ list/vaults/${api.chainId}?origin=yearn
 const v1Vaults = [];
 const blacklist = [];
 """ + 'const chains = [' + ','.join(repr(name) for name in FINANCE_CHAINS.values()) + '];\n'
-    finance += f"""const routes = [
+    finance += f"""const registeredNestedVaults = [
       {{ chainId: 1, parent: '{A.upper()}', strategy: '{B}', child: '{C}', getter: 'vault' }},
       {{ chainId: 10, parent: '{A}', strategy: '{C}', child: '{B}', getter: 'vault',
          parentAsset: '{Web3.to_checksum_address(parent_asset)}', childAsset: '{Web3.to_checksum_address(child_asset)}', parentDecimals: 6, childDecimals: 18 }},
@@ -128,6 +128,7 @@ def test_captured_curator_registry_preserves_verified_hyperevm_scope(snapshot):
 list/vaults/${api.chainId}?origin=yearn
 const v1Vaults = [];
 const blacklist = [];
+const registeredNestedVaults = [];
 """ + 'const chains = [' + ','.join(repr(name) for name in FINANCE_CHAINS.values()) + '];'
     result = rules(finance, capture['yearnEntry'])
     common = {'0xfc5f89d29ccaa86e5410a7ad9d9d280d4455c12b',
@@ -280,6 +281,7 @@ def test_current_curator_registry_is_scoped_to_yearn():
     const chains = ['ethereum','optimism','polygon','fantom','base','arbitrum','katana']
     const v1Vaults = []
     const blacklist = []
+    const registeredNestedVaults = []
     """
     owner='0x0Dca0FDC170baA4CA9c1dCd37Ffe01f97bCfD504'
     registry='''const configs = {

@@ -49,6 +49,10 @@ def contributions(reader, chain, active, balances, debts, policy):
             key=(chain,parent,strategy); child=policy['cross'].get(key,strategy)
             if child not in active:continue
             route=policy.get('routes',{}).get(key,{})
+            if route.get('unresolvedFields'):
+                if debt:
+                    total=None;break
+                continue  # A known zero debt needs no asset conversion.
             pa,ca=assets[parent],assets[child]
             if not ca:
                 total=None;break

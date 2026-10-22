@@ -225,6 +225,7 @@ def finance_adapter_fixture():
 list/vaults/${api.chainId}?origin=yearn
 const v1Vaults = [];
 const blacklist = [];
+const registeredNestedVaults = [];
 ''' + 'const chains = [' + ','.join(repr(name) for name in FINANCE_CHAINS.values()) + '];'
 
 

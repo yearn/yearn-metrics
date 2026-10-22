@@ -49,6 +49,53 @@ def curation_addresses(text, name, *, required=False):
     return addresses
 
 
+def finance_routes(source):
+    """Parse every registered route, rejecting unsupported JavaScript shapes."""
+    declarations=re.findall(r'\b(?:const|let)\s+registeredNestedVaults\s*=\s*\[([^]]*)\]',source)
+    if len(declarations)!=1:
+        raise ValueError('unsupported finance routes: registeredNestedVaults declaration')
+    body=re.sub(r'/\*[\s\S]*?\*/|//[^\n]*','',declarations[0])
+    entries=re.findall(r'\{([^{}]*)\}',body)
+    if re.sub(r'\{[^{}]*\}','',body).strip(' \t\r\n,'):
+        raise ValueError('unsupported finance routes: nonliteral or nested entry')
+    cross={};routes={}
+    addresses={'parent','strategy','child','parentAsset','childAsset'}
+    for entry in entries:
+        fields={};unresolved={}
+        text=entry.strip()
+        if text.endswith(','):text=text[:-1]
+        for item in text.split(','):
+            match=re.fullmatch(r'\s*(\w+)\s*:\s*(.*?)\s*',item)
+            if not match or match[1] in fields:
+                raise ValueError('unsupported finance route fields')
+            name,raw=match.groups()
+            literal=re.fullmatch(r"(['\"])(.*?)\1",raw)
+            if name in addresses:
+                if literal and re.fullmatch(r'0x[0-9a-f]{40}',literal[2],re.I):
+                    fields[name]=literal[2].lower()
+                elif name in ('parentAsset','childAsset') and re.fullmatch(r'ADDRESSES\.\w+\.\w+',raw):
+                    # Do not guess values from an external JavaScript module.
+                    fields[name]=None;unresolved[name]=raw
+                else:
+                    raise ValueError('unsupported finance route address: '+name)
+            elif name=='getter' and literal and re.fullmatch(r'[A-Za-z_]\w*',literal[2]):
+                fields[name]=literal[2]
+            elif name in ('chainId','parentDecimals','childDecimals') and re.fullmatch(r'\d+',raw):
+                fields[name]=int(raw)
+                if name!='chainId' and fields[name]>255:
+                    raise ValueError('unsupported finance route decimals')
+            else:
+                raise ValueError('unsupported finance route field: '+name)
+        if not {'chainId','parent','strategy','child'}<=fields.keys() or fields['chainId'] not in FINANCE_CHAINS:
+            raise ValueError('unsupported finance route identity')
+        key=(fields.pop('chainId'),fields['parent'],fields['strategy'])
+        if key in cross:
+            raise ValueError('unsupported finance routes: duplicate parent/strategy')
+        if unresolved:fields['unresolvedFields']=unresolved
+        cross[key]=fields['child'];routes[key]=fields
+    return cross,routes
+
+
 def rules(source,curation):
     # Fail closed when the supported accounting contract is no longer present.
     for marker in ('buildNestedDebtByVault','subtractNestedDebt','get_default_queue','withdrawalQueue','list/vaults/${api.chainId}?origin=yearn'):
@@ -56,16 +103,7 @@ def rules(source,curation):
     declared=re.search(r"const chains = \[([^]]+)\]",source)
     if not declared or set(re.findall(r"'([^']+)'",declared[1]))!=set(FINANCE_CHAINS.values()):
         raise ValueError('unsupported finance adapter chain scope')
-    cross={};routes={}
-    for entry in re.findall(r'\{\s*chainId:\s*\d+,[^}]+\}',source):
-        fields=dict(re.findall(r"(\w+):\s*'([^']*)'",entry))
-        if not all(k in fields for k in ('parent','strategy','child')):continue
-        for field in ('parent','strategy','child','parentAsset','childAsset'):
-            if field in fields:fields[field]=fields[field].lower()
-        key=(int(re.search(r'chainId:\s*(\d+)',entry)[1]),fields['parent'].lower(),fields['strategy'].lower())
-        cross[key]=fields['child'].lower()
-        fields.update({k:int(v) for k,v in re.findall(r'(parentDecimals|childDecimals):\s*(\d+)',entry)})
-        routes[key]=fields
+    cross,routes=finance_routes(source)
     # Chain names repeat across curators; only inspect the Yearn entry.
     section=re.search(r'^  "yearn-curating":\s*\{([\s\S]*?)(?=^  \},?\s*$)',curation,re.MULTILINE)
     if not section:raise ValueError('unsupported curation registry: missing yearn-curating')
