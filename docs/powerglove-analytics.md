@@ -86,12 +86,13 @@ analytics publication.
   along each path under a common annual/capital basis, then capital-weighted.
   These are configured-rate illustrations: Accountant caps, refunds and differing
   realization times can change actual charged fees. Unsupported or unresolved
-  paths have null effective rates. Capital-exhausted branches are reported under
-  `truncatedAllocations`; a child capped by an observed zero TVL is not truncation.
-  A known child outside the selected snapshot is also unresolved: the parent's
-  own configured rates remain in the tree, but do not establish the combined
-  rate through the missing child. Collect the child's dated valuation and fee
-  configuration before reporting that effective rate. External root fractions determine the stack
+  paths have null effective rates. A known child outside the selected snapshot
+  is also unresolved: the parent's own configured rates remain in the tree,
+  but do not establish the combined rate through the missing child. Collect the
+  child's dated valuation and fee configuration before reporting that effective
+  rate. Capital-exhausted branches are reported under `truncatedAllocations`;
+  a child capped by an observed zero TVL is not truncation.
+  External root fractions determine the stack
   capital summary; nested roots do not each contribute their full gross capital.
 - Profitability: use the trailing 365 UTC days ending at the earlier supported
   financial/TVL cutoff, with equal-duration daily capital observations. The

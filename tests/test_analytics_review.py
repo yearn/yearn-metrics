@@ -156,6 +156,8 @@ def test_membership_multicall_offsets_keep_zero_and_unavailable(monkeypatch):
         def __init__(self,chain):pass
         def call(self,calls):
             if not calls:return []
+            if all(c[1] in ('token()','asset()') for c in calls):
+                return [(C,) for _ in calls]
             assert all(c[1]=='totalAssets()' for c in calls)
             return [(100,),(0,),None]
     monkeypatch.setattr(collect,'Reader',Reader)
@@ -230,6 +232,7 @@ def test_curation_parser_rejects_missing_changed_and_malformed_evidence():
     from pathlib import Path
     from yearn_data.analytics_collect import rules
     source=(Path(__file__).parent/'fixtures/analytics/curation-frozen.js').read_text()
+    source='const registry = {\n  "yearn-curating": {\n'+source+'\n  },\n}'
     parsed=rules(finance_adapter_fixture(),source)
     assert len(parsed['owners'][1])==3 and len(parsed['explicit'][1])==4
     assert parsed['explicit'][8453]==set()
@@ -242,6 +245,7 @@ def test_curation_parser_rejects_missing_changed_and_malformed_evidence():
             rules(finance_adapter_fixture(),broken)
     empty='\n'.join(f'{name}: {{ morphoVaultOwners: [], turtleclub_erc4626: [] }},'
                     for name in ('ethereum','base','katana','arbitrum','hyperliquid'))
+    empty='const registry = {\n  "yearn-curating": {\n'+empty+'\n  },\n}'
     assert all(not addresses for addresses in rules(finance_adapter_fixture(),empty)['owners'].values())
 
 

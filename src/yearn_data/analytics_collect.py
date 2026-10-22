@@ -79,7 +79,8 @@ def rules(source,curation):
         if fields-{'morphoVaultOwners','morpho','erc4626','turtleclub_erc4626'}:
             raise ValueError('unsupported curation configuration fields: '+name)
         owners[chain]=curation_addresses(text,'morphoVaultOwners',required=True)
-        explicit[chain]=set().union(*(curation_addresses(text,field) for field in ('morpho','erc4626','turtleclub_erc4626')))
+        explicit[chain]=set().union(*(curation_addresses(text,field)
+                                    for field in ('morpho','erc4626','turtleclub_erc4626')))
     return {'v1':js_array(source,'v1Vaults'),'blacklist':js_array(source,'blacklist')|js_array(source,'v1Vaults'),
             'cross':cross,'routes':routes,'owners':owners,'explicit':explicit}
 
@@ -175,9 +176,6 @@ def membership_chain(chain,local,candidates,policy,creation):
         if balance is None:return None,'totalAssets read unavailable'
         if balance[0]==0:return False,'zero assets'
         if strategy_count(finance[address]) is None:return None,'strategy count unavailable'
-        if debts.get(address) is None:return None,'strategy queue/debt read unavailable'
-        parent_asset=(finance[address].get('asset') or {}).get('address','').lower()
-        if not parent_asset:return None,'parent asset unavailable'
         value=net.get(address)
         if value is None:return None,'adapter contribution unavailable after nested or applicable remote checks'
         reason=('adapter contribution after verified nested and cross-chain deductions' if address in remote_targets

@@ -95,7 +95,7 @@ const blacklist = [];
         finance = finance.replace(f"parent: '{A}', strategy: '{C}', child: '{B}', getter: 'vault'",
                                   f"child: '{B}', getter: 'vault', parent: '{A}', strategy: '{C}'")
     registry = 'export default {\n  "yearn-curating": { chains: {\n' + ''.join(
-        f'    {name}: {{}},\n' for name in CURATION_CHAINS.values()) + '  }\n  },\n}'
+        f'    {name}: {{morphoVaultOwners: []}},\n' for name in CURATION_CHAINS.values()) + '  }\n  },\n}'
     result = rules(finance, registry)
     assert result['cross'] == {(1, A, B): C, (10, A, C): B}
     assert result['routes'][(1, A, B)]['getter'] == 'vault'
@@ -298,9 +298,9 @@ def test_current_curator_registry_is_scoped_to_yearn():
       base: {
         morphoVaultOwners: ["BASE"],
       },
-      katana: {},
-      arbitrum: {},
-      hyperliquid: {},
+      katana: { morphoVaultOwners: [] },
+      arbitrum: { morphoVaultOwners: [] },
+      hyperliquid: { morphoVaultOwners: [] },
     } }
   },
 }'''.replace('OTHER',A).replace('OWNER',owner).replace('VAULT',B).replace('BASE',C)
