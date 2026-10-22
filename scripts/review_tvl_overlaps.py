@@ -1,27 +1,25 @@
 """Build a local, single-close review dataset from a pinned publication.
 
 Reads the source database and archive RPCs only. No source observations,
-publications or services are modified. The review SQLite file is newly created.
+publications or services are modified. Review evidence is saved as JSON.
 """
 from __future__ import annotations
 
 import argparse
-from contextlib import closing
 import json
 from pathlib import Path
 import sys
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
 from yearn_data.config import load_environment
-from yearn_data.storage import connect, init_db
+from yearn_data.tvl_review import ReviewDataset
 from yearn_data.tvl_api import TvlDataset
 from yearn_data.tvl_sources import ArchiveReader, REGISTRY, _position
 
 
 def review(publication, out):
     out=Path(out)
-    path=out/'review.sqlite'
-    if path.exists():raise ValueError('review database already exists; use a new output directory')
+    if out.exists():raise ValueError('review output already exists; use a new output directory')
     root=Path(publication)
     identity=json.loads((root/'current.json').read_text())['datasetId']
     manifest=json.loads((root/'datasets'/f'{identity}.json').read_text())
@@ -75,30 +73,8 @@ def review(publication, out):
             del edges[fallback]
         verified.append({'edge':result,'previousOverlapUsd':previous.get('overlap_usd') if previous else None})
     out.mkdir(parents=True,exist_ok=True)
-    with closing(connect(path)) as conn:
-        init_db(conn)
-        with conn:
-            for meta in manifest['catalog']:
-                fields=list(meta)
-                conn.execute(f'INSERT INTO tvl_vaults ({",".join(fields)}) VALUES ({",".join("?" for _ in fields)})',tuple(meta.values()))
-            conn.execute('INSERT INTO tvl_runs VALUES (1,1,1,?,?)',('incomplete',json.dumps({'from':timestamp,'to':timestamp,'sourceDatasetId':identity})))
-            for p in rows:
-                raw={k:v for k,v in p.items() if k not in ('overlap_usd','external_tvl_usd','bridge_excluded_usd','bridge_migration_timestamp','source_run_id')}
-                conn.execute('INSERT INTO tvl_snapshots VALUES (1,?,?,?,?,?)',(p['chain_id'],p['vault'],timestamp,p['block_number'],json.dumps(raw)))
-            for p in edges.values():
-                raw={k:v for k,v in p.items() if k not in ('overlap_usd','source_run_id','accounting_excluded')}
-                conn.execute('INSERT INTO tvl_positions VALUES (1,?,?,?,?,?,?)',(p['chain_id'],p['parent'],p['strategy'],p['child'],timestamp,json.dumps(raw)))
-    # Freeze the original catalog, allocator evidence and bridge/quote policy in
-    # this review manifest, replacing only the database and source-run membership.
-    from yearn_data.tvl_api import encoded
-    import hashlib
-    review_manifest=manifest | {'database':str(path.resolve()),'runs':[{'id':1,'params_json':json.dumps({'from':timestamp,'to':timestamp})}]}
-    review_manifest.pop('diagnostics',None)
-    review_manifest['datasetId']=hashlib.sha256(encoded(review_manifest).encode()).hexdigest()
-    publication=out/'publication';(publication/'datasets').mkdir(parents=True,exist_ok=True)
-    (publication/'datasets'/f"{review_manifest['datasetId']}.json").write_text(encoded(review_manifest)+'\n')
-    (publication/'current.json').write_text(encoded({'datasetId':review_manifest['datasetId']})+'\n')
-    revised=TvlDataset(review_manifest)
+    revised=ReviewDataset(manifest,timestamp,rows,list(edges.values()))
+    revised.save(out)
     _,_,after_edges,after=revised.frames((timestamp,))[0]
     after_by={(p['chain_id'],p['parent'],p['strategy'],p['child']):p for p in after_edges}
     for item in verified:

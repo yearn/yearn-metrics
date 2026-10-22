@@ -23,7 +23,7 @@ from .pricing import (
     price_unpriced_volume,
     validate_report_pricing_policy,
 )
-from .storage import DEFAULT_DB_PATH, connect, init_db, seed_chains
+from .storage import DEFAULT_DATABASE, connect, init_db, seed_chains
 
 
 def progress(message: str) -> None:
@@ -93,7 +93,7 @@ def open_db(path: str | Path):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="yearn-data")
-    parser.add_argument("--db", help="SQLite path, neon, or staging; defaults to YEARN_DATA_DB or SQLite")
+    parser.add_argument("--db", help="Postgres: neon or staging; defaults to YEARN_DATA_DB or neon")
     parser.add_argument("--env", action="append", default=[], help="Extra .env file to load before defaults")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -102,18 +102,6 @@ def build_parser() -> argparse.ArgumentParser:
     canonical_p = sub.add_parser('consolidate-history', help='Keep one canonical history, verifying every historical key')
     canonical_p.add_argument('--apply', action='store_true', help='Apply atomically; the default only reports the plan')
     canonical_p.add_argument('--receipt', type=Path, help='Write key/value preservation counts and selected revision')
-
-    postgres_p = sub.add_parser('migrate-postgres', help='Stream the shared SQLite history into an empty Postgres database')
-    postgres_p.add_argument('--source', required=True, type=Path)
-    postgres_p.add_argument('--check-only', action='store_true')
-    postgres_p.add_argument('--receipt', type=Path, help='Write a credential-free migration receipt')
-
-    merge_p = sub.add_parser("merge-databases", help="Combine fee/earnings and TVL in a new shared database")
-    merge_p.add_argument("--fees-db", required=True)
-    merge_p.add_argument("--tvl-db", required=True)
-    merge_p.add_argument("--out", required=True)
-    merge_p.add_argument("--check-only", action="store_true", help="Report disk needs and table mapping without writing")
-    merge_p.add_argument("--reserve-gib", type=float, default=4)
 
     tvl_p = sub.add_parser("tvl", help="Historical vault TVL and nested positions")
     tvl_sub = tvl_p.add_subparsers(dest="tvl_command", required=True)
@@ -127,8 +115,6 @@ def build_parser() -> argparse.ArgumentParser:
     tvl_discover.add_argument("--from-block", type=int, help="Optional lower bound for factory and adapter scans")
     tvl_discover.add_argument("--to-block", type=int, help="Optional finalized upper bound for historical scans")
     tvl_discover.add_argument("--chunk-size", type=int, default=50_000)
-    tvl_import = tvl_sub.add_parser("import-catalog", help="Read the TVL service catalog once")
-    tvl_import.add_argument("--service-db", required=True)
     tvl_sub.add_parser("refresh-kong", help="Refresh paginated V2/V3 vault and strategy inventory")
     tvl_collect = tvl_sub.add_parser("collect", help="Store archive-state TVL at explicit timestamps")
     tvl_collect.add_argument("--from-timestamp", required=True, type=int)
@@ -319,14 +305,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.command == "merge-databases":
-        from .shared_db import merge_plan, merge_databases
-        fn = merge_plan if args.check_only else merge_databases
-        result = fn(args.fees_db,args.tvl_db,args.out,reserve_gib=args.reserve_gib)
-        print(json.dumps(result,sort_keys=True))
-        return 0 if result["space_sufficient"] else 2
     load_environment(args.env)
-    args.db = args.db or os.environ.get('YEARN_DATA_DB', str(DEFAULT_DB_PATH))
+    args.db = args.db or os.environ.get('YEARN_DATA_DB', str(DEFAULT_DATABASE))
     if args.command == 'consolidate-history':
         from .canonical_history import consolidate
         result = consolidate(args.db, apply=args.apply, progress=progress)
@@ -366,16 +346,6 @@ def main(argv: list[str] | None = None) -> int:
         tvl = TvlStore(args.db, args.tvl_publication, current_bridge_policy='retired-registry').get()
         print(json.dumps({'publicationId':prepare(args.db,financial,tvl)}))
         return 0
-    if args.command == 'migrate-postgres':
-        from .postgres_migration import migration_plan, migrate_sqlite
-        result = (migration_plan(args.source, args.db) if args.check_only else
-                  migrate_sqlite(args.source, args.db, progress=progress))
-        body = json.dumps(result, sort_keys=True, indent=2)
-        if args.receipt:
-            args.receipt.parent.mkdir(parents=True, exist_ok=True)
-            args.receipt.write_text(body + '\n')
-        print(body)
-        return 0
     if args.command == "select-pairing":
         from .pairing import select_pairing
         manifest = select_pairing(args.db, args.earnings_run_id, args.fees_run_id, args.out)
@@ -402,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "tvl":
         from .tvl import export_tvl
-        from .tvl_sources import import_service_catalog, refresh_kong_catalog, collect_tvl, scan_holders
+        from .tvl_sources import refresh_kong_catalog, collect_tvl, scan_holders
         if args.tvl_command == "discover":
             from .tvl_discovery import discover_catalog
             try:
@@ -412,8 +382,6 @@ def main(argv: list[str] | None = None) -> int:
                 return 0 if result["status"] == "complete" else 2
             finally:
                 conn.close()
-        elif args.tvl_command == "import-catalog":
-            result = {"vaults": import_service_catalog(conn, args.service_db)}
         elif args.tvl_command == "refresh-kong":
             result = {"vaults": refresh_kong_catalog(conn)}
         elif args.tvl_command == "map-holders":

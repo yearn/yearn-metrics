@@ -1,6 +1,6 @@
+from yearn_data.storage import connect
 import importlib.util
 import json
-import sqlite3
 from unittest.mock import Mock
 
 import pytest
@@ -39,8 +39,8 @@ def test_invalid_ids_cannot_become_success(monkeypatch):
 
 
 def test_price_omissions_verified_and_persisted(monkeypatch):
-    c=sqlite3.connect(':memory:');c.row_factory=sqlite3.Row
-    c.execute('CREATE TABLE tvl_prices(chain_id,token_address,timestamp,block_number,source,price_usd,status,raw_json, '
+    c=connect('staging')
+    c.execute('CREATE TABLE tvl_prices(chain_id BIGINT,token_address TEXT,timestamp BIGINT,block_number BIGINT,source TEXT,price_usd DOUBLE PRECISION,status TEXT,raw_json TEXT, '
               'PRIMARY KEY(chain_id,token_address,timestamp,source))')
     key=(1,'0x'+'11'*20,ts('2020-03-01'))
     monkeypatch.setattr(b,'fetch_yearn_prices_batch',lambda *_a,**_k:{})
@@ -54,8 +54,8 @@ def test_price_omissions_verified_and_persisted(monkeypatch):
 @pytest.mark.parametrize('failure', ['authentication', 'configuration'])
 def test_backfill_stops_on_operator_price_errors(monkeypatch, stage, failure):
     from yearn_data import pricing
-    conn = sqlite3.connect(':memory:'); conn.row_factory = sqlite3.Row
-    conn.execute('CREATE TABLE tvl_prices(chain_id,token_address,timestamp,block_number,source,price_usd,status,raw_json, '
+    conn = connect('staging')
+    conn.execute('CREATE TABLE tvl_prices(chain_id BIGINT,token_address TEXT,timestamp BIGINT,block_number BIGINT,source TEXT,price_usd DOUBLE PRECISION,status TEXT,raw_json TEXT, '
                  'PRIMARY KEY(chain_id,token_address,timestamp,source))')
     monkeypatch.delenv('YEARN_PRICE_PROD_KEY', raising=False)
     def fail(*args, **kwargs):
@@ -83,7 +83,7 @@ def test_birth_hint_checked_against_previous_block():
 def test_restart_restores_saved_batch_exports_without_recollection(tmp_path,monkeypatch,interrupted):
     from types import SimpleNamespace
     from yearn_data.storage import connect,init_db
-    db=tmp_path/'restart.sqlite';conn=connect(db);init_db(conn)
+    db='staging';conn=connect(db);init_db(conn)
     vault='0x'+'01'*20;asset='0x'+'02'*20
     conn.execute('INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at) VALUES (?,?,?,?,?,?)',
                  (1,'v3',vault,asset,18,1));conn.commit();conn.close()
@@ -160,7 +160,7 @@ def test_interrupted_status_publication_preserves_previous_status(tmp_path,monke
 
 @pytest.mark.parametrize('multicall',[False,True])
 @pytest.mark.parametrize('missing_child',[False,True])
-def test_batched_collection_and_export_preserve_historical_accounting(tmp_path,monkeypatch,multicall,missing_child):
+def test_batched_collection_and_export_preserve_historical_accounting(tmp_path,monkeypatch,multicall,missing_child,new_pg):
     from types import SimpleNamespace
     from decimal import Decimal
     from eth_abi import decode
@@ -234,7 +234,7 @@ def test_batched_collection_and_export_preserve_historical_accounting(tmp_path,m
     prices=Prices();monkeypatch.setattr(b.sources,'fetch_yearn_price',prices.get)
     outputs=[];batched_conn=None
     for batched in [False,True]:
-        conn=connect(tmp_path/('batched.sqlite' if batched else 'ordinary.sqlite'));init_db(conn)
+        conn=new_pg();init_db(conn)
         conn.executescript(b.SCHEMA)
         for n,family in [(1,'v1'),(2,'v2'),(3,'v3'),(4,'morpho-v2'),(5,'erc4626'),(6,'v3'),(7,'v3')]:
             conn.execute('INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at,tvl_category) VALUES (1,?,?,?,?,1,?)',

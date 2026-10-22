@@ -1,8 +1,7 @@
-"""TVL inventory migration and archive-state acquisition, independent of fee ingestion."""
+"""TVL inventory and archive-state acquisition, independent of fee ingestion."""
 from __future__ import annotations
 
 import json
-import sqlite3
 import time
 from decimal import Decimal, localcontext
 from pathlib import Path
@@ -33,48 +32,6 @@ def seed_targets(conn):
             put_strategy(conn, entry['chainId'], entry['sourceVaultAddress'], entry['strategyAddress'], 'service-router-registry')
 
 
-def import_service_catalog(conn, path):
-    """Read the legacy catalog once. Never copy latest balances into old dates."""
-    source = sqlite3.connect(Path(path).resolve().as_uri() + '?mode=ro', uri=True)
-    source.row_factory = sqlite3.Row
-    now = int(time.time())
-    try:
-        with conn:
-            count = 0
-            for row in source.execute('SELECT * FROM vaults'):
-                address = Web3.to_checksum_address(row['address'])
-                asset = Web3.to_checksum_address(row['asset_address']) if row['asset_address'] else None
-                conn.execute('''INSERT INTO tvl_vaults (chain_id,version,address,asset,asset_symbol,
-                    asset_decimals,name,api_version,management,protocol,active,updated_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(chain_id,address) DO UPDATE SET
-                    asset=COALESCE(excluded.asset,tvl_vaults.asset),
-                    asset_decimals=COALESCE(excluded.asset_decimals,tvl_vaults.asset_decimals),
-                    asset_symbol=COALESCE(excluded.asset_symbol,tvl_vaults.asset_symbol),name=excluded.name''',
-                    (row['chain_id'],row['category'],address,asset,row['asset_symbol'],row['asset_decimals'],
-                     row['name'],row['api_version'],'yearn','curation' if row['category']=='curation' else None,
-                     int(not row['is_retired']),now))
-                conn.execute('UPDATE tvl_vaults SET tvl_category=? WHERE chain_id=? AND address=?',
-                             (row['category'],row['chain_id'],address))
-                count += 1
-            correct_catalog(conn)
-            for row in source.execute('''SELECT s.chain_id,s.address,s.name,v.category,v.address AS parent
-                                        FROM strategies s JOIN vaults v ON v.id=s.vault_id'''):
-                # The service stored the child as strategy.address for Morpho V2
-                # and put the actual holding adapter in its name.
-                prefix = 'Morpho V2 adapter '
-                adapter = (row['name'] or '').removeprefix(prefix)
-                if row['category']=='curation' and (row['name'] or '').startswith(prefix) and Web3.is_address(adapter):
-                    conn.execute("DELETE FROM tvl_strategies WHERE chain_id=? AND parent=? AND strategy=? AND source='service-catalog'",
-                                 (row['chain_id'],row['parent'].lower(),row['address'].lower()))
-                    put_strategy(conn,row['chain_id'],row['parent'],adapter,'service-morpho-adapter')
-                    conn.execute('INSERT INTO tvl_targets VALUES (?,?,?,?) ON CONFLICT DO NOTHING',
-                                 (row['chain_id'],adapter.lower(),row['address'].lower(),'service-morpho-adapter'))
-                else:
-                    put_strategy(conn,row['chain_id'],row['parent'],row['address'],'service-catalog')
-            seed_targets(conn)
-        return count
-    finally:
-        source.close()
 
 
 def sync_strategies(conn):

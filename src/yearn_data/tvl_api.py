@@ -216,7 +216,7 @@ class TvlDataset:
             FROM {table} WHERE {where} GROUP BY {dimensions})
             SELECT s.run_id,s.data_json FROM {table} s JOIN winners w
             ON {joins} AND s.run_id=w.rank%{self.base} ORDER BY {order}'''
-        records=conn.stream(sql,args) if hasattr(conn,'raw') else conn.execute(sql,args)
+        records=conn.stream(sql,args)
         for row in records:
             data = json.loads(row['data_json'])
             data['source_run_id'] = row['run_id']
@@ -298,59 +298,64 @@ class TvlDataset:
                 positions = list(edge_group[1]) if edge_group and edge_group[0] == timestamp else []
                 if edge_group and edge_group[0] == timestamp:
                     edge_group = next(edges, None)
-                by_key = {key(row): row for row in points}
-                for edge in positions:
-                    parent = by_key.get((edge['chain_id'], edge['parent'].lower()))
-                    if parent and edge.get('block_number') != parent.get('block_number'):
-                        edge.update(status='unavailable', reason='selected_block_mismatch')
-                    if edge.get('child_chain_id') is not None and decimal(edge.get('debt_usd')) != 0:
-                        child = by_key.get((edge['child_chain_id'],edge['child'].lower()))
-                        if child and edge.get('child_block_number') != child.get('block_number'):
-                            edge.update(status='unavailable', reason='selected_child_block_mismatch')
-                excluded = set()
-                for point in points:
-                    migration = self.bridge_migrations.get(key(point))
-                    if migration is not None:
-                        # A dated migration takes precedence over today's active
-                        # flag, including when the latest close is pre-migration.
-                        if timestamp >= migration['migrationTimestamp']:
-                            excluded.add(key(point))
-                    elif timestamp == self.as_of() and self.manifest['currentBridgePolicy'] == 'retired-registry':
-                        meta = self.catalog.get(key(point), {})
-                        if point.get('bridge_target_chain') in {c for c,_ in self.catalog} and meta.get('active') == 0:
-                            excluded.add(key(point))
-                # Excluded parents must not also deduct their holdings from child
-                # TVL. Keep their dated raw positions available for diagnostics.
-                excluded_positions = [edge for edge in positions if (edge['chain_id'],edge['parent'].lower()) in excluded]
-                included_positions = [edge for edge in positions if (edge['chain_id'],edge['parent'].lower()) not in excluded]
-                account_points = [dict(point,bridge_target_chain=None) if key(point) in self.bridge_migrations else point for point in points]
-                rows, positions, diagnostics = account(account_points, included_positions,
-                    include_curation=include_curation,
-                    deduct_internal_curation=self.manifest.get('deductInternalCuration',False),
-                    vault_policies=self.manifest.get('vaultPolicies',[]),
-                    target_corrections=self.manifest.get('targetCorrections',[]))
-                positions.extend(dict(edge,overlap_usd='0',accounting_excluded=True,reason='bridge_parent_excluded') for edge in excluded_positions)
-                for row in rows:
-                    migration = self.bridge_migrations.get(key(row))
-                    if migration:
-                        row['bridge_target_chain'] = migration['targetChainId']
-                    if key(row) in excluded:
-                        row['bridge_excluded_usd'] = row['external_tvl_usd']
-                        if migration:
-                            row['bridge_migration_timestamp'] = migration['migrationTimestamp']
-                        if row['external_tvl_usd'] is not None:
-                            row['external_tvl_usd'] = '0'
-                with localcontext() as ctx:
-                    ctx.prec = 78
-                    bridge_amount = sum((decimal(row['bridge_excluded_usd']) for row in rows if row.get('bridge_excluded_usd') is not None),Decimal(0))
-                    diagnostics['known_bridge_excluded_usd'] = str(bridge_amount)
-                    diagnostics['known_external_tvl_usd'] = str(max(Decimal(0),decimal(diagnostics['known_external_tvl_usd'])-bridge_amount))
-                    if diagnostics['external_tvl_usd'] is not None:
-                        diagnostics['external_tvl_usd'] = str(max(Decimal(0),decimal(diagnostics['external_tvl_usd'])-bridge_amount))
-                diagnostics['position_count'] = len(positions)
+                rows, positions, diagnostics = self.account_frame(timestamp, points, positions, include_curation=include_curation)
                 # Retirement is a display filter, not an ownership boundary.
                 rows = [r for r in rows if include_retired or self.catalog.get(key(r),{}).get('active',1)]
                 yield timestamp, rows, positions, diagnostics
+
+    def account_frame(self, timestamp, points, positions, *, include_curation=False):
+        """Account one captured close without accessing storage."""
+        by_key = {key(row): row for row in points}
+        for edge in positions:
+            parent = by_key.get((edge['chain_id'], edge['parent'].lower()))
+            if parent and edge.get('block_number') != parent.get('block_number'):
+                edge.update(status='unavailable', reason='selected_block_mismatch')
+            if edge.get('child_chain_id') is not None and decimal(edge.get('debt_usd')) != 0:
+                child = by_key.get((edge['child_chain_id'],edge['child'].lower()))
+                if child and edge.get('child_block_number') != child.get('block_number'):
+                    edge.update(status='unavailable', reason='selected_child_block_mismatch')
+        excluded = set()
+        for point in points:
+            migration = self.bridge_migrations.get(key(point))
+            if migration is not None:
+                # A dated migration takes precedence over today's active
+                # flag, including when the latest close is pre-migration.
+                if timestamp >= migration['migrationTimestamp']:
+                    excluded.add(key(point))
+            elif timestamp == self.as_of() and self.manifest['currentBridgePolicy'] == 'retired-registry':
+                meta = self.catalog.get(key(point), {})
+                if point.get('bridge_target_chain') in {c for c,_ in self.catalog} and meta.get('active') == 0:
+                    excluded.add(key(point))
+        # Excluded parents must not also deduct their holdings from child
+        # TVL. Keep their dated raw positions available for diagnostics.
+        excluded_positions = [edge for edge in positions if (edge['chain_id'],edge['parent'].lower()) in excluded]
+        included_positions = [edge for edge in positions if (edge['chain_id'],edge['parent'].lower()) not in excluded]
+        account_points = [dict(point,bridge_target_chain=None) if key(point) in self.bridge_migrations else point for point in points]
+        rows, positions, diagnostics = account(account_points, included_positions,
+            include_curation=include_curation,
+            deduct_internal_curation=self.manifest.get('deductInternalCuration',False),
+            vault_policies=self.manifest.get('vaultPolicies',[]),
+            target_corrections=self.manifest.get('targetCorrections',[]))
+        positions.extend(dict(edge,overlap_usd='0',accounting_excluded=True,reason='bridge_parent_excluded') for edge in excluded_positions)
+        for row in rows:
+            migration = self.bridge_migrations.get(key(row))
+            if migration:
+                row['bridge_target_chain'] = migration['targetChainId']
+            if key(row) in excluded:
+                row['bridge_excluded_usd'] = row['external_tvl_usd']
+                if migration:
+                    row['bridge_migration_timestamp'] = migration['migrationTimestamp']
+                if row['external_tvl_usd'] is not None:
+                    row['external_tvl_usd'] = '0'
+        with localcontext() as ctx:
+            ctx.prec = 78
+            bridge_amount = sum((decimal(row['bridge_excluded_usd']) for row in rows if row.get('bridge_excluded_usd') is not None),Decimal(0))
+            diagnostics['known_bridge_excluded_usd'] = str(bridge_amount)
+            diagnostics['known_external_tvl_usd'] = str(max(Decimal(0),decimal(diagnostics['known_external_tvl_usd'])-bridge_amount))
+            if diagnostics['external_tvl_usd'] is not None:
+                diagnostics['external_tvl_usd'] = str(max(Decimal(0),decimal(diagnostics['external_tvl_usd'])-bridge_amount))
+        diagnostics['position_count'] = len(positions)
+        return rows, positions, diagnostics
 
     def graph(self, chain_id=None, category=None, include_retired=True):
         from .tvl_graph import build_graph

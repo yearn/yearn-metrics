@@ -107,7 +107,7 @@ def test_failed_catchup_resumes_completed_windows_without_resetting_shared_curso
     with pytest.raises(RuntimeError, match="endpoint unavailable"):
         envio.import_reports_from_envio(conn, ["eth"], versions=["v3"], to_block=150)
     conn.close()
-    conn = connect(tmp_path / "envio.sqlite")
+    conn = connect('staging')
     assert coverage(conn, LATER) == 49
     assert coverage(conn, helpers.VAULT) == 100
     assert envio._get_envio_cursor(conn, 1, "StrategyReported") == 100

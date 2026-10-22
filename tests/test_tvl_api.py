@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-import sqlite3
 
 import pytest
 
@@ -35,7 +34,7 @@ def run(conn, number, timestamp, rows, edges=(), status='complete'):
 
 @pytest.fixture
 def source(tmp_path):
-    path = tmp_path/'yearn.sqlite'
+    path = 'staging'
     conn = connect(path); init_db(conn); conn.executescript(SCHEMA)
     for address, active in ((PARENT,1),(CHILD,1),(BRIDGE,0)):
         conn.execute("INSERT INTO tvl_vaults (chain_id,version,address,active,updated_at) VALUES (1,'v3',?,?,1)", (address,active))
@@ -93,8 +92,6 @@ def test_incomplete_ok_position_cannot_replace_complete_ownership(source):
     assert dataset.summary()['totalTvl'] == 150
     assert dataset.frames((DAY,))[0][2][0]['source_run_id'] == 1
     # Retention must keep the same complete evidence as the API selector.
-    import hashlib
-    conn.create_function('canonical_sha256', 1, lambda value: hashlib.sha256(value.encode()).hexdigest())
     _stage_observations(conn, 'tvl_positions', dataset.run_ids)
     assert conn.execute('SELECT run_id FROM canonical_keep_tvl_positions').fetchone()[0] == 1
 
@@ -115,7 +112,6 @@ def test_incomplete_ok_position_cannot_replace_complete_ownership(source):
 def test_registry_correction_applies_to_history_and_is_pinned(source, monkeypatch):
     from yearn_data import tvl_api
     from yearn_data.canonical_history import _stage_observations
-    import hashlib
 
     conn,path,root = source
     strategy = '0x'+'44'*20
@@ -171,7 +167,6 @@ def test_registry_correction_applies_to_history_and_is_pinned(source, monkeypatc
     assert next(e for e in edges if e['child']==CHILD)['source_run_id'] == 3
     assert repaired.frames((DAY+86400,))[0][3]['status'] == 'incomplete'
 
-    conn.create_function('canonical_sha256',1,lambda value: hashlib.sha256(value.encode()).hexdigest())
     _stage_observations(conn,'tvl_positions',repaired.run_ids)
     assert {r[0] for r in conn.execute('SELECT DISTINCT run_id FROM canonical_keep_tvl_positions')} == {1,2,3}
     # Raw observations and publications made with the old policy stay auditable.
@@ -290,8 +285,8 @@ def test_curation_and_audit_require_positive_allocator_evidence(source):
 def test_comparison_uses_native_totals_only(source, tmp_path):
     conn, path, root = source
     run(conn,1,DAY,[(PARENT,'100'),(CHILD,'100')],[(CHILD,'50')])
-    reference_path = tmp_path/'external.sqlite'
-    with sqlite3.connect(reference_path) as reference:
+    reference_path = 'staging'
+    with connect('staging') as reference:
         reference.execute('CREATE TABLE defillama_snapshots (id INTEGER,protocol TEXT,chain TEXT,tvl_usd REAL,timestamp INTEGER)')
         reference.executemany('INSERT INTO defillama_snapshots VALUES (?,?,?,?,?)',
                              [(1,'yearn-finance',None,120,DAY),(2,'yearn-finance','Ethereum',120,DAY),

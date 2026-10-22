@@ -1,6 +1,6 @@
+from yearn_data.storage import connect
 from yearn_data.tvl_comparison import discrepancy_details
 from yearn_data.analytics import SCHEMA, put_input, selected_input
-import sqlite3
 
 
 def row(address, net='10', gross='10', category='v3'):
@@ -82,7 +82,7 @@ def test_incomplete_factory_scan_does_not_establish_absence():
 
 
 def test_comparison_inputs_replace_instead_of_retaining_stale_vaults():
-    conn=sqlite3.connect(':memory:');conn.row_factory=sqlite3.Row;conn.executescript(SCHEMA)
+    conn=connect('staging');conn.executescript(SCHEMA)
     put_input(conn,'comparison-evidence',evidence([external('removed')]),observed_at=1)
     put_input(conn,'comparison-evidence',evidence([]),observed_at=2)
     assert selected_input(conn,'comparison-evidence')['body']['vaults']==[]
@@ -92,7 +92,7 @@ def test_prepared_publication_pins_evidence_without_rewriting_previous_result(tm
     from types import SimpleNamespace
     from yearn_data.analytics import prepare, AnalyticsStore
     from yearn_data.storage import connect
-    database=tmp_path/'comparison.sqlite'
+    database='staging'
     financial=SimpleNamespace(id='fees',cutoff=86400,fees=[],earnings=[],vault_names={})
     tvl=SimpleNamespace(id='dataset',as_of=lambda:123,dates=lambda:(),
         frames=lambda dates:[(123,[row('ours')],[],{})],history_prepared=lambda:False,

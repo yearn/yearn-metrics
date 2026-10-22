@@ -15,29 +15,12 @@ from yearn_data.storage import connect, init_db
 MIXED = '0x' + 'cD' * 32
 
 
-@pytest.fixture(params=['sqlite', 'postgres'])
-def db(request, tmp_path):
-    if request.param == 'sqlite':
-        conn = connect(tmp_path / 'hashes.sqlite')
-        init_db(conn)
-        yield conn
-        conn.close()
-        return
-    transport = pytest.importorskip('yearn_data.postgres', reason='Postgres transport is added higher in the stack')
-    url = os.environ.get('YEARN_TEST_POSTGRES_URL')
-    if not url:
-        pytest.skip('YEARN_TEST_POSTGRES_URL not configured')
-    psycopg = pytest.importorskip('psycopg')
-    name = 'hash_identity_' + uuid.uuid4().hex
-    with psycopg.connect(url, autocommit=True) as admin:
-        admin.execute(psycopg.sql.SQL('CREATE SCHEMA {}').format(psycopg.sql.Identifier(name)))
-        conn = transport.Connection(url, schema=name)
-        try:
-            init_db(conn)
-            yield conn
-        finally:
-            conn.close()
-            admin.execute(psycopg.sql.SQL('DROP SCHEMA {} CASCADE').format(psycopg.sql.Identifier(name)))
+
+@pytest.fixture
+def db(pg):
+    conn,_=pg
+    init_db(conn)
+    return conn
 
 
 @pytest.mark.parametrize('version', ['v2', 'v3'])

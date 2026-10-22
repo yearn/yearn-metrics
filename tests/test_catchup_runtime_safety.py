@@ -12,7 +12,7 @@ from yearn_data.storage import connect, init_db
 
 @pytest.fixture
 def db(tmp_path):
-    conn = connect(tmp_path / 'runtime.sqlite')
+    conn = connect('staging')
     init_db(conn)
     yield conn
     conn.close()

@@ -5,7 +5,6 @@ provenance/checkpoint records, not a retention boundary for historical dates.
 The database transaction verifies every retained observation before committing.
 """
 from contextlib import closing
-import hashlib
 import json
 import time
 
@@ -39,9 +38,7 @@ SCHEMA = '''CREATE TABLE IF NOT EXISTS canonical_history_receipts (
 
 
 def _sha(conn, expression):
-    if hasattr(conn, 'raw'):
-        return f"encode(sha256(convert_to({expression},'UTF8')),'hex')"
-    return f'canonical_sha256({expression})'
+    return f"encode(sha256(convert_to({expression},'UTF8')),'hex')"
 
 
 def _count(conn, table, where='1=1', params=()):
@@ -50,7 +47,7 @@ def _count(conn, table, where='1=1', params=()):
 
 def _record_sha(conn, columns, alias=''):
     values = ','.join(alias+column for column in columns)
-    body = f'CAST(json_build_array({values}) AS TEXT)' if hasattr(conn, 'raw') else f'json_array({values})'
+    body = f'CAST(json_build_array({values}) AS TEXT)'
     return _sha(conn, body)
 
 
@@ -174,10 +171,7 @@ def _stage_analyses(conn, keep):
 def _verify_observations(conn, table, expected_rows):
     dimensions, _ = observation_selection(table)
     joins = ' AND '.join(f's.{key}=k.{key}' for key in dimensions.split(','))
-    # SQLite's long-standing IS NOT is null-safe; the PostgreSQL spelling
-    # IS DISTINCT FROM was only added to SQLite in 3.39.
-    distinct = 'IS DISTINCT FROM' if hasattr(conn, 'raw') else 'IS NOT'
-    extra = f' OR s.block_number {distinct} k.block_number' if table == 'tvl_snapshots' else ''
+    extra = ' OR s.block_number IS DISTINCT FROM k.block_number' if table == 'tvl_snapshots' else ''
     mismatches = conn.execute(f'''SELECT COUNT(*) FROM canonical_keep_{table} k
         LEFT JOIN {table} s ON {joins} AND s.run_id=k.run_id
         WHERE s.run_id IS NULL OR {_sha(conn, 's.data_json')}<>k.value_sha256{extra}''').fetchone()[0]
@@ -217,18 +211,13 @@ def consolidate(database, *, apply=False, progress=None):
     """
     notify = progress or (lambda message: None)
     with closing(connect(database, direct=True)) as conn:
-        if hasattr(conn, 'raw'):
-            conn.raw.execute('BEGIN ISOLATION LEVEL REPEATABLE READ')
-            conn.raw.execute("SET LOCAL lock_timeout='5s'")
-            if not conn.execute('SELECT pg_try_advisory_xact_lock(743219890)').fetchone()[0]:
-                raise ValueError('another canonical consolidation is running')
-            if apply:
-                tables = sorted(t for t in set(LOCK_TABLES) if table_exists(conn, t))
-                conn.raw.execute('LOCK TABLE '+','.join(tables)+' IN SHARE ROW EXCLUSIVE MODE')
-        else:
-            conn.create_function('canonical_sha256', 1,
-                                 lambda text: hashlib.sha256(text.encode()).hexdigest(), deterministic=True)
-            conn.execute('BEGIN IMMEDIATE' if apply else 'BEGIN')
+        conn.raw.execute('BEGIN ISOLATION LEVEL REPEATABLE READ')
+        conn.raw.execute("SET LOCAL lock_timeout='5s'")
+        if not conn.execute('SELECT pg_try_advisory_xact_lock(743219890)').fetchone()[0]:
+            raise ValueError('another canonical consolidation is running')
+        if apply:
+            tables = sorted(t for t in set(LOCK_TABLES) if table_exists(conn, t))
+            conn.raw.execute('LOCK TABLE '+','.join(tables)+' IN SHARE ROW EXCLUSIVE MODE')
         try:
             for table in ('tvl_runs', 'analysis_runs'):
                 if conn.execute(f"SELECT 1 FROM {table} WHERE status='running' LIMIT 1").fetchone():

@@ -9,7 +9,7 @@ Reports from retired vaults remain in scope.
 Run:
 
 ```bash
-yearn-data --db /path/to/yearn.sqlite index-fees --canonical
+yearn-data --db neon index-fees --canonical
 ```
 
 The command reads V3 fee fields and V2 transaction receipts.
@@ -24,8 +24,8 @@ Use `--version v3` to calculate V3 fees from stored reports without RPC requests
 Run:
 
 ```bash
-yearn-data --db /path/to/yearn.sqlite analyze canonical-fees
-yearn-data --db /path/to/yearn.sqlite export canonical-fees --out /path/to/exports
+yearn-data --db neon analyze canonical-fees
+yearn-data --db neon export canonical-fees --out /path/to/exports
 ```
 
 The outputs contain fee events, accounting coverage, and subtotals by asset.
@@ -51,7 +51,7 @@ A family identifies the type of contract that charged the fee.
 Supply a JSON list of classified contracts:
 
 ```bash
-yearn-data --db /path/to/yearn.sqlite index-tokenized-fees \
+yearn-data --db neon index-tokenized-fees \
   --inventory /path/to/inventory.json --chain eth \
   --from-block START --to-block END --before-timestamp CUTOFF \
   --max-vaults COUNT
@@ -93,7 +93,7 @@ Some older V2 reports need receipt and historical state evidence to calculate fe
 Use:
 
 ```bash
-yearn-data --db /path/to/yearn.sqlite index-fees --canonical \
+yearn-data --db neon index-fees --canonical \
   --reconstruct-v2 --retry-unresolved --limit COUNT
 ```
 
@@ -117,7 +117,7 @@ The verifier uses this evidence to check the executed asset fee amount against t
 4. Run:
 
 ```bash
-yearn-data --db /path/to/yearn.sqlite index-fees --canonical \
+yearn-data --db neon index-fees --canonical \
   --report-keys /path/to/keys.json --verify-selective --verify-execution \
   --reconstruct-v2 --trace-limit COUNT
 ```
@@ -133,8 +133,8 @@ or later vault activity found around reconstructed reports.
 These commands do not make RPC requests:
 
 ```bash
-yearn-data --db /path/to/yearn.sqlite recompute-fees policy
-yearn-data --db /path/to/yearn.sqlite recompute-fees formulas
+yearn-data --db neon recompute-fees policy
+yearn-data --db neon recompute-fees formulas
 ```
 
 They preserve accepted execution amounts when the source evidence still matches.

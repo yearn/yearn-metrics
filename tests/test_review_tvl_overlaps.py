@@ -60,7 +60,10 @@ def test_overlap_review_cli_handles_getter_route_without_source(source,tmp_path,
     graph=json.loads((out/'graph.json').read_text())
     assert summary['sourceDatasetId']==validation['sourceDatasetId']==dataset.id
     assert graph['datasetId']==validation['reviewDatasetId']
-    assert (out/'review.sqlite').is_file()
+    from yearn_data.tvl_review import ReviewDataset
+    saved=ReviewDataset.load(out/'frame.json')
+    assert saved.id==graph['datasetId'] and saved.graph()==graph
+    assert not list(out.glob('*.sqlite'))
     if mode=='unknown-parent':
         assert not validation['verifiedPositions'] and not calls
         assert validation['unresolvedCandidates']==[{

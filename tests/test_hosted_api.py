@@ -21,7 +21,7 @@ from yearn_data.hosted_api import HostedAPI, Handler, cache_headers
 
 @pytest.fixture
 def published(tmp_path):
-    database = tmp_path/'source.sqlite'
+    database = 'staging'
     financial = tmp_path/'fees'
     history = tmp_path/'tvl'
     with closing(connect(database)) as conn:

@@ -27,7 +27,7 @@ Developer availability, coverage and provenance belong in Yearn Data. Powerglove
 
 ## R1. Stored inputs and publication identity
 
-Postgres is the serving source. Keep `NEON_DB_URL` server-side and use the logical database reference `neon` in publications. The already-imported TVL, fees and earnings history must be reused; do not rerun the historical migration. SQLite may remain an optional local test/rollback source, with no production serving dependency. Prepared analytics and their immutable selection pointer must live in Postgres so the added routes can be reproduced without local publication artifacts.
+Postgres is the serving source. Keep `NEON_DB_URL` server-side and use the logical database reference `neon` in publications. The already-imported TVL, fees and earnings history must be reused; do not rerun the historical migration. SQLite runtime and test-backend support is retired. Local development and regression tests use isolated Postgres schemas. Historical SQLite archives remain recovery evidence, accessed only with the historical tools that produced them. Prepared analytics and their immutable selection pointer must live in Postgres so the added routes can be reproduced without local publication artifacts.
 
 Collect missing inputs independently of HTTP requests. Serving these routes must remain read-only and must not call an RPC, Kong, a pricing provider or DefiLlama on demand.
 

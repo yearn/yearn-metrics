@@ -1,21 +1,18 @@
-"""Storage migration regressions; integration cases use disposable PG schemas.
+"""Postgres transport regressions and integration contracts.
 
 Set YEARN_TEST_POSTGRES_URL to exercise real Postgres. No test uses public tables.
 """
+from conftest import pg
 from contextlib import closing
 import json
-import os
-import uuid
 
 import psycopg
-from psycopg import sql
 import pytest
 
 from yearn_data.analysis import create_analysis_run, write_output
 from yearn_data.coverage import Scope, commit_range, missing_ranges
 from yearn_data.exports import export_analysis
 from yearn_data.postgres import parameters, schema_statements
-from yearn_data.postgres_migration import migration_plan, migrate_sqlite
 from yearn_data.storage import connect, init_db, database_reference, table_exists
 
 
@@ -35,27 +32,24 @@ def test_schema_translation_preserves_default_text_and_forward_references():
     assert "DEFAULT 'INTEGER; REAL'" in statements[1]
 
 
+def test_schema_splitter_ignores_comment_semicolons_and_preserves_quoted_values(pg):
+    conn,_=pg
+    conn.executescript('''-- a comment; before the child
+        CREATE TABLE quoted_child(id INTEGER, parent INTEGER REFERENCES quoted_parent(id), note TEXT DEFAULT 'it''s; quoted');
+        /* another; comment */ CREATE TABLE quoted_parent(id INTEGER PRIMARY KEY);
+        -- trailing comment;
+    ''')
+    conn.execute('INSERT INTO quoted_parent VALUES (1)')
+    conn.execute('INSERT INTO quoted_child(id,parent) VALUES (1,1)')
+    assert conn.execute('SELECT note FROM quoted_child').fetchone()[0]=="it's; quoted"
+
+
 def test_publication_rejects_embedded_database_credentials():
     with pytest.raises(ValueError, match='logical database name'):
         database_reference('postgresql://user:secret@localhost/db')
     assert database_reference('neon') == 'neon'
 
 
-@pytest.fixture
-def pg(monkeypatch):
-    url = os.environ.get('YEARN_TEST_POSTGRES_URL')
-    if not url:
-        pytest.skip('YEARN_TEST_POSTGRES_URL not configured')
-    name = 'yearn_test_' + uuid.uuid4().hex
-    with psycopg.connect(url, autocommit=True) as admin:
-        admin.execute(sql.SQL('CREATE SCHEMA {}').format(sql.Identifier(name)))
-        monkeypatch.setenv('NEON_DB_URL', url)
-        monkeypatch.setenv('YEARN_DATA_DB_SCHEMA', name)
-        try:
-            with closing(connect('neon')) as conn:
-                yield conn, name
-        finally:
-            admin.execute(sql.SQL('DROP SCHEMA {} CASCADE').format(sql.Identifier(name)))
 
 
 def test_real_postgres_atomic_coverage_and_readonly(pg):
@@ -80,80 +74,12 @@ def test_real_postgres_atomic_coverage_and_readonly(pg):
             reader.execute('DELETE FROM block_timestamps')
 
 
-def sqlite_history(path):
-    conn = connect(path)
-    init_db(conn)
-    conn.execute("INSERT INTO analysis_runs VALUES (13,'lifetime-yield',1,2,'complete','{}')")
-    conn.execute("INSERT INTO analysis_runs VALUES (99,'deleted',1,2,'complete','{}')")
-    conn.execute('DELETE FROM analysis_runs WHERE id=99')
-    for rowid, value in ((12, 'last'),(-5, 'first')):
-        raw = json.dumps({'value':value,'raw':str(2**255),'usd':'123.4567890123456789','missing':None,'zero':'0'})
-        conn.execute('INSERT INTO analysis_outputs(rowid,run_id,name,row_json) VALUES (?,13,?,?)',(rowid,'reports',raw))
-    conn.execute("INSERT INTO tvl_runs VALUES (401,1,2,'complete','{}')")
-    raw = json.dumps({'quantity':str(2**255),'tvl_usd':None})
-    conn.execute('INSERT INTO tvl_snapshots VALUES (401,1,?,?,1,?)', ('vault',123,raw))
-    conn.execute('INSERT INTO tvl_prices VALUES (1,?,123,1,?,?,?,?)',
-                 ('asset','yearn-prices',1.23456789012345,'ok','{}'))
-    conn.commit()
-    return conn
 
 
-def test_real_migration_preserves_order_precision_nulls_and_reserved_ids(pg,tmp_path):
-    conn, _ = pg
-    path = tmp_path/'history.sqlite'
-    with closing(sqlite_history(path)) as source:
-        plan = migration_plan(path)
-        assert not table_exists(conn,'analysis_runs')
-        assert plan['tables']['analysis_outputs'] == 2
-        result = migrate_sqlite(path,batch_size=1)
-        assert result['analysis_fingerprints_preserved']
-        rows = list(conn.execute('SELECT rowid,row_json FROM analysis_outputs ORDER BY rowid'))
-        assert [r[0] for r in rows] == [-5,12]
-        assert [tuple(r) for r in rows] == [tuple(r) for r in source.execute('SELECT rowid,row_json FROM analysis_outputs ORDER BY rowid')]
-        assert conn.execute('SELECT price_usd FROM tvl_prices').fetchone()[0] == 1.23456789012345
-        assert conn.execute('SELECT data_json FROM tvl_snapshots').fetchone()[0] == source.execute('SELECT data_json FROM tvl_snapshots').fetchone()[0]
-        assert create_analysis_run(conn,'next') == 100
-        write_output(conn,13,'reports',{'value':'new'})
-        conn.commit()
-        assert conn.execute('SELECT MAX(rowid) FROM analysis_outputs').fetchone()[0] == 13
-        exported = export_analysis(conn,'lifetime-yield',tmp_path/'exports',run_id=13)
-        assert 'first' in exported[0].read_text().splitlines()[1]
-        with pytest.raises(ValueError,match='must be empty'):
-            migrate_sqlite(path)
 
 
-def test_real_migration_failure_leaves_target_empty(pg,tmp_path):
-    conn, _ = pg
-    path = tmp_path/'history.sqlite'
-    sqlite_history(path).close()
-    def interrupted(message):
-        if message.startswith('copied analysis_outputs'):
-            raise RuntimeError('injected copy interruption')
-    with pytest.raises(RuntimeError,match='interruption'):
-        migrate_sqlite(path,progress=interrupted)
-    assert not table_exists(conn,'analysis_runs')
-    assert migrate_sqlite(path)['status'] == 'complete'
 
 
-@pytest.mark.parametrize('case', [
-    'test_accumulated_history_repair_and_failed_retry_preserve_known_data',
-    'test_current_bridge_policy_not_retroactive_and_chain_filter_consistent',
-    'test_rejected_provider_quote_is_not_served_or_used_as_reference',
-])
-def test_existing_tvl_api_regressions_on_postgres(pg,tmp_path,monkeypatch,case):
-    import inspect
-    import test_tvl_api as cases
-    conn, _ = pg
-    init_db(conn)
-    for address,active in ((cases.PARENT,1),(cases.CHILD,1),(cases.BRIDGE,0)):
-        conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,active,updated_at) VALUES (1,'v3',?,?,1)",(address,active))
-    conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,active,updated_at) VALUES (10,'v3',?,1,1)",(cases.CHILD,))
-    conn.commit()
-    fn = getattr(cases,case)
-    args = {'source':(conn,'neon',tmp_path/'tvl')}
-    if 'monkeypatch' in inspect.signature(fn).parameters:
-        args['monkeypatch'] = monkeypatch
-    fn(**args)
 
 
 def test_existing_fee_pairing_contract_on_postgres(pg,tmp_path):
@@ -172,36 +98,8 @@ def test_existing_fee_pairing_contract_on_postgres(pg,tmp_path):
     assert PairingStore(tmp_path/'fees').get().id == dataset.id
 
 
-@pytest.mark.parametrize('case', [
-    'test_factory_uses_actual_family_events_and_resumes',
-    'test_fresh_catalog_collect_and_export_without_migration',
-])
-def test_existing_discovery_and_collection_on_postgres(pg,tmp_path,monkeypatch,case):
-    import inspect
-    import test_tvl_discovery as cases
-    conn, _ = pg
-    init_db(conn)
-    fn = getattr(cases,case)
-    available = {'db':conn,'tmp_path':tmp_path,'monkeypatch':monkeypatch}
-    fn(**{name:available[name] for name in inspect.signature(fn).parameters})
 
 
-def test_legacy_tvl_catalog_import_on_postgres(pg,tmp_path):
-    import sqlite3
-    from yearn_data.tvl_sources import import_service_catalog
-    conn, _ = pg
-    init_db(conn)
-    path = tmp_path/'legacy.sqlite'
-    with sqlite3.connect(path) as source:
-        source.executescript('''CREATE TABLE vaults(id INTEGER,chain_id INTEGER,address TEXT,category TEXT,
-            asset_address TEXT,asset_symbol TEXT,asset_decimals INTEGER,name TEXT,api_version TEXT,is_retired INTEGER);
-            CREATE TABLE strategies(chain_id INTEGER,address TEXT,vault_id INTEGER,name TEXT);''')
-        for number, retired in ((1, 0), (2, 1)):
-            source.execute('INSERT INTO vaults VALUES (?,?,?,?,?,?,?,?,?,?)',
-                (number, 999, '0x'+str(number)*40, 'v3', '0x'+'8'*40, 'USD', 6, 'name', None, retired))
-    assert import_service_catalog(conn, path) == 2
-    assert import_service_catalog(conn, path) == 2
-    assert [r[0] for r in conn.execute('SELECT active FROM tvl_vaults ORDER BY address')] == [1, 0]
 
 
 @pytest.mark.parametrize('job', ['canonical', 'usd'])

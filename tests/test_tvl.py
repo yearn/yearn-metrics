@@ -1,12 +1,11 @@
 import json
-import sqlite3
 from decimal import Decimal
 
 import pytest
 
 from yearn_data.storage import connect, init_db
 from yearn_data.tvl import account, asset_units, export_tvl
-from yearn_data.tvl_sources import ArchiveReader, collect_tvl, import_service_catalog, scan_holders, candidate_edges
+from yearn_data.tvl_sources import ArchiveReader, collect_tvl, scan_holders, candidate_edges
 from yearn_data.cli import main
 
 
@@ -18,7 +17,7 @@ def address(n):
 def test_collection_stops_on_operator_price_errors(tmp_path, monkeypatch, failure):
     from unittest.mock import Mock
     from yearn_data import pricing, tvl_sources
-    conn = connect(tmp_path / 'operator-error.sqlite'); init_db(conn)
+    conn = connect('staging'); init_db(conn)
     conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at) "
                  "VALUES (1,'v3',?,?,18,1)", (address(1), address(2))); conn.commit()
     reader = Mock(); reader.block_at.return_value = 1
@@ -184,7 +183,7 @@ def test_versioned_debt_layouts():
 
 @pytest.fixture
 def db(tmp_path):
-    conn=connect(tmp_path/'test.sqlite')
+    conn=connect('staging')
     init_db(conn)
     for n,version in [(1,'v3'),(2,'v3'),(3,'v1'),(4,'curation')]:
         conn.execute('''INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at,active)
@@ -242,29 +241,11 @@ def test_share_scan_discovers_nonregistry_intermediaries(db):
     assert any(e['strategy']==address(9) and e['child']==address(2) for e in candidate_edges(db,vaults))
 
 
-def test_migration_is_read_only_idempotent_and_includes_all_categories(tmp_path):
-    path=tmp_path/'legacy.sqlite'
-    source=sqlite3.connect(path)
-    source.executescript('''CREATE TABLE vaults(id INTEGER,chain_id INTEGER,address TEXT,category TEXT,
-        asset_address TEXT,asset_symbol TEXT,asset_decimals INTEGER,name TEXT,api_version TEXT,is_retired INTEGER);
-        CREATE TABLE strategies(chain_id INTEGER,address TEXT,vault_id INTEGER,name TEXT);''')
-    for n,version in [(1,'v1'),(2,'v2'),(3,'v3'),(4,'curation')]:
-        source.execute('INSERT INTO vaults VALUES (?,?,?,?,?,?,?,?,?,?)',(n,999,address(n),version,address(8),'USD',6,'name',None,1))
-    source.execute('INSERT INTO strategies VALUES (999,?,3,NULL)',(address(9),))
-    source.commit();source.close()
-    original=path.read_bytes()
-    conn=connect(tmp_path/'new.sqlite');init_db(conn)
-    assert import_service_catalog(conn,path)==4
-    assert import_service_catalog(conn,path)==4
-    assert conn.execute('SELECT COUNT(*) FROM tvl_vaults').fetchone()[0]==4
-    assert path.read_bytes()==original
-    assert conn.execute('SELECT COUNT(*) FROM tvl_strategies WHERE chain_id=999').fetchone()[0]==1
-    conn.close()
 
 
 def test_cli_export_empty_run_is_actionable(tmp_path):
     with pytest.raises(ValueError,match='no collected TVL run'):
-        main(['--db',str(tmp_path/'cli.sqlite'),'tvl','export','--out',str(tmp_path/'out')])
+        main(['--db','staging','tvl','export','--out',str(tmp_path/'out')])
 
 
 def test_yearn_prices_requires_day_end_state(db):
@@ -385,7 +366,7 @@ def test_empty_v1_does_not_require_undefined_share_price():
 @pytest.mark.parametrize('ids', [(1,2,3),(3,2,1)])
 @pytest.mark.parametrize('share_prices', [True,False])
 def test_multilevel_wrappers_use_leaf_value_in_any_order(tmp_path,monkeypatch,ids,share_prices):
-    conn=connect(tmp_path/'wrappers.sqlite');init_db(conn)
+    conn=connect('staging');init_db(conn)
     outer,middle,leaf=map(address,ids)
     for vault,asset,decimals in [(outer,middle,18),(middle,leaf,18),(leaf,address(90),6)]:
         conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at) VALUES (1,'v3',?,?,?,1)",(vault,asset,decimals))
@@ -416,7 +397,7 @@ def test_multilevel_wrappers_use_leaf_value_in_any_order(tmp_path,monkeypatch,id
 
 @pytest.mark.parametrize('failure', ['membership','assets','positive-debt','zero-debt'])
 def test_unresolved_adapter_read_failure_cannot_export_complete(tmp_path,monkeypatch,failure):
-    conn=connect(tmp_path/'adapter.sqlite');init_db(conn)
+    conn=connect('staging');init_db(conn)
     conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at) VALUES (1,'curation',?,?,18,1)",(address(1),address(90)))
     conn.execute('INSERT INTO tvl_strategies VALUES (1,?,?,?)',(address(1),address(9),'fixture'))
     conn.execute("INSERT INTO tvl_catalog_evidence VALUES (1,?,?,'unresolved','{}',1)",(address(9),'adapter:'+address(1)))
@@ -448,7 +429,7 @@ def test_unresolved_adapter_read_failure_cannot_export_complete(tmp_path,monkeyp
 
 @pytest.mark.parametrize('cycle', [False,True])
 def test_nested_valuation_without_a_known_leaf_stays_unavailable(tmp_path,monkeypatch,cycle):
-    conn=connect(tmp_path/'unknown.sqlite');init_db(conn)
+    conn=connect('staging');init_db(conn)
     for vault,asset in [(address(1),address(2)),(address(2),address(1) if cycle else address(90))]:
         conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at) VALUES (1,'v3',?,?,18,1)",(vault,asset))
     conn.commit()

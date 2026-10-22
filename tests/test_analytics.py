@@ -182,7 +182,7 @@ def test_profitability_period_chain_retired_and_no_nested_yield_sum():
 
 
 def test_publications_pinned_filters_and_atomic_selection(tmp_path):
-    database=tmp_path/'data.sqlite';conn=connect(database);conn.executescript(SCHEMA)
+    database='staging';conn=connect(database);conn.executescript(SCHEMA)
     identity='a'*64
     meta={'publicationId':identity,'tvlDatasetId':'b'*64}
     data={'meta':meta,'stack':{},'comparison':{},'comparable':{'diff':{'missingFromDefillama':[]}},'profitability':{'None':{},'1':{}}}
@@ -201,7 +201,7 @@ def test_publications_pinned_filters_and_atomic_selection(tmp_path):
 
 
 def test_input_zero_stored_and_bad_adapter_fails(tmp_path):
-    conn=connect(tmp_path/'data.sqlite');conn.executescript(SCHEMA)
+    conn=connect('staging');conn.executescript(SCHEMA)
     identity=put_input(conn,'fee-config',configs(),observed_at=1)
     assert identity==put_input(conn,'fee-config',configs(),observed_at=1)
     with pytest.raises(ValueError,match='unsupported finance adapter'):rules('garbage','garbage')
@@ -209,7 +209,7 @@ def test_input_zero_stored_and_bad_adapter_fails(tmp_path):
 
 def test_failed_retry_preserves_known_zero_and_membership(tmp_path):
     from yearn_data.analytics import selected_input
-    conn=connect(tmp_path/'data.sqlite');conn.executescript(SCHEMA)
+    conn=connect('staging');conn.executescript(SCHEMA)
     put_input(conn,'fee-config',{'vaults':[{'chainId':1,'address':A,'performanceFee':0,'managementFee':0,'observedAt':1}]},observed_at=1)
     put_input(conn,'fee-config',{'vaults':[{'chainId':1,'address':A,'performanceFee':None,'managementFee':None}]},status='partial',observed_at=2)
     latest=selected_input(conn,'fee-config')['body']['vaults'][0]
@@ -228,7 +228,7 @@ def test_stack_unsupported_configuration_is_not_fixed_rate():
 
 def test_prepare_freezes_inputs_and_retains_old_selection(tmp_path):
     from yearn_data.analytics import prepare
-    db=tmp_path/'data.sqlite';conn=connect(db);conn.executescript(SCHEMA)
+    db='staging';conn=connect(db);conn.executescript(SCHEMA)
     put_input(conn,'fee-config',configs(),observed_at=1)
     put_input(conn,'membership',{'vaults':[{'chainId':1,'address':A,'included':True}]},observed_at=1)
     financial=SimpleNamespace(id='f'*64,cutoff=YEAR,fees=[],earnings=[],vault_names={})

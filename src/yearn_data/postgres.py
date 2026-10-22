@@ -1,6 +1,6 @@
 """Postgres transport for the toolkit's small, shared SQL interface.
 
-Queries keep qmark parameters and SQLite Row access. SQL values always remain
+Queries keep qmark parameters and named or positional row access. SQL values always remain
 driver parameters; this module translates placeholders, not interpolated values.
 """
 from __future__ import annotations
@@ -50,20 +50,23 @@ def schema_statement(statement):
 
 
 def schema_statements(script):
-    """Order referenced tables before their dependants (SQLite permits either)."""
-    import sqlite3
+    """Split schema SQL outside quoted text and order referenced tables first."""
     statements, pending = [], ''
-    for char in script:
-        pending += char
-        if char == ';' and sqlite3.complete_statement(pending):
-            statements.append(pending.strip().rstrip(';'))
+    for index, part in enumerate(QUOTED.split(script)):
+        if index % 2:
+            pending += ' ' if part.startswith(('--', '/*')) else part
+            continue
+        pieces = part.split(';')
+        for piece in pieces[:-1]:
+            statement = (pending + piece).strip()
+            if statement:
+                statements.append(statement)
             pending = ''
+        pending += pieces[-1]
     if pending.strip():
         statements.append(pending.strip())
     tables, others = {}, []
     for statement in statements:
-        if statement.upper().startswith('PRAGMA '):
-            continue
         match = re.match(r'CREATE TABLE (?:IF NOT EXISTS )?["`]?([\w]+)', statement, re.I)
         if match:
             tables[match[1]] = statement
@@ -90,7 +93,7 @@ def create_indexes(conn):
 
 
 class Row:
-    """Support both row['column']/dict(row) and tuple unpacking, as sqlite3.Row does."""
+    """Support named lookup, dict(row) and positional access."""
     def __init__(self, names, values):
         self.names, self.values = names, values
 
@@ -140,7 +143,7 @@ class Connection:
         return self.raw.info.transaction_status != TransactionStatus.IDLE
 
     def _begin_write(self, statement):
-        # Match SQLite: reads outside a context do not leave idle transactions.
+        # Reads outside a context do not leave idle transactions.
         if not self.in_transaction and re.match(r'\s*(INSERT|UPDATE|DELETE)\b', statement, re.I):
             self.raw.execute('BEGIN')
 

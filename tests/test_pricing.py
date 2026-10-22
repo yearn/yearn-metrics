@@ -114,7 +114,7 @@ def test_fetch_defillama_price_retries_rate_limit(monkeypatch):
 
 
 def test_price_unpriced_reports_records_defillama_missing_without_fallback(monkeypatch, tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     conn.execute(
@@ -146,7 +146,7 @@ def test_price_unpriced_reports_records_defillama_missing_without_fallback(monke
 
 
 def test_price_unpriced_volume_uses_flow_tables(monkeypatch, tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     conn.execute(
@@ -179,7 +179,7 @@ def test_price_unpriced_volume_uses_flow_tables(monkeypatch, tmp_path):
 
 
 def test_price_unpriced_volume_can_retry_missing_with_polygon_stable_fallback(monkeypatch, tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     usdt = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
@@ -236,7 +236,7 @@ def test_price_unpriced_volume_can_retry_missing_with_polygon_stable_fallback(mo
 
 
 def test_price_unpriced_reports_retries_missing_with_v3_alias(monkeypatch, tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     usdt = "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
@@ -288,7 +288,7 @@ def test_price_unpriced_reports_retries_missing_with_v3_alias(monkeypatch, tmp_p
 
 
 def test_price_unpriced_reports_uses_curve_lp_fallback(monkeypatch, tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     lp = "0x06325440D014e39736583c165C2963BA99fAf14E"
@@ -583,7 +583,7 @@ def test_balancer_bpt_price_uses_actual_supply_for_phantom_pool(monkeypatch):
 
 
 def test_refresh_onchain_fallbacks_reprices_existing_ok_row(monkeypatch, tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     token = "0x0000000000000000000000000000000000000002"
@@ -621,7 +621,7 @@ def test_refresh_onchain_fallbacks_reprices_existing_ok_row(monkeypatch, tmp_pat
 
 
 def test_price_unpriced_reports_uses_crv_derivative_fallback(monkeypatch, tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     ycrv = "0xFCc5c47bE19d06BF83eB04298b026F81069ff65b"
@@ -758,7 +758,7 @@ def test_curve_zero_balance_does_not_require_valuation(monkeypatch, balance_gett
 
 def test_yearn_only_missing_price_never_calls_optional_adapters(tmp_path, monkeypatch):
     from yearn_data import pricing
-    conn = connect(tmp_path / 'yearn-only.sqlite')
+    conn = connect('staging')
     init_db(conn)
     asset = '0x' + '2' * 40
     conn.execute('''INSERT INTO strategy_reports (
@@ -777,7 +777,7 @@ def test_yearn_only_missing_price_never_calls_optional_adapters(tmp_path, monkey
 
 def test_exhausted_defillama_target_does_not_abort_other_targets(tmp_path, monkeypatch):
     from yearn_data import pricing
-    conn = connect(tmp_path / 'partial-transport.sqlite')
+    conn = connect('staging')
     init_db(conn)
     asset = '0x' + '2' * 40
     for timestamp in (100, 200):

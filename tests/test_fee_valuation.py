@@ -17,7 +17,7 @@ FAMILY = 'yearn-v3-allocator'
 
 @pytest.fixture
 def db(tmp_path):
-    conn = connect(tmp_path/'fees.sqlite');init_db(conn)
+    conn = connect('staging');init_db(conn)
     yield conn
     conn.close()
 
@@ -170,7 +170,7 @@ def test_limit_and_price_only_refresh_leave_accounting_unchanged(db, monkeypatch
 
 def test_cli_offline_analysis_and_csv_exports(db,tmp_path):
     seed(db,1)
-    path=db.execute('PRAGMA database_list').fetchone()[2]
+    path='staging'
     assert main(['--db',path,'analyze','fee-usd','--before-timestamp',str(CUTOFF)])==0
     assert main(['--db',path,'export','fee-usd','--out',str(tmp_path/'export')])==0
     assert (tmp_path/'export/fee_usd_events.csv').exists()

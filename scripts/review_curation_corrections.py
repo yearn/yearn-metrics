@@ -9,15 +9,13 @@ import hashlib
 import json
 from pathlib import Path
 
-from yearn_data.storage import connect, init_db
-from yearn_data.tvl_api import publish_tvl, TvlDataset
+from yearn_data.tvl_review import ReviewDataset
 
 
 def review(frame_path, positions_path, hyper_path, out):
     out=Path(out)
-    path=out/'review.sqlite'
-    if path.exists():
-        raise ValueError('review database already exists; choose a new output directory')
+    if out.exists():
+        raise ValueError('review output already exists; choose a new output directory')
     inputs=[Path(frame_path),Path(positions_path),Path(hyper_path)]
     frame, additions, hyper=[json.loads(p.read_text()) for p in inputs]
     timestamp=frame['timestamp']
@@ -31,29 +29,24 @@ def review(frame_path, positions_path, hyper_path, out):
         if p['timestamp']!=timestamp or p['block_number']!=parent['block_number'] or p['status']!='ok':
             raise ValueError('additional position is not verified at the selected close')
         positions[identity(p)]=p
-        positions.pop((p['chain_id'],p['parent'],p['strategy'],p['strategy']),None)
+        fallback=(p['chain_id'],p['parent'],p['strategy'],p['strategy'])
+        if fallback!=identity(p):
+            positions.pop(fallback,None)
     if hyper['snapshot']['timestamp']!=timestamp or hyper['position']['timestamp']!=timestamp:
         raise ValueError('HyperEVM evidence must use the selected close')
     rows[(999,hyper['snapshot']['vault'])]=hyper['snapshot']
     positions[identity(hyper['position'])]=hyper['position']
     out.mkdir(parents=True,exist_ok=True)
-    conn=connect(path);init_db(conn)
-    with conn:
-        for meta in frame['catalog']+[hyper['catalog']]:
-            fields=list(meta)
-            conn.execute(f'INSERT INTO tvl_vaults ({",".join(fields)}) VALUES ({",".join("?" for _ in fields)})',tuple(meta.values()))
-        conn.execute("INSERT INTO tvl_runs VALUES (1,1,1,'incomplete',?)",(json.dumps({'from':timestamp,'to':timestamp,'source':'curation-correction-review'}),))
-        for r in rows.values():
-            raw={k:v for k,v in r.items() if k not in ('overlap_usd','external_tvl_usd','bridge_excluded_usd','bridge_migration_timestamp','source_run_id')}
-            conn.execute('INSERT INTO tvl_snapshots VALUES (1,?,?,?,?,?)',(r['chain_id'],r['vault'],timestamp,r['block_number'],json.dumps(raw)))
-        for p in positions.values():
-            raw={k:v for k,v in p.items() if k not in ('overlap_usd','source_run_id','accounting_excluded')}
-            if raw.get('reason') in ('curation_separate_product','bridge_parent_excluded','endpoint_outside_selection'):
-                raw.pop('reason')
-            conn.execute('INSERT INTO tvl_positions VALUES (1,?,?,?,?,?,?)',(*identity(p),timestamp,json.dumps(raw)))
-    conn.close()
-    manifest=publish_tvl(path,out/'publication')
-    dataset=TvlDataset(manifest)
+    from yearn_data.tvl_policy import VAULT_POLICIES, TARGET_CORRECTIONS
+    from yearn_data.tvl_api import BRIDGE_MIGRATIONS, PRICE_REJECTIONS
+    manifest={'database':'neon','runs':[{'id':1}], 'catalog':frame['catalog']+[hyper['catalog']],
+              'allocatorKeys':frame.get('allocatorKeys',[]),'currentBridgePolicy':frame.get('currentBridgePolicy','none'),
+              'bridgeMigrations':frame.get('bridgeMigrations',BRIDGE_MIGRATIONS),
+              'priceRejections':frame.get('priceRejections',PRICE_REJECTIONS),
+              'vaultPolicies':frame.get('vaultPolicies',VAULT_POLICIES),
+              'targetCorrections':frame.get('targetCorrections',TARGET_CORRECTIONS)}
+    dataset=ReviewDataset(manifest,timestamp,list(rows.values()),list(positions.values()))
+    dataset.save(out)
     _,corrected,edges,diagnostics=dataset.frames((timestamp,))[0]
     def totals(points):
         result={}

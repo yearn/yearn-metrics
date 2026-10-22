@@ -10,7 +10,7 @@ from test_tvl_api import run,DAY,PARENT,CHILD,BRIDGE
 
 
 def test_prepared_history_preserves_repairs_unknowns_nested_caps_and_window_prices(tmp_path,monkeypatch):
-    path=tmp_path/'history.sqlite'
+    path='staging'
     with closing(connect(path)) as conn:
         init_db(conn)
         for address in (PARENT,CHILD,BRIDGE):
@@ -42,7 +42,7 @@ def test_prepared_history_preserves_repairs_unknowns_nested_caps_and_window_pric
 
 
 def test_interrupted_preparation_never_exposes_partial_rows(tmp_path):
-    path=tmp_path/'history.sqlite'
+    path='staging'
     with closing(connect(path)) as conn:
         init_db(conn)
         run(conn,1,DAY,[(PARENT,'100')])
@@ -72,7 +72,7 @@ def test_compact_top_series_preserves_all_capital_and_neutral_total():
 
 
 def test_prepared_histories_keep_chain_identity_and_window_reference_changes(tmp_path):
-    path=tmp_path/'history.sqlite'
+    path='staging'
     with closing(connect(path)) as conn:
         init_db(conn)
         for day in range(8):
@@ -90,7 +90,7 @@ def test_prepared_histories_keep_chain_identity_and_window_reference_changes(tmp
 
 
 def test_published_only_reader_keeps_selection_until_updater_publishes(tmp_path):
-    path=tmp_path/'history.sqlite';publication=tmp_path/'publication'
+    path='staging';publication=tmp_path/'publication'
     with closing(connect(path)) as conn:
         init_db(conn);run(conn,1,DAY,[(PARENT,'100')])
     previous=TvlStore(path,publication).get().id
@@ -105,7 +105,7 @@ def test_published_only_reader_keeps_selection_until_updater_publishes(tmp_path)
 def test_price_only_repair_preserves_old_publication_and_recalculates_deductions(tmp_path):
     from yearn_data.tvl_history_cache import prepare_price_repair
     from copy import deepcopy
-    path=tmp_path/'repair.sqlite'
+    path='staging'
     with closing(connect(path)) as conn:
         init_db(conn)
         run(conn,1,DAY,[(PARENT,'100'),(CHILD,'100')],[(CHILD,'50')])
@@ -129,7 +129,7 @@ def test_price_only_repair_preserves_old_publication_and_recalculates_deductions
 def test_price_repair_rejects_source_with_interrupted_total_preparation(tmp_path, monkeypatch):
     from copy import deepcopy
     from yearn_data import tvl_history_cache as cache
-    path = tmp_path / 'interrupted-totals.sqlite'
+    path = 'staging'
     with closing(connect(path)) as conn:
         init_db(conn)
         run(conn, 1, DAY, [(PARENT, '100')])
@@ -154,7 +154,7 @@ def test_price_repair_rejects_source_with_interrupted_total_preparation(tmp_path
 def test_price_repair_resumes_interrupted_destination_totals(tmp_path, monkeypatch):
     from copy import deepcopy
     from yearn_data import tvl_history_cache as cache
-    path = tmp_path / 'destination-totals.sqlite'
+    path = 'staging'
     with closing(connect(path)) as conn:
         init_db(conn)
         run(conn, 1, DAY, [(PARENT, '100')])
@@ -186,7 +186,7 @@ def test_price_repair_resumes_interrupted_destination_totals(tmp_path, monkeypat
 def test_price_repair_keeps_unknown_chain_series_across_multiple_dates(tmp_path):
     from copy import deepcopy
     from yearn_data.tvl_history_cache import prepare_price_repair
-    path=tmp_path/'unknown-chain.sqlite'
+    path='staging'
     with closing(connect(path)) as conn:
         init_db(conn)
         for offset in range(3):
@@ -216,7 +216,7 @@ def test_price_repair_keeps_unknown_chain_series_across_multiple_dates(tmp_path)
 
 def test_prepare_history_cli_uses_incremental_repair(tmp_path,monkeypatch,capsys):
     from yearn_data import cli,tvl_api
-    path=tmp_path/'cli-repair.sqlite';publication=tmp_path/'publication'
+    path='staging';publication=tmp_path/'publication'
     with closing(connect(path)) as conn:
         init_db(conn)
         run(conn,1,DAY,[(PARENT,'100')])
@@ -246,7 +246,7 @@ def test_prepare_history_cli_uses_incremental_repair(tmp_path,monkeypatch,capsys
 def test_repair_rejects_conflicting_quote_that_would_undo_prior_rejection(tmp_path):
     from copy import deepcopy
     from yearn_data.tvl_history_cache import prepare_price_repair
-    path=tmp_path/'conflicting.sqlite'
+    path='staging'
     with closing(connect(path)) as conn:
         init_db(conn);run(conn,1,DAY,[(PARENT,'100')])
     original=TvlStore(path,tmp_path/'publication').get()
@@ -272,7 +272,7 @@ def test_quote_rejection_inventory_has_unique_coordinates():
 def test_price_repair_refuses_withdrawn_rejection_even_when_another_is_added(tmp_path):
     from copy import deepcopy
     from yearn_data.tvl_history_cache import prepare_price_repair
-    path=tmp_path/'withdrawn.sqlite'
+    path='staging'
     with closing(connect(path)) as conn:
         init_db(conn)
         run(conn,1,DAY,[(PARENT,'100')]);run(conn,2,DAY+86400,[(PARENT,'200')])
@@ -293,7 +293,7 @@ def test_price_repair_refuses_withdrawn_rejection_even_when_another_is_added(tmp
 def test_price_repair_rejects_changed_close_that_moves_bridge_deduction(tmp_path):
     from copy import deepcopy
     from yearn_data.tvl_history_cache import prepare_price_repair
-    path=tmp_path/'changed-close.sqlite'
+    path='staging'
     with closing(connect(path)) as conn:
         init_db(conn)
         conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,active,updated_at) VALUES (1,'v3',?,0,1)",(BRIDGE,))
@@ -316,7 +316,7 @@ def test_price_repair_rejects_changed_close_that_moves_bridge_deduction(tmp_path
 def test_price_repair_can_copy_metadata_only_inventory_update(tmp_path,monkeypatch):
     from copy import deepcopy
     from yearn_data.tvl_history_cache import prepare_price_repair
-    path=tmp_path/'metadata-only.sqlite'
+    path='staging'
     with closing(connect(path)) as conn:
         init_db(conn)
         run(conn,1,DAY,[(PARENT,'100')]);run(conn,2,DAY+86400,[(PARENT,'200')])
@@ -350,7 +350,7 @@ def test_rejection_evidence_does_not_publish_empty_or_repr_values():
 def test_price_repair_bounds_recalculation_and_copied_rows_to_publication(tmp_path,include_current):
     from copy import deepcopy
     from yearn_data.tvl_history_cache import prepare_price_repair
-    path=tmp_path/'bounded-repair.sqlite';future=DAY+2*86400
+    path='staging';future=DAY+2*86400
     with closing(connect(path)) as conn:
         init_db(conn)
         for offset in range(3):

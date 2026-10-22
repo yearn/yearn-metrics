@@ -1,3 +1,4 @@
+from yearn_data.storage import connect
 from types import SimpleNamespace
 
 import pytest
@@ -155,7 +156,6 @@ def test_standalone_entries_keep_existing_tvl_eligibility(tvl):
 
 @pytest.mark.parametrize('failure', ['code_timeout', 'call_timeout', 'rpc_value_error', 'code_mismatch', 'recipient_mismatch', 'recipient_unavailable'])
 def test_observed_product_config_records_failure_kind(monkeypatch, failure):
-    import sqlite3
     from yearn_data import analytics_collect
     from yearn_data.analytics import SCHEMA, put_input, selected_input
     r=reader(monkeypatch, ACCOUNTANT, CODE_HASH, [(STAKER,)])
@@ -176,7 +176,7 @@ def test_observed_product_config_records_failure_kind(monkeypatch, failure):
         monkeypatch.setattr(eth_utils,'keccak',lambda code:bytes(32))
     monkeypatch.setattr(analytics_collect,'Reader',lambda chain:r)
     configs=analytics_collect.observed_configs(1,[{'address':YBOLD,'version':'v3'}],[])
-    conn=sqlite3.connect(':memory:');conn.row_factory=sqlite3.Row
+    conn=connect('staging')
     try:
         conn.executescript(SCHEMA)
         put_input(conn,'fee-config',{'vaults':configs},status='partial',observed_at=456)

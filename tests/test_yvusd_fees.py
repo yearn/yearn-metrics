@@ -1,3 +1,5 @@
+from yearn_data.storage import connect
+from yearn_data.storage import table_columns
 import copy
 import json
 from pathlib import Path
@@ -55,11 +57,11 @@ def test_index_and_offline_recompute_preserve_split(tmp_path, monkeypatch):
     from yearn_data.fee_recompute import recompute_canonical_fees
     from yearn_data import fees
     case = CASES[0]; r = case['report']; e = case['evidence']
-    with connect(tmp_path/'fees.sqlite') as conn:
+    with connect('staging') as conn:
         init_db(conn)
         conn.execute('INSERT INTO vaults(chain_id,address,version,api_version,updated_at) VALUES (1,?,?,?,1)',
                      (r['vault_address'], 'v3', r['api_version']))
-        fields = [row['name'] for row in conn.execute('PRAGMA table_info(strategy_reports)') if row['name'] in r]
+        fields = [row for row in table_columns(conn,'strategy_reports') if row in r]
         conn.execute('INSERT INTO strategy_reports ('+','.join(fields)+') VALUES ('+','.join('?' for _ in fields)+')',
                      [r[field] for field in fields])
         calls=[]
@@ -107,11 +109,11 @@ def test_explicit_refresh_reacquires_rejected_accountant(tmp_path, monkeypatch):
         address = '0x'+'11'*20 if len(calls) == 1 else e['accountant']
         return bytes.fromhex('00'*12+address[2:])
     monkeypatch.setattr(fees, 'web3_for', lambda chain: SimpleNamespace(eth=SimpleNamespace(call=call)))
-    with connect(tmp_path/'refresh.sqlite') as conn:
+    with connect('staging') as conn:
         init_db(conn)
         conn.execute('INSERT INTO vaults(chain_id,address,version,api_version,updated_at) VALUES (1,?,?,?,1)',
                      (r['vault_address'], 'v3', r['api_version']))
-        fields = [row['name'] for row in conn.execute('PRAGMA table_info(strategy_reports)') if row['name'] in r]
+        fields = [row for row in table_columns(conn,'strategy_reports') if row in r]
         conn.execute('INSERT INTO strategy_reports ('+','.join(fields)+') VALUES ('+','.join('?' for _ in fields)+')',
                      [r[field] for field in fields])
         fetch = lambda *args: e['receipt']

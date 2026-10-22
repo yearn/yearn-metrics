@@ -1,4 +1,5 @@
 """Regression coverage for yvUSD evidence and published fee outputs."""
+from yearn_data.storage import table_columns
 import copy
 import csv
 import json
@@ -17,7 +18,7 @@ from yearn_data.storage import connect, init_db
 def insert(conn, report):
     conn.execute('INSERT INTO vaults(chain_id,address,version,api_version,updated_at) VALUES (1,?,?,?,1) ON CONFLICT DO NOTHING',
                  (report['vault_address'], report['version'], report['api_version']))
-    fields = [row['name'] for row in conn.execute('PRAGMA table_info(strategy_reports)') if row['name'] in report]
+    fields = [row for row in table_columns(conn,'strategy_reports') if row in report]
     conn.execute('INSERT INTO strategy_reports ('+','.join(fields)+') VALUES ('+','.join('?' for _ in fields)+')',
                  [report[f] for f in fields])
     conn.commit()
@@ -28,7 +29,7 @@ def case_db(tmp_path, monkeypatch):
     case = copy.deepcopy(CASES[-1])
     monkeypatch.setattr(fees, 'web3_for', lambda chain: SimpleNamespace(eth=SimpleNamespace(
         call=lambda *args, **kwargs: bytes.fromhex('00'*12+case['evidence']['accountant'][2:]))))
-    with closing(connect(tmp_path/'review.sqlite')) as conn:
+    with closing(connect('staging')) as conn:
         init_db(conn); insert(conn, case['report'])
         yield conn, case
 
@@ -160,7 +161,7 @@ def test_distribution_fields_reach_pairing_api(case_db, tmp_path, priced):
     row.update(price_usd='2' if priced else None,gross_gain_usd=None,loss_usd=None,net_yield_usd=None,
                raw_gross_gain_usd=None,raw_loss_usd=None,raw_net_yield_usd=None,valuation_status='priced' if priced else 'missing_price')
     write_output(conn,earnings,'reports',row);complete_analysis_run(conn,earnings)
-    database=conn.execute('PRAGMA database_list').fetchone()[2];root=tmp_path/'publication'
+    database='staging';root=tmp_path/'publication'
     select_pairing(database,earnings,fee_run,root)
     status,body=pairing_response(PairingStore(root),'/api/fees')
     assert status==200 and body['totalFeesPaidUsd']=='0'

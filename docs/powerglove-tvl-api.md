@@ -1,7 +1,7 @@
 # Powerglove TVL cutover
 
 The read-only pairing server can serve TVL alongside fees and reported earnings from
-`data/yearn.sqlite`. Powerglove's `codex/stats-page` uses this source for current TVL,
+Postgres (`neon` or `staging`). Powerglove's `codex/stats-page` uses this source for current TVL,
 history, constant-price history, curation products, the vault audit tree and the
 Yearn side of the DefiLlama comparison. With `--analytics`, prepared fee-stack,
 profitability and DefiLlama membership/comparison results also come from Postgres.
@@ -16,12 +16,12 @@ Keep the existing fees/earnings publication selected, then run:
 yearn-data serve-pairing --publication data/powerglove \
   --tvl-publication data/powerglove-tvl \
   --current-bridge-policy retired-registry \
-  --comparison-db /path/to/defillama-reference.sqlite \
+  --analytics \
   --host 127.0.0.1 --port 3492
 ```
 
-The optional comparison database supplies only stored `defillama_snapshots`
-reference rows. No Yearn TVL figures are read from it. The API makes no RPC or
+Prepared analytics supply stored DefiLlama references from the same owned
+Postgres publication. No legacy reference database is required. The API makes no RPC or
 pricing requests and opens its source databases read-only. Configure a reverse
 proxy for production; set `--cors-origin` when Powerglove uses a different origin.
 
@@ -38,13 +38,11 @@ Without a Yearn Data target, the TVL proxy retains its existing TVL-service fall
 
 ## Hosted database connection
 
-The Neon-capable checkout on `ross/neon-postgres` supports the same API contracts
-with a hosted database. Keep `NEON_DB_URL` in Yearn Data's ignored environment file;
+The Postgres-only runtime supports these API contracts with a hosted database. Keep `NEON_DB_URL` in Yearn Data's ignored environment file;
 never put this credential into a `VITE_*` variable or the browser bundle. The
 Powerglove consumer talks to the API, which opens Neon read-only.
 
-From that checkout, publish the imported completed analyses separately from the
-SQLite publications, then start the API:
+Publish the existing completed Postgres analyses, then start the API:
 
 ```bash
 python -m yearn_data.cli --env /path/to/yearn-data/.env --db neon select-pairing \
@@ -53,7 +51,7 @@ python -m yearn_data.cli --env /path/to/yearn-data/.env --db neon select-pairing
 python -m yearn_data.cli --env /path/to/yearn-data/.env serve-pairing \
   --publication data/powerglove-neon --tvl-publication data/powerglove-tvl-neon \
   --current-bridge-policy retired-registry \
-  --comparison-db /path/to/defillama-reference.sqlite \
+  --analytics \
   --host 127.0.0.1 --port 3491
 ```
 
@@ -61,21 +59,17 @@ The example run IDs match the imported current financial publication. Fee datase
 identity is preserved when the imported outputs are identical. The TVL dataset ID
 changes because its publication records the logical database reference `neon`.
 Restart the consumer when switching the target so it obtains the new TVL selection;
-do not reuse a SQLite TVL dataset ID against a separate Neon publication.
+do not reuse an old file-backed TVL dataset ID against a Neon publication.
 
 Set Powerglove's ignored `.env.local` to
 `VITE_YEARN_DATA_API_TARGET=http://127.0.0.1:3491` and restart its local server or
 preview. For a remotely deployed consumer, configure the public **API** URL using
 `VITE_PUBLIC_YEARN_DATA_API_URL`; a hosted database alone does not deploy an API.
 
-The core-only example above retains a separate DefiLlama reference database.
-For the completed active-consumer cutover, use the collection/preparation commands
-and `--analytics` startup in [owned analytics](powerglove-analytics.md), omit
-`--comparison-db`, and target port 3493. All active stats requests then use Yearn
-Data; the legacy services and their databases are no longer required.
-Keep the previous SQLite API/publications available for rollback. Before switching,
-compare TVL, core fees, weekly history and comparison results, ignoring only source
-publication identity; verify the new IDs through the actual consumer proxy.
+Use the collection/preparation commands in [owned analytics](powerglove-analytics.md)
+before enabling `--analytics`. Keep Postgres recovery backups and validate TVL,
+core fees, weekly history and comparison results before changing consumers.
+SQLite-backed serving and rollback are retired; historical archives remain untouched.
 
 ## Publication and automatic selection
 

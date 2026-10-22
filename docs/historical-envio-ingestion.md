@@ -39,8 +39,8 @@ whether historical V2 deployments exist there.
 4. Run discovery, then import the reports:
 
 ```bash
-yearn-data --db data/yearn.sqlite discover --chains eth --include-retired --to-block "$TO_BLOCK"
-yearn-data --db data/yearn.sqlite index-events --chains eth --include-inactive --from-block "$FROM_BLOCK" --to-block "$TO_BLOCK"
+yearn-data --db neon discover --chains eth --include-retired --to-block "$TO_BLOCK"
+yearn-data --db neon index-events --chains eth --include-inactive --from-block "$FROM_BLOCK" --to-block "$TO_BLOCK"
 ```
 
 Both commands reject an upper block that Envio has not processed. Rejected
@@ -99,11 +99,11 @@ only this ingestion layer does not yet provide that command. Once it is availabl
 set `FROM_BLOCK` and `TO_BLOCK` to cover the ranges named in the diagnostics:
 
 ```bash
-yearn-data --db data/yearn.sqlite catch-up --chain eth \
+yearn-data --db neon catch-up --chain eth \
   --from-block "$FROM_BLOCK" --to-block "$TO_BLOCK"
-yearn-data --db data/yearn.sqlite price --source defillama --chains eth
-yearn-data --db data/yearn.sqlite analyze lifetime-yield --price-source defillama
-yearn-data --db data/yearn.sqlite export lifetime-yield --out exports
+yearn-data --db neon price --source defillama --chains eth
+yearn-data --db neon analyze lifetime-yield --price-source defillama
+yearn-data --db neon export lifetime-yield --out exports
 ```
 
 Configure the selected chain's RPC endpoint as well as Envio. Catch-up checks

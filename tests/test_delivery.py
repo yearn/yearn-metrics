@@ -49,7 +49,7 @@ def test_explicit_export_pins_csv_and_context_to_same_completed_run(db, tmp_path
     write_output(db, second, 'reports', {'amount':'2'})
     complete_analysis_run(db, second)
     out = tmp_path/'first'
-    path = db.execute('PRAGMA database_list').fetchone()[2]
+    path = 'staging'
     assert main(['--db',path,'export','lifetime-yield','--run-id',str(first),'--out',str(out)]) == 0
     context = json.loads((out/'context.json').read_text())
     assert context['id'] == first and context['name'] == 'lifetime-yield'

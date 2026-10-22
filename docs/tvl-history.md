@@ -16,13 +16,13 @@ owner/creator/curator queries, factory creation events, and explicitly listed
 curated products. It requires no old TVL service checkout or database.
 
 ```bash
-yearn-data --db data/yearn.sqlite --env .env tvl discover
+yearn-data --db neon --env .env tvl discover
 
 # One daily UTC-close sample: 2026-10-03 23:59:59 UTC.
-yearn-data --db data/yearn.sqlite --env .env tvl collect \
+yearn-data --db neon --env .env tvl collect \
   --from-timestamp 1791071999 --to-timestamp 1791071999
 
-yearn-data --db data/yearn.sqlite tvl export --out exports/tvl
+yearn-data --db neon tvl export --out exports/tvl
 ```
 
 Discovery supports `--sources kong v1 curation` and `--chain-ids 1 8453`.
@@ -42,13 +42,8 @@ other selected sources from completing. Discovery does not call a price provider
 RPCs must provide the selected historical logs; enriching old adapter contracts
 can also require archive state. Missing access is reported as incomplete.
 
-Migration remains optional. It brings across an existing catalog and relationships,
-without importing current balances as historical values:
-
-```bash
-yearn-data --db data/yearn.sqlite tvl import-catalog \
-  --service-db ../yearn-tvl-service/packages/db/yearn-tvl.db
-```
+The one-time legacy SQLite catalog importer is retired. Fresh inventories come
+from the supported discovery sources above; existing Postgres history is reused.
 
 Without filters, collection requests **every vault in the database**, across all
 its chains and categories. Use `--chain-ids 1 8453`, `--vaults <addresses>`, or a
@@ -79,7 +74,7 @@ date. This scans all known strategy and vault holders against the chain's vaults
 so run it deliberately rather than on every daily collection:
 
 ```bash
-yearn-data --db data/yearn.sqlite --env .env tvl map-holders \
+yearn-data --db neon --env .env tvl map-holders \
   --chain-ids 1 --timestamp 1791071999
 ```
 
@@ -193,7 +188,7 @@ existing event database. Its finalized-head manifest records the RPC checks.
 
 ```bash
 PYTHONPATH=src python scripts/backfill_tvl.py \
-  --db data/yearn.sqlite \
+  --db neon \
   --heads artifacts/tvl-review/backfill/heads.json \
   --env /path/to/.env \
   --out artifacts/tvl-review/backfill \

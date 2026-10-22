@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    ports:
+      - 127.0.0.1:55436:5432
+    environment:
+      POSTGRES_USER: yearn_test
+      POSTGRES_PASSWORD: yearn_test
+      POSTGRES_DB: yearn_test
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U yearn_test -d yearn_test]
+      interval: 2s
+      timeout: 5s
+      retries: 30

@@ -44,7 +44,7 @@ def test_accrued_uses_same_components_but_preserves_event_identity():
 
 @pytest.fixture
 def db(tmp_path):
-    c=connect(tmp_path/'fees.sqlite');init_db(c)
+    c=connect('staging');init_db(c)
     yield c
     c.close()
 
@@ -117,7 +117,7 @@ def test_tokenized_cli_uses_bounded_importer(db,tmp_path,monkeypatch):
     inventory_path=tmp_path/'inventory.json'
     inventory_path.write_text(json.dumps([client.vault]))
     monkeypatch.setattr(tokenized,'web3_for',lambda chain:client)
-    database=db.execute('PRAGMA database_list').fetchone()['file']
+    database='staging'
     assert main(['--db',database,'index-tokenized-fees','--inventory',str(inventory_path),
                  '--chain','polygon','--from-block',str(h['number']),'--to-block',str(h['number']),
                  '--before-timestamp',str(h['timestamp']+1),'--max-vaults','1'])==0

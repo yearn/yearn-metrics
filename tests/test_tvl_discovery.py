@@ -14,7 +14,7 @@ def addr(n):
 
 @pytest.fixture
 def db(tmp_path):
-    conn=connect(tmp_path/'catalog.sqlite')
+    conn=connect('staging')
     init_db(conn)
     yield conn
     conn.close()
@@ -374,7 +374,6 @@ def test_unified_discovery_runs_all_sources_and_retains_summary(db,monkeypatch):
         return {'source':'kong','status':'complete','discovered':1,'enriched':1,'failures':[]}
     monkeypatch.setattr('yearn_data.tvl_sources.refresh_kong_catalog',kong)
     def forbidden(*args):raise AssertionError('old service must not be read')
-    monkeypatch.setattr('yearn_data.tvl_sources.import_service_catalog',forbidden)
     result=discover_catalog(db,chain_ids=[1],reader_factory=FactoryReader)
     assert result['status']=='complete' and result['catalog_vaults']==30
     assert [r['source'] for r in result['sources']]==['kong','v1-registry','curation-discovery','curation-relations']
@@ -412,7 +411,7 @@ def test_cli_discovery_returns_nonzero_for_partial_source_results(tmp_path,monke
         args_seen.update(kwargs)
         return {'status':'incomplete','run_id':1,'sources':[]}
     monkeypatch.setattr('yearn_data.tvl_discovery.discover_catalog',discover)
-    code=main(['--db',str(tmp_path/'cli.sqlite'),'tvl','discover','--sources','v1',
+    code=main(['--db','staging','tvl','discover','--sources','v1',
                '--chain-ids','1','--from-block','100','--to-block','200','--chunk-size','10'])
     assert code==2
     assert args_seen['sources']==['v1'] and args_seen['chain_ids']==[1]
@@ -504,7 +503,6 @@ def test_fresh_catalog_collect_and_export_without_migration(db,monkeypatch,tmp_p
         collection='vaultV2s' if 'vaultV2s(' in query else 'vaults'
         return {collection:{'items':[morpho_row(1 if collection=='vaultV2s' else 2)]}}
     def forbidden(*args):raise AssertionError('old TVL service access forbidden')
-    monkeypatch.setattr('yearn_data.tvl_sources.import_service_catalog',forbidden)
     first=discover_catalog(db,chain_ids=[1],reader_factory=AdapterReader,request=request,chunk_size=10)
     second=discover_catalog(db,chain_ids=[1],reader_factory=AdapterReader,request=request,chunk_size=10)
     assert first['status']==second['status']=='complete'

@@ -1,3 +1,5 @@
+from yearn_data.storage import connect
+from yearn_data.storage import table_columns
 import copy
 import json
 from pathlib import Path
@@ -66,10 +68,10 @@ def test_index_and_offline_replay(tmp_path, monkeypatch):
     real_keccak=ybold_fees.keccak
     monkeypatch.setattr(ybold_fees,'keccak',lambda value=None,**kw: bytes.fromhex(ybold_fees.CODE_HASH[2:]) if value==b'code' else real_keccak(value,**kw))
     monkeypatch.setattr(fees,'web3_for',lambda chain:client)
-    with connect(tmp_path/'test.sqlite') as conn:
+    with connect('staging') as conn:
         init_db(conn)
         conn.execute('INSERT INTO vaults(chain_id,address,version,updated_at) VALUES (1,?,?,1)',(r['vault_address'],'v3'))
-        fields=[x['name'] for x in conn.execute('PRAGMA table_info(strategy_reports)') if x['name'] in r]
+        fields=[x for x in table_columns(conn,'strategy_reports') if x in r]
         conn.execute('INSERT INTO strategy_reports ('+','.join(fields)+') VALUES ('+','.join('?' for _ in fields)+')',[r[k] for k in fields])
         assert index_canonical_fees(conn,receipt_fetcher=lambda *a:e['receipt'])==1
         assert calls==[e['block_hash'],e['block_hash']]

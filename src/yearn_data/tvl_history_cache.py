@@ -93,7 +93,7 @@ def rows(dataset,timestamps,chain_id=None):
         statement += ' AND chain_id=?';args += (chain_id,)
     statement += ' ORDER BY timestamp,chain_id,vault'
     with closing(connect(dataset.database,readonly=True)) as conn, conn:
-        records = conn.stream(statement,args) if hasattr(conn,'raw') else conn.execute(statement,args)
+        records = conn.stream(statement,args)
         from itertools import groupby
         for timestamp,group in groupby(records,lambda row:row['timestamp']):
             yield timestamp,tuple({field:row[field] for field in FIELDS} for row in group)
@@ -122,10 +122,9 @@ def prepare(dataset,progress=None):
     with closing(connect(dataset.database,direct=True)) as conn:
         conn.executescript(SCHEMA)
         with conn:
-            if hasattr(conn,'raw'):
-                # One builder; release on transaction rollback or commit.
-                if not conn.execute('SELECT pg_try_advisory_xact_lock(743219889)').fetchone()[0]:
-                    raise ValueError('TVL chart preparation is already running')
+            # One builder; release on transaction rollback or commit.
+            if not conn.execute('SELECT pg_try_advisory_xact_lock(743219889)').fetchone()[0]:
+                raise ValueError('TVL chart preparation is already running')
             conn.execute('DELETE FROM tvl_chart_rows WHERE dataset_id=?',(dataset.id,))
             conn.execute('DELETE FROM tvl_chart_publications WHERE dataset_id=?',(dataset.id,))
             dates=tuple(date for date in dataset.dates() if date<=dataset.as_of())
@@ -138,16 +137,12 @@ def prepare(dataset,progress=None):
                         values[5:]=[None if value is None else str(value) for value in values[5:]]
                         values[3]=row.get('category',row['version'])
                         batch.append((dataset.id,timestamp,*values))
-                if hasattr(conn,'raw'):
-                    with conn.raw.cursor() as cursor, cursor.copy('COPY tvl_chart_rows FROM STDIN') as copy:
-                        for record in batch:copy.write_row(record)
-                else:
-                    conn.executemany('INSERT INTO tvl_chart_rows VALUES (?,?,?,?,?,?,?,?,?,?)',batch)
+                with conn.raw.cursor() as cursor, cursor.copy('COPY tvl_chart_rows FROM STDIN') as copy:
+                    for record in batch:copy.write_row(record)
                 count+=len(batch)
                 notify(f'Prepared {min(offset+31,len(dates))}/{len(dates)} dates; {count:,} vault rows')
             conn.execute('INSERT INTO tvl_chart_publications VALUES (?,?,?,?)',(dataset.id,VERSION,count,int(time.time())))
-        if hasattr(conn,'raw'):
-            conn.raw.execute('ANALYZE tvl_chart_rows')
+        conn.raw.execute('ANALYZE tvl_chart_rows')
     dataset._prepared=True
     prepare_totals(dataset)
     return {'datasetId':dataset.id,'status':'prepared','rows':count,'dates':len(dates)}
@@ -203,9 +198,8 @@ def prepare_price_repair(dataset, previous):
             ctx.prec=78
             sums.extend((dataset.id,timestamp,*group,str(sum(values,Decimal(0)))) for group,values in grouped.items())
     with closing(connect(dataset.database,direct=True)) as conn,conn:
-        if hasattr(conn,'raw'):
-            if not conn.execute('SELECT pg_try_advisory_xact_lock(743219889)').fetchone()[0]:
-                raise ValueError('TVL chart preparation is already running')
+        if not conn.execute('SELECT pg_try_advisory_xact_lock(743219889)').fetchone()[0]:
+            raise ValueError('TVL chart preparation is already running')
         existing=conn.execute('SELECT version FROM tvl_chart_publications WHERE dataset_id=?',(dataset.id,)).fetchone()
         if existing:
             if existing['version']==VERSION+'+totals':
@@ -222,7 +216,6 @@ def prepare_price_repair(dataset, previous):
         conn.executemany('INSERT INTO tvl_chart_totals VALUES (?,?,?,?,?,?)',sums)
         count=conn.execute('SELECT COUNT(*) FROM tvl_chart_rows WHERE dataset_id=?',(dataset.id,)).fetchone()[0]
         conn.execute('INSERT INTO tvl_chart_publications VALUES (?,?,?,?)',(dataset.id,VERSION+'+totals',count,int(time.time())))
-        if hasattr(conn,'raw'):
-            conn.raw.execute('ANALYZE tvl_chart_rows')
+        conn.raw.execute('ANALYZE tvl_chart_rows')
     dataset._prepared=True
     return {'status':'prepared','datasetId':dataset.id,'recomputedDates':list(changed),'rows':count}

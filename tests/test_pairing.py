@@ -50,7 +50,7 @@ def snapshots(db, *, fallback=None, fee_cutoff=CUTOFF, fee_price='1'):
 
 @pytest.fixture
 def publication(tmp_path):
-    db = connect(tmp_path/'source.sqlite');init_db(db)
+    db = connect('staging');init_db(db)
     runs = snapshots(db)
     root = tmp_path/'selected'
     yield db, runs, root
@@ -59,7 +59,7 @@ def publication(tmp_path):
 
 def test_nested_fees_and_earnings_independent_of_fee_acceptance(publication):
     db, runs, root = publication
-    path = db.execute('PRAGMA database_list').fetchone()[2]
+    path = 'staging'
     assert main(['--db', path, 'select-pairing', '--earnings-run-id', str(runs[0]),
                  '--fees-run-id', str(runs[1]), '--out', str(root)]) == 0
     dataset = PairingStore(root).get()
@@ -79,7 +79,7 @@ def test_nested_fees_and_earnings_independent_of_fee_acceptance(publication):
 
 def test_bounds_months_vault_identity_and_unavailable_values(publication):
     db, runs, _ = publication
-    dataset = PairingDataset(db.execute('PRAGMA database_list').fetchone()[2], *runs)
+    dataset = PairingDataset('staging', *runs)
     january = dataset.view('history', until=DAY+31*86400)
     assert [row['period'] for row in january['buckets']] == ['2024-01']
     assert january['buckets'][0]['totalFeesPaidUsd'] == '19'
@@ -95,11 +95,11 @@ def test_bounds_months_vault_identity_and_unavailable_values(publication):
 
 def test_published_zero_fees_do_not_require_prices_or_known_components(publication):
     db, runs, _ = publication
-    db.execute("""UPDATE analysis_outputs SET row_json=json_set(row_json,
-        '$.total_fees_paid_usd','0','$.price_usd',NULL,'$.accounting_status','accepted',
-        '$.valuation_status','zero_fee') WHERE run_id=? AND name='fee_usd_events'""", (runs[1],))
+    db.execute("""UPDATE analysis_outputs SET row_json=CAST(CAST(row_json AS jsonb) ||
+        '{"total_fees_paid_usd":"0","price_usd":null,"accounting_status":"accepted","valuation_status":"zero_fee"}'::jsonb AS text)
+        WHERE run_id=? AND name='fee_usd_events'""", (runs[1],))
     db.commit()
-    summary = PairingDataset(db.execute('PRAGMA database_list').fetchone()[2], *runs).view('summary')
+    summary = PairingDataset('staging', *runs).view('summary')
     assert summary['totalFeesPaidUsd'] == '0'
     assert summary['protocolFeesUsd'] is None
     assert summary['netLifetimeEarningsUsd'] == '135'
@@ -108,14 +108,14 @@ def test_published_zero_fees_do_not_require_prices_or_known_components(publicati
 @pytest.mark.parametrize('problem', ['cutoff','fallback','price','unfinished','cohort','duplicate'])
 def test_failed_selection_retains_previous_dataset(publication, problem):
     db, runs, root = publication
-    path = db.execute('PRAGMA database_list').fetchone()[2]
+    path = 'staging'
     selected = select_pairing(path, *runs, root)
     previous = (root/'current.json').read_bytes()
     other = snapshots(db, fallback='defillama' if problem=='fallback' else None,
                       fee_cutoff=CUTOFF+86400 if problem=='cutoff' else CUTOFF,
                       fee_price='2' if problem=='price' else '1')
     if problem=='unfinished':db.execute("UPDATE analysis_runs SET status='running' WHERE id=?", (other[0],))
-    if problem=='cohort':db.execute("DELETE FROM analysis_outputs WHERE run_id=? AND name='reports' AND json_extract(row_json,'$.chain_id')=10", (other[0],))
+    if problem=='cohort':db.execute("DELETE FROM analysis_outputs WHERE run_id=? AND name='reports' AND json_extract(row_json,'$.chain_id')='10'", (other[0],))
     if problem=='duplicate':
         row = db.execute("SELECT row_json FROM analysis_outputs WHERE run_id=? AND name='fee_usd_events' LIMIT 1", (other[1],)).fetchone()[0]
         write_output(db, other[1], 'fee_usd_events', json.loads(row))
@@ -127,7 +127,7 @@ def test_failed_selection_retains_previous_dataset(publication, problem):
 
 def test_pin_survives_refresh_and_invalid_requests_are_rejected(publication):
     db, runs, root = publication
-    path = db.execute('PRAGMA database_list').fetchone()[2]
+    path = 'staging'
     first = select_pairing(path, *runs, root)
     second = select_pairing(path, *snapshots(db), root)
     store = PairingStore(root)
@@ -141,9 +141,9 @@ def test_pin_survives_refresh_and_invalid_requests_are_rejected(publication):
 
 def test_published_output_changes_are_detected(publication):
     db, runs, root = publication
-    path = db.execute('PRAGMA database_list').fetchone()[2]
+    path = 'staging'
     select_pairing(path, *runs, root)
-    db.execute("UPDATE analysis_outputs SET row_json=json_set(row_json,'$.total_fees_paid_usd','999') WHERE run_id=? AND name='fee_usd_events'", (runs[1],))
+    db.execute("UPDATE analysis_outputs SET row_json=CAST(jsonb_set(CAST(row_json AS jsonb),'{total_fees_paid_usd}','\"999\"') AS text) WHERE run_id=? AND name='fee_usd_events'", (runs[1],))
     db.commit()
     with pytest.raises(ValueError, match='changed since publication'):PairingStore(root).get()
 
@@ -152,7 +152,7 @@ def test_interrupted_activation_keeps_previous_dataset(publication, monkeypatch)
     from pathlib import Path
 
     db, runs, root = publication
-    path = db.execute('PRAGMA database_list').fetchone()[2]
+    path = 'staging'
     first = select_pairing(path, *runs, root)
     next_runs = snapshots(db)
     replace = Path.replace
@@ -184,7 +184,7 @@ def test_weekly_calendar_boundaries_and_monthly_reconciliation(publication):
                 row['total_fees_paid_usd'] = '1'
             write_output(db, run, name, row)
     db.commit()
-    select_pairing(db.execute('PRAGMA database_list').fetchone()[2], *runs, root)
+    select_pairing('staging', *runs, root)
     store = PairingStore(root)
     status, weekly = pairing_response(store, '/api/fees/history?interval=weekly')
     assert status == 200 and weekly['interval'] == 'weekly'
@@ -206,10 +206,10 @@ def test_weekly_calendar_boundaries_and_monthly_reconciliation(publication):
 def test_vault_filter_matches_all_three_views_and_preserves_contract_layers(publication):
     db, runs, root = publication
     address = '0x' + 'ab' * 20
-    db.execute("""UPDATE analysis_outputs SET row_json=json_set(row_json,'$.vault_address',?)
+    db.execute("""UPDATE analysis_outputs SET row_json=CAST(jsonb_set(CAST(row_json AS jsonb),'{vault_address}',to_jsonb(CAST(? AS text))) AS text)
         WHERE run_id IN (?,?) AND json_extract(row_json,'$.vault_address')=?""", (address, *runs, VAULT))
     db.commit()
-    select_pairing(db.execute('PRAGMA database_list').fetchone()[2], *runs, root)
+    select_pairing('staging', *runs, root)
     store = PairingStore(root)
     query = '?chainId=1&vaultAddress=0x' + address[2:].upper()
     status, summary = pairing_response(store, '/api/fees'+query)
@@ -233,7 +233,7 @@ def test_vault_filter_matches_all_three_views_and_preserves_contract_layers(publ
 
 def test_weekly_vault_filter_applies_half_open_range_and_pinned_dataset(publication):
     db, runs, root = publication
-    manifest = select_pairing(db.execute('PRAGMA database_list').fetchone()[2], *runs, root)
+    manifest = select_pairing('staging', *runs, root)
     store = PairingStore(root)
     query = f'?chainId=1&vaultAddress={VAULT}&since={DAY+86400}&until={DAY+2*86400}'
     status, history = pairing_response(store, '/api/fees/history'+query+'&interval=weekly&datasetId='+manifest['datasetId'])
@@ -256,7 +256,7 @@ def test_weekly_vault_filter_applies_half_open_range_and_pinned_dataset(publicat
 ])
 def test_invalid_or_unindexed_vault_scope_is_rejected(publication, query):
     db, runs, root = publication
-    select_pairing(db.execute('PRAGMA database_list').fetchone()[2], *runs, root)
+    select_pairing('staging', *runs, root)
     assert pairing_response(PairingStore(root), '/api/fees/history?interval=weekly&'+query)[0] == 400
 
 
@@ -267,7 +267,7 @@ def test_product_views_group_fees_without_duplicating_earnings(publication, monk
     product = {'id': 'test-product', 'chainId': 1, 'address': VAULT, 'name': 'Product',
                'memberAddresses': (VAULT, TOKENIZED), 'earningsAddress': VAULT}
     monkeypatch.setattr(fee_products, 'PRODUCTS', (product,))
-    path = db.execute('PRAGMA database_list').fetchone()[2]
+    path = 'staging'
     dataset = PairingDataset(path, *runs)
     prepare(db, dataset)
     for view in (dataset, PublishedFees(path, dataset.id)):

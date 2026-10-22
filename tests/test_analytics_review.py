@@ -13,24 +13,19 @@ C='0x'+'33'*20
 ZERO='0x'+'00'*20
 
 
-def test_cli_prepare_accepts_same_file_and_rejects_other_database(tmp_path, monkeypatch, capsys):
+def test_cli_prepare_accepts_same_logical_database_and_rejects_other(monkeypatch):
     from yearn_data import analytics, cli, pairing, tvl_api
-    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, 'load_environment', lambda path: None)
     monkeypatch.delenv('YEARN_DATA_DB', raising=False)
-    monkeypatch.setattr(cli, 'DEFAULT_DB_PATH', 'data/metrics.sqlite')
-    database=tmp_path/'data/metrics.sqlite'
-    database.parent.mkdir();database.touch()
-    alias=tmp_path/'alias.sqlite';alias.symlink_to(database)
-    financial=SimpleNamespace(database=database)
+    financial=SimpleNamespace(database='neon')
     monkeypatch.setattr(pairing,'PairingStore',lambda path:SimpleNamespace(get=lambda:financial))
     monkeypatch.setattr(tvl_api,'TvlStore',lambda *a,**kw:SimpleNamespace(get=lambda:object()))
     monkeypatch.setattr(analytics,'prepare',lambda db,f,t:'a'*64)
     command=['prepare-analytics','--publication','fees','--tvl-publication','tvl']
-    for args in ([],['--db','./data/metrics.sqlite'],['--db',str(database)],['--db',str(alias)]):
+    for args in ([],['--db','neon']):
         assert cli.main(args+command)==0
     with pytest.raises(ValueError,match='database must match'):
-        cli.main(['--db','other.sqlite']+command)
+        cli.main(['--db','staging']+command)
     financial.database='staging'
     assert cli.main(['--db','staging']+command)==0
     with pytest.raises(ValueError,match='database must match'):
@@ -50,7 +45,7 @@ def comparison_store():
 
 
 def test_retained_external_snapshot_preserves_age_and_marks_partial(tmp_path):
-    conn=connect(tmp_path/'analytics.sqlite');conn.executescript(SCHEMA)
+    conn=connect('staging');conn.executescript(SCHEMA)
     refs=[{'protocol':p,'timestamp':1,'total':10,'byChain':{}} for p in ('yearn-finance','yearn-curating')]
     put_input(conn,'defillama',{'snapshots':refs},observed_at=1)
     put_input(conn,'defillama',{'snapshots':[dict(refs[0],timestamp=2,total=20)]},status='partial',observed_at=2)
@@ -78,7 +73,7 @@ def test_unpriced_current_vault_remains_in_comparable_scope():
 
 
 def test_retry_retains_coherent_fee_support_but_rejects_changed_accountant(tmp_path):
-    conn=connect(tmp_path/'analytics.sqlite');conn.executescript(SCHEMA)
+    conn=connect('staging');conn.executescript(SCHEMA)
     good={'chainId':1,'address':A,'performanceFee':1000,'managementFee':0,
           'fixedRateSupported':True,'availability':'available','observedAt':1,
           'accountant':C,'contractFamily':'v3_allocator'}
@@ -169,7 +164,7 @@ def test_membership_multicall_offsets_keep_zero_and_unavailable(monkeypatch):
 
 def test_analytics_requires_prepared_selection_before_http_start(tmp_path, monkeypatch):
     from yearn_data import pairing
-    database=tmp_path/'empty.sqlite';connect(database).close()
+    database='staging';connect(database).close()
     monkeypatch.setattr(pairing,'PairingStore',lambda path:SimpleNamespace(get=lambda:SimpleNamespace(database=database)))
     with pytest.raises(ValueError,match='analytics have not been published'):
         pairing.serve_pairing('unused',analytics=True)
@@ -274,7 +269,7 @@ def test_kong_chain_failure_retains_fee_retry_evidence(tmp_path,monkeypatch):
     from yearn_data import analytics_collect as collect
     from yearn_data.storage import init_db
     import requests
-    db=tmp_path/'analytics.sqlite';conn=connect(db);init_db(conn);conn.executescript(SCHEMA)
+    db='staging';conn=connect(db);init_db(conn);conn.executescript(SCHEMA)
     for chain,address in ((1,A),(10,B)):
         conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,updated_at) VALUES (?,'v3',?,1)",(chain,address))
     conn.commit()

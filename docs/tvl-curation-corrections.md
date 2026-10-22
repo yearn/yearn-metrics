@@ -88,9 +88,9 @@ PYTHONPATH=src .venv/bin/python scripts/review_curation_corrections.py \
   --out artifacts/curation-corrections/new-review
 ```
 
-The script checks dates/blocks, creates a separate SQLite publication, and writes
+The script checks dates/blocks, captures a separate JSON review frame, and writes
 input hashes, before/after totals, graph and summary responses. It refuses to
-replace an existing review database and never changes the active publication.
+replace an existing review output directory and never changes the active publication.
 For production, apply catalogue corrections, collect the three new V2 positions
 and newly discovered Morpho vaults at requested closes, publish/prepare a new TVL
 dataset and matching analytics, then verify and activate that release. Historic

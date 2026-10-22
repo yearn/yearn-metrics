@@ -1,15 +1,22 @@
-# Postgres storage and Neon migration
+# Postgres storage
 
-The same indexing, accounting and API code can use SQLite or Postgres. TVL keeps
-its `tvl_*` tables; fee/earnings tables retain their names. Calculations, stored
-history and unavailable-versus-zero semantics do not change.
+Postgres is the only supported backend for indexing, accounting, publication,
+serving and tests. The existing TVL and fee/earnings history is reused. This
+retirement changes no stored quantities or unavailable-versus-zero semantics.
 
 ## Select a database
 
-Put the Neon connection URL in the ignored `.env` file as `NEON_DB_URL`. Select
-Postgres explicitly with `--db neon`; adding the variable alone does not switch
-existing SQLite jobs. The pooled Neon URL works for ordinary jobs and APIs.
-Imports and monthly backfills use the corresponding direct endpoint automatically.
+`neon` is the default when neither `--db` nor `YEARN_DATA_DB` is supplied.
+Set `NEON_DB_URL` server-side, or select `--db staging` with `STAGING_DB_URL` for
+local work. A missing URL fails explicitly. File paths and in-memory SQLite
+selectors are rejected before a file is opened or created; there is no fallback.
+Direct Postgres URLs remain supported for connections, but publications require
+a logical name so credentials cannot appear in manifests or status files.
+
+The pooled Neon URL works for ordinary jobs and APIs. Explicit direct operations
+use its direct endpoint. Local Postgres URLs need `?sslmode=disable`; hosted Neon
+retains TLS. `YEARN_DATA_DB_SCHEMA` selects an already-created schema, defaulting
+to `public`. Use the same schema and logical database when reading a publication.
 
 ```bash
 yearn-data --env /path/to/.env --db neon init-db
@@ -17,94 +24,31 @@ yearn-data --env /path/to/.env --db neon tvl discover
 yearn-data --env /path/to/.env --db neon analyze lifetime-yield
 ```
 
-Use `init-db` for a fresh installation. **For an existing-history migration, run
-the import first:** it deliberately refuses a schema with existing tables.
+`migrate-postgres`, `merge-databases` and `tvl import-catalog` are removed. The
+completed import is preserved in Git history. Existing files and verified archives
+are not deleted, rewritten or silently converted. Recovery uses retained receipts
+and a historical checkout in isolation; old file-based publication manifests do
+not work with this Postgres-only runtime. Republish from the existing Postgres data.
 
-The default Postgres schema is `public`. `YEARN_DATA_DB_SCHEMA` selects another
-already-created schema, principally for isolated testing. Credentials stay in the
-environment; publications and status files contain the logical name `neon`, never
-the connection URL. Loading a Neon publication requires the same environment and
-schema configuration used to publish it.
+## Tests
 
-## Import the shared SQLite history
-
-Confirm Neon has storage for the existing database plus indexes and growth.
-SQLite file size is a planning reference, not the resulting Postgres size.
-Pause SQLite writers before the final import; read-only consumers can stay up.
+All database regressions run against Postgres. Each test creates random schemas
+and drops only those schemas after closing its connections. There is no SQLite
+fallback and a missing test URL fails explicitly.
 
 ```bash
-yearn-data --env /path/to/.env --db neon migrate-postgres \
-  --source /path/to/yearn-shared.sqlite --check-only
-
-yearn-data --env /path/to/.env --db neon migrate-postgres \
-  --source /path/to/yearn-shared.sqlite \
-  --receipt /path/to/migration-receipt.json
-```
-
-The importer streams a consistent, read-only SQLite snapshot via Postgres `COPY`;
-it creates no dump or second full SQLite file. All source tables and explicit
-indexes are copied, including superseded runs, coverage, repair checkpoints and
-source evidence. Tables are ordered by foreign-key dependencies. The import is
-one transaction: an interruption rolls back its tables and data, and the unchanged
-SQLite source remains available for retry or rollback.
-
-SQLite `INTEGER` becomes `bigint`; `REAL` becomes `double precision` to preserve
-existing floating-point precision. Exact raw token quantities, Decimal strings
-and JSON remain text. Existing run IDs and reserved sequence values survive.
-`analysis_outputs` gets an explicit `rowid` identity column whose imported values
-preserve SQLite output ordering. Future output IDs start above the imported maximum.
-Postgres indexes cover selected analysis outputs and TVL dates across multiple
-runs, so a current-date API lookup does not scan the entire backfill.
-
-Before commit, the importer checks every destination table count and every stored
-analysis output fingerprint. Postgres enforces the copied foreign keys and other
-constraints. This verifies storage without rerunning the historical backfill or
-requiring another comparison against the old TVL service.
-
-## Publish and serve from Neon
-
-Use the same completed analysis run IDs to create a **separate** Neon publication.
-Fee/earnings dataset IDs stay the same when the selected output text/order is
-unchanged. TVL publication IDs include the database reference and are republished
-for Neon. Existing SQLite publication files are not changed automatically.
-
-```bash
-yearn-data --env /path/to/.env --db neon select-pairing \
-  --earnings-run-id 13 --fees-run-id 12 --out data/powerglove-neon
-
-yearn-data --env /path/to/.env serve-pairing \
-  --publication data/powerglove-neon --tvl-publication data/tvl-neon \
-  --host 127.0.0.1 --port 3491
-```
-
-The run IDs above are examples for the current local dataset; select the intended
-completed pair for another installation. Validate the new API before switching
-consumers. Keep SQLite and its rollback archives until the Neon deployment is
-accepted. Writers need `--db neon` as well as the correct environment.
-
-The monthly TVL backfill also accepts `--db neon`. It takes a Postgres advisory
-lock through its direct connection so another host cannot run the same backfill
-concurrently. The regular `tvl collect` command retains its existing scheduling
-behavior; coordinate it with the monthly backfill.
-
-## Validation
-
-```bash
+docker compose -p yearn-metrics-tests -f ops/test-postgres.compose.yml up -d --wait
+export YEARN_TEST_POSTGRES_URL='postgresql://yearn_test:yearn_test@127.0.0.1:55436/yearn_test?sslmode=disable'
 python -m pytest -q
-YEARN_TEST_POSTGRES_URL='<disposable Postgres connection URL>' \
-  python -m pytest tests/test_postgres.py -q
+# Optional: include the seven frozen local Anvil replays when Anvil is installed.
+RUN_LOCAL_EVM_REPLAY=1 python -m pytest -q
+docker compose -p yearn-metrics-tests -f ops/test-postgres.compose.yml down
 ```
 
-Integration tests create and remove uniquely named schemas. They cover atomic
-coverage writes, interrupted import recovery, reserved IDs, exact amounts,
-missing values, output order, fee price retries, and existing discovery,
-collection, earnings and API regressions against a real Postgres server. They
-never use public application tables.
-
-The small transport adapter translates the toolkit's qmark parameters, schema
-types and scalar `json_extract` queries. It is not a general SQLite emulator.
-SQLite file consolidation and importing the old service's SQLite catalog remain
-explicit SQLite operations.
+The test container uses temporary storage and a dedicated localhost port. These
+credentials are test-only examples. Never use a production database for tests.
+CI runs the same suite against a disposable Postgres service. Pure SQL splitting,
+row access and parameter helpers have no SQLite module dependency.
 
 ## Prepare chart history after publishing TVL
 
@@ -212,15 +156,13 @@ Select staging explicitly with `--db staging`; its publications store `staging`
 rather than a credential-bearing URL. Keep staging publications separate from
 Neon publications.
 
-A full staging copy can be seeded with the existing SQLite importer before
-retirement. Reimport requires a new empty database; existing tables are never
-overwritten. The staging copy is a point-in-time development copy, not a live
+Seed an empty staging database from a Postgres dump and restore, with explicit
+operator approval and verification; the retired SQLite importer is unavailable. The staging copy is a point-in-time development copy, not a live
 replica or Neon recovery backup. Integration tests can use `STAGING_DB_URL` as
 `YEARN_TEST_POSTGRES_URL`; they create isolated temporary schemas.
 
-Before removing the shared SQLite source, compress its final stopped-writer
-state, fully decompress it, compare SHA-256, and run integrity and foreign-key
-checks on the restored file. Keep the verified archive and restore metadata.
+Existing SQLite archives and their verified restore metadata remain historical
+recovery evidence. Code retirement does not authorize deleting those archives.
 Neon recovery settings and a tested recovery path remain a separate requirement.
 
 The existing staging container can be started with

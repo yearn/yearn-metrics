@@ -21,7 +21,7 @@ def product(request,tmp_path,monkeypatch):
     case['report'].setdefault('api_version',None)
     monkeypatch.setattr(fees,'web3_for',lambda chain:object())
     monkeypatch.setattr(module,'collect',lambda *args:copy.deepcopy(case['evidence']))
-    with closing(connect(tmp_path/'products.sqlite')) as conn:
+    with closing(connect('staging')) as conn:
         init_db(conn);insert(conn,case['report'])
         yield conn,case,field,name
 

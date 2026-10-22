@@ -100,8 +100,9 @@ PYTHONPATH=src .venv/bin/python scripts/review_tvl_overlaps.py \
 ```
 
 The script reads the pinned source database and archive RPCs, saves a new
-single-close `review.sqlite`, a separate publication, `validation.json`, and
-`graph.json`. It refuses to overwrite an existing review database. It does not
+single-close `frame.json`, `validation.json`, and `graph.json`. It refuses to
+overwrite an existing output directory. The JSON frame freezes the source policy
+and can be reopened with `ReviewDataset.load()` without any database access. It does not
 write to Neon, activate a hosted release, or rebuild the full historical series.
 Getter-backed routes without a fixed source vault use parent/strategy pairs
 observed in the pinned frame and reverify the destination and ownership at that
