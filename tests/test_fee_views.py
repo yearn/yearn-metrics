@@ -2,7 +2,6 @@ from yearn_data.storage import connect
 from types import SimpleNamespace
 
 import pytest
-from eth_utils import keccak
 from yearn_data.analytics import fee_stack
 from yearn_data.analytics_collect import custom_accountant_config
 from yearn_data.ybold_fees import VAULT as YBOLD, STAKER, ACCOUNTANT, CODE_HASH

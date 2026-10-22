@@ -5,7 +5,7 @@ import pytest
 
 from yearn_data.storage import connect, init_db
 from yearn_data.tvl import SCHEMA
-from yearn_data.tvl_api import TvlStore, publish_tvl, tvl_response
+from yearn_data.tvl_api import TvlStore, tvl_response
 
 DAY = 1704067199  # Sunday UTC close, preceding Monday January 1.
 PARENT = '0x'+'11'*20

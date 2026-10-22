@@ -4,7 +4,7 @@ import pytest
 
 from yearn_data.tvl import account
 from yearn_data.tvl_sources import _position, candidate_edges
-from test_tvl import address, snapshot, edge, db
+from test_tvl import address, snapshot, db as db
 
 
 def point(n, value='100', chain=1, asset=None):

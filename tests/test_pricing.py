@@ -16,7 +16,7 @@ from yearn_data.pricing import (
     price_unpriced_reports,
     price_unpriced_volume,
 )
-from yearn_data.storage import connect, from_json, init_db, seed_chains
+from yearn_data.storage import connect, init_db, seed_chains
 
 
 class FakeResponse:

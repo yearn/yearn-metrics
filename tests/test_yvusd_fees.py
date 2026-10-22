@@ -52,7 +52,7 @@ def test_target_cannot_silently_fall_back_to_raw_deductions():
 
 def test_index_and_offline_recompute_preserve_split(tmp_path, monkeypatch):
     from types import SimpleNamespace
-    from yearn_data.storage import connect, init_db
+    from yearn_data.storage import init_db
     from yearn_data.fees import index_canonical_fees
     from yearn_data.fee_recompute import recompute_canonical_fees
     from yearn_data import fees
@@ -101,7 +101,7 @@ def test_multiple_reports_each_consume_their_own_fee_event():
 
 def test_explicit_refresh_reacquires_rejected_accountant(tmp_path, monkeypatch):
     from types import SimpleNamespace
-    from yearn_data.storage import connect, init_db
+    from yearn_data.storage import init_db
     from yearn_data import fees
     case = CASES[0]; r = case['report']; e = case['evidence']; calls = []
     def call(transaction, block_identifier):

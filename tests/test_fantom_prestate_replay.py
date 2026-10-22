@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 import pytest
-from test_canonical_fees import db, seed
+from test_canonical_fees import db as db, seed
 from yearn_data.fee_reconstruction import extract_fee_shares
 from yearn_data.fee_trace import verify_receipt_mint, TRACE_VERSION
 from yearn_data.fees import index_canonical_fees

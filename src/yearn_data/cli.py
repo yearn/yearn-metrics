@@ -145,7 +145,7 @@ def build_parser() -> argparse.ArgumentParser:
     restore_p = sub.add_parser('select-hosted-release', help='Select a still-retained release; successful consolidation retires older releases')
     restore_p.add_argument('--release-id', required=True)
 
-    collect_p = sub.add_parser('collect-analytics', help='Collect owned DefiLlama references, membership and declared fee configurations')
+    sub.add_parser('collect-analytics', help='Collect owned DefiLlama references, membership and declared fee configurations')
     prepare_p = sub.add_parser('prepare-analytics', help='Publish remaining Powerglove analytics in the selected database')
     prepare_p.add_argument('--publication', type=Path, required=True)
     prepare_p.add_argument('--tvl-publication', type=Path, required=True)

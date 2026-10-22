@@ -1,7 +1,7 @@
 """Direct fee snapshots carry enough source identity for later offline recomputation."""
 import json
 
-from test_canonical_fees import CASES, db, seed
+from test_canonical_fees import CASES, db as db, seed
 from yearn_data.fees import index_canonical_fees
 
 

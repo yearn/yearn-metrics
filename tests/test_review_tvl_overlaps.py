@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from test_tvl_api import source, run, DAY, PARENT
+from test_tvl_api import source as source, run, DAY, PARENT
 from yearn_data import config, tvl_sources
 from yearn_data.tvl_api import TvlStore
 

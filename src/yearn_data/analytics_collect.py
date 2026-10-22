@@ -171,7 +171,7 @@ def curator_factories(source):
 
 
 def creation_owner(chain,row,factories):
-    from .tvl_discovery import DiscoveryReader, CURATION_REGISTRY, FACTORY_EVENTS
+    from .tvl_discovery import DiscoveryReader, FACTORY_EVENTS
     reader=DiscoveryReader(chain)
     number=row.get('deployment_block') or reader.deployment_block(row['address'])
     family=row.get('version')

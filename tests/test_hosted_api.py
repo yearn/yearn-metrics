@@ -180,7 +180,7 @@ def test_http_failure_does_not_expose_credentials(monkeypatch):
         server.shutdown();server.server_close();thread.join()
 
 # Reuse the existing fixture, which creates and drops a dedicated test schema.
-from test_postgres import pg
+from test_postgres import pg as pg
 
 
 def test_postgres_registry_transaction_and_readonly_selection(pg):

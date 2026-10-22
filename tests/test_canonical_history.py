@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from test_hosted_api import published
+from test_hosted_api import published as published
 from test_pairing import snapshots
-from test_postgres import pg
+from test_postgres import pg as pg
 from test_tvl_api import run, DAY, PARENT, CHILD, BRIDGE
 from yearn_data import canonical_history
 from yearn_data.canonical_history import consolidate

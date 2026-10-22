@@ -1,11 +1,9 @@
 import json
-from decimal import Decimal
 
 import pytest
 
 from yearn_data import fee_valuation as valuation, pricing
 from yearn_data.cli import main
-from yearn_data.exports import export_analysis
 from yearn_data.storage import connect, init_db
 
 ASSET = '0x'+'11'*20

@@ -1,6 +1,6 @@
 """Family-scoped allocator projection and offline source binding."""
 import pytest
-from test_canonical_fees import CASES, seed, db
+from test_canonical_fees import CASES, seed, db as db
 from yearn_data.fees import index_canonical_fees
 from yearn_data.fee_recompute import recompute_canonical_fees
 

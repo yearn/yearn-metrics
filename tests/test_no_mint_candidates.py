@@ -3,7 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 import pytest
-from test_canonical_fees import seed,db
+from test_canonical_fees import seed,db as db
 from yearn_data.fees import index_canonical_fees
 
 ROOT=Path(__file__).parent/'fixtures/fee-no-mint'

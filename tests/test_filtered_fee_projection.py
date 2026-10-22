@@ -2,7 +2,7 @@
 import json
 
 import pytest
-from test_canonical_fees import CASES, RECEIPTS, seed, db
+from test_canonical_fees import CASES, RECEIPTS, seed, db as db
 from yearn_data.fees import FEE_TOPIC, REPORT_TOPICS, index_canonical_fees
 from yearn_data.fee_log_evidence import digest, retain
 from yearn_data.fee_recompute import recompute_canonical_fees

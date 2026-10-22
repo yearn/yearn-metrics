@@ -53,7 +53,7 @@ def test_no_unverified_fallback():
     with pytest.raises(ValueError): normalize_allocator_fees(CASES[-1]['report'])
 
 def test_index_and_offline_replay(tmp_path, monkeypatch):
-    from yearn_data.storage import connect, init_db
+    from yearn_data.storage import init_db
     from yearn_data.fees import index_canonical_fees
     from yearn_data.fee_recompute import recompute_canonical_fees
     from yearn_data import fees, ybold_fees

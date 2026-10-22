@@ -41,6 +41,26 @@ ETHERSCAN_API_KEY=
 
 `ETHERSCAN_API_KEY` is optional for most indexing runs, but useful for V2 source/ABI review workflows.
 
+## Development checks
+
+Install the development dependencies with `python -m pip install -e '.[dev]'`,
+then run the same lint command as CI from the repository root:
+
+```bash
+python -m ruff check .
+```
+
+Ruff is pinned in `pyproject.toml`. The enabled `E9` and `F` rules check syntax,
+undefined names, unused imports and variables, and other Python correctness
+errors. They preserve the existing formatting style. The independent `lint`
+CI job needs no database or credentials. See the [Postgres test guide](docs/postgres.md#tests)
+to run the test suite.
+
+Imported pytest fixtures use explicit aliases such as `from test_helpers import db as db`
+so Ruff recognizes their intentional use by pytest. Do not remove these imports
+as dead code. Ruff does not detect every unused function; disconnected test
+helpers still need review when their callers or monkeypatches are removed.
+
 ## Useful Options
 
 ```bash

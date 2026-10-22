@@ -165,7 +165,7 @@ def test_batched_collection_and_export_preserve_historical_accounting(tmp_path,m
     from decimal import Decimal
     from eth_abi import decode
     from web3 import Web3
-    from yearn_data.storage import connect,init_db
+    from yearn_data.storage import init_db
     from yearn_data.tvl_sources import ArchiveReader,collect_tvl,candidate_edges
     from yearn_data.tvl import export_tvl
     def address(n):return '0x'+f'{n:040x}'

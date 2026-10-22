@@ -5,7 +5,7 @@ import runpy
 
 import pytest
 
-from test_tvl_api import source, run, DAY, PARENT, CHILD
+from test_tvl_api import source as source, run, DAY, PARENT, CHILD
 from yearn_data.tvl_api import TvlStore
 from yearn_data.tvl_review import ReviewDataset
 

@@ -2,7 +2,7 @@
 
 Set YEARN_TEST_POSTGRES_URL to exercise real Postgres. No test uses public tables.
 """
-from conftest import pg
+from conftest import pg as pg
 from contextlib import closing
 import json
 

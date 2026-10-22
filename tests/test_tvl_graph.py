@@ -3,7 +3,7 @@ import json
 import pytest
 
 from yearn_data.tvl_api import TvlStore, tvl_response
-from test_tvl_api import source, run, DAY, PARENT, CHILD, BRIDGE
+from test_tvl_api import source as source, run, DAY, PARENT, CHILD, BRIDGE
 
 HOLDER = '0x'+'44'*20
 

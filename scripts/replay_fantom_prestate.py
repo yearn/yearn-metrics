@@ -102,7 +102,7 @@ def compact_trace(steps, transaction_to, vaults, prestate, receipt):
             if op in ('MUL', 'DIV', 'SSTORE'):
                 value.update(a=stack[-1], b=stack[-2]); grouped[address]['ops'].append(value)
             elif op in ('LOG2', 'LOG3'):
-                off, size = int(stack[-1], 16), int(stack[-2], 16)
+                _off, size = int(stack[-1], 16), int(stack[-2], 16)
                 position = positions[address]
                 if position >= len(logs[address]): raise ValueError('extra replay log')
                 log = logs[address][position]; positions[address] += 1

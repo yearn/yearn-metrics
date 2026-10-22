@@ -8,7 +8,7 @@ from yearn_data.analysis import (create_analysis_run, complete_analysis_run,
                                  run_lifetime_yield, write_output)
 from yearn_data.cli import main
 from yearn_data.exports import export_analysis
-from test_fee_valuation import db, seed, DAY, CUTOFF, ASSET, OTHER, outputs
+from test_fee_valuation import db as db, seed, DAY, CUTOFF, ASSET, OTHER, outputs
 
 
 def test_closed_day_earnings_include_retired_history_and_require_selected_prices(db):
