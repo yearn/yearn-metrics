@@ -159,7 +159,6 @@ def build_parser() -> argparse.ArgumentParser:
     serve_p.add_argument("--published-tvl-only", action="store_true", help="Serve only the updater's selected TVL publication")
     serve_p.add_argument("--current-bridge-policy", choices=["none", "retired-registry"], default="retired-registry")
     serve_p.add_argument("--analytics", action="store_true", help="Serve prepared owned analytics and comparison without legacy services")
-    serve_p.add_argument("--comparison-db", type=Path, help="Read-only external DefiLlama reference database")
 
     catchup_p = sub.add_parser("catch-up", help="Acquire one bounded chain window; no pricing or analysis")
     catchup_p.add_argument("--chain", required=True, choices=sorted(CHAINS))
@@ -355,7 +354,7 @@ def main(argv: list[str] | None = None) -> int:
         from .pairing import serve_pairing
         serve_pairing(args.publication, host=args.host, port=args.port, cors_origin=args.cors_origin,
                       tvl_publication=args.tvl_publication, current_bridge_policy=args.current_bridge_policy,
-                      comparison_database=args.comparison_db, published_tvl_only=args.published_tvl_only,
+                      published_tvl_only=args.published_tvl_only,
                       analytics=args.analytics)
         return 0
     if args.command=='tvl' and args.tvl_command=='prepare-history':

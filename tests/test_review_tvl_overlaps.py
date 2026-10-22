@@ -85,3 +85,43 @@ def test_overlap_review_cli_handles_getter_route_without_source(source,tmp_path,
             assert graph['diagnostics']['unresolvedPositions']==0
     assert [tuple(r) for r in conn.execute('SELECT * FROM tvl_positions')]==original_positions
     assert (root/'current.json').read_bytes()==current
+
+
+@pytest.mark.parametrize('constant,group', [(False,'chain'),(False,'vault'),(True,'chain'),(True,'vault')])
+def test_saved_review_refuses_history_without_database_access(source,tmp_path,monkeypatch,constant,group):
+    from yearn_data import tvl_api, tvl_history_cache
+    from yearn_data.tvl_review import ReviewDataset
+    conn,database,publication=source
+    run(conn,1,DAY,[(PARENT,'100')])
+    dataset=TvlStore(database,publication).get()
+    _,rows,positions,_=dataset.frames((DAY,))[0]
+    review=ReviewDataset(dataset.manifest,DAY,rows,positions)
+    review.save(tmp_path/'saved')
+    monkeypatch.delenv('NEON_DB_URL')
+    monkeypatch.delenv('STAGING_DB_URL')
+    def unexpected(*args,**kwargs):
+        pytest.fail('saved frame accessed a live database')
+    monkeypatch.setattr(tvl_api,'read_db',unexpected)
+    monkeypatch.setattr(tvl_history_cache,'connect',unexpected)
+    saved=ReviewDataset.load(tmp_path/'saved'/'frame.json')
+    assert saved.graph()['totalTvlUsd']==100
+    with pytest.raises(ValueError,match='single captured close'):
+        saved.history(group=group,constant=constant)
+
+
+def test_review_reaccounts_stale_bridge_fields(source):
+    from yearn_data.tvl_review import ReviewDataset
+    conn,database,publication=source
+    run(conn,1,DAY,[(PARENT,'100')])
+    dataset=TvlStore(database,publication).get()
+    _,rows,positions,_=dataset.frames((DAY,))[0]
+    rows[0].update(bridge_excluded_usd='100',bridge_target_chain=10,
+                   bridge_migration_timestamp=DAY-1,external_tvl_usd='0')
+    manifest=dataset.manifest|{'currentBridgePolicy':'none','bridgeMigrations':[]}
+    saved=ReviewDataset(manifest,DAY,rows,positions)
+    _,revised,_,diagnostics=saved.frames((DAY,))[0]
+    assert revised[0]['external_tvl_usd']=='100'
+    assert diagnostics['external_tvl_usd']=='100'
+    graph=saved.graph()
+    assert not graph['bridgeExclusions']
+    assert graph['totalTvlUsd']==100

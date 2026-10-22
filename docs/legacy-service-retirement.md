@@ -15,8 +15,9 @@ publish data.
 
 The old preview on port 3491 used `--comparison-db` to read DefiLlama observations
 from the legacy TVL database. That preview and its 3492 socket forwarding bridge
-are retired. Their service/socket definitions were removed from `ops/`, and the
-installed user units are masked. No replacement external SQLite database is needed.
+are retired. The `--comparison-db` option has been removed; use `--analytics`
+to serve comparisons from the selected prepared publication. Their service/socket
+definitions were removed from `ops/`, and the installed user units are masked. No replacement external SQLite database is needed.
 
 Independent live reference acquisition and storage were verified against the
 current source in an isolated database with an empty local catalog. This check

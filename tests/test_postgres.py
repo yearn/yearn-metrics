@@ -334,3 +334,18 @@ def test_real_postgres_repair_rechecks_builder_completion_under_lock(pg,tmp_path
     chart=TvlDataset(manifest).history(interval='daily')['chart']
     assert chart[0].get('Ethereum') is None and chart[1]['Ethereum']==200
     assert TvlDataset(previous.manifest).history(interval='daily')['chart'][0]['Ethereum']==100
+
+
+def test_removed_comparison_selector_is_rejected_before_server_start(monkeypatch,capsys):
+    from yearn_data import cli, pairing
+    def unexpected(*args,**kwargs):
+        pytest.fail('retired comparison selector reached server startup')
+    monkeypatch.setattr(pairing,'serve_pairing',unexpected)
+    with pytest.raises(SystemExit) as help_exit:
+        cli.main(['serve-pairing','--help'])
+    assert help_exit.value.code==0
+    assert '--comparison-db' not in capsys.readouterr().out
+    for selector in ('archive.sqlite','neon'):
+        with pytest.raises(SystemExit) as error:
+            cli.main(['serve-pairing','--comparison-db',selector])
+        assert error.value.code==2

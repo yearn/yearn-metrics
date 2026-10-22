@@ -16,7 +16,11 @@ class ReviewDataset(TvlDataset):
         self.evidence = {'manifest': manifest, 'rows': deepcopy(rows), 'positions': deepcopy(positions)}
         identity = hashlib.sha256(encoded(self.evidence).encode()).hexdigest()
         super().__init__(manifest | {'datasetId': identity})
-        points = [self.validate_price(row) for row in deepcopy(rows)]
+        points = deepcopy(rows)
+        for row in points:
+            for field in ('overlap_usd','external_tvl_usd','bridge_excluded_usd','bridge_migration_timestamp'):
+                row.pop(field, None)
+        points = [self.validate_price(row) for row in points]
         positions = deepcopy(positions)
         for position in positions:
             position.pop('accounting_excluded', None)
@@ -26,6 +30,9 @@ class ReviewDataset(TvlDataset):
 
     def dates(self):
         return (self.as_of(),)
+
+    def history(self, group='chain', mode='external', interval='weekly', start=None, end=None, chain_id=None, constant=False):
+        raise ValueError('review evidence contains a single captured close; use graph() or summary()')
 
     def history_prepared(self):
         return False

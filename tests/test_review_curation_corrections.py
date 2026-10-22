@@ -3,17 +3,23 @@ import json
 from pathlib import Path
 import runpy
 
+import pytest
+
 from test_tvl_api import source, run, DAY, PARENT, CHILD
 from yearn_data.tvl_api import TvlStore
 from yearn_data.tvl_review import ReviewDataset
 
 
-def test_curation_review_preserves_source_and_reopens_json(source,tmp_path):
+@pytest.mark.parametrize('category,policy', [('v3',True),('curation',True),('curation',False),('curation',None)])
+def test_curation_review_preserves_source_and_reopens_json(source,tmp_path,category,policy):
     conn,database,publication=source
     run(conn,1,DAY,[(PARENT,'100'),(CHILD,'100')])
     dataset=TvlStore(database,publication).get()
     _,rows,positions,_=dataset.frames((DAY,))[0]
+    for row in rows:row['category']=category
     frame={'timestamp':DAY,'rows':rows,'positions':positions,**dataset.manifest}
+    if policy is None:frame.pop('deductInternalCuration')
+    else:frame['deductInternalCuration']=policy
     added={'chain_id':1,'parent':PARENT,'strategy':CHILD,'child':CHILD,'timestamp':DAY,
            'block_number':100+DAY,'method':'direct-strategy','debt_usd':'50','owned_usd':'80','status':'ok'}
     vault='0x'+'77'*20
@@ -29,10 +35,17 @@ def test_curation_review_preserves_source_and_reopens_json(source,tmp_path):
     script=runpy.run_path(str(Path(__file__).parents[1]/'scripts/review_curation_corrections.py'))
     out=tmp_path/'review'
     result=script['review'](*files,out)
-    assert result['after']=={'v3':'200'}
+    net=category!='curation' or policy is not False
+    assert result['after']==({'v3':'200'} if category=='v3' else {'curation':'150' if net else '200','v3':'50'})
     graph=json.loads((out/'graph.json').read_text())
     assert ReviewDataset.load(out/'frame.json').graph()==graph
-    assert graph['totalTvlUsd']==200 and graph['totalOverlapTvlUsd']==50
+    assert graph['totalTvlUsd']==(200 if net else 250)
+    assert graph['totalOverlapTvlUsd']==(50 if net else 0)
+    revised=ReviewDataset.load(out/'frame.json')
+    assert revised.manifest['deductInternalCuration']==(policy is not False)
+    _,corrected,_,_=revised.frames((DAY,))[0]
+    assert {r['vault']:r['external_tvl_usd'] for r in corrected}=={
+        PARENT:'100',CHILD:'50' if net else '100',vault:'50'}
     assert [tuple(row) for row in conn.execute('SELECT * FROM tvl_snapshots')]==before
     assert (publication/'current.json').read_bytes()==selected
     assert not list(out.glob('*.sqlite'))
