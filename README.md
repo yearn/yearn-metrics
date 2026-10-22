@@ -32,6 +32,10 @@ POLYGON_RPC_URL=
 BASE_RPC_URL=
 ARB_RPC_URL=
 KAT_RPC_URL=
+OP_RPC_URL=
+FTM_RPC_URL=
+YEARN_ENVIO_GRAPHQL_URL=
+YEARN_PRICE_PROD_KEY=
 ETHERSCAN_API_KEY=
 ```
 
@@ -73,7 +77,9 @@ The headline volume metric is `gross_total_volume_usd`, defined as deposits + wi
 
 ## Pricing
 
-The `price` command supports three modes:
+Earnings default to Yearn Prices with optional DefiLlama fallback. For the
+Yearn-only delivery workflow, use the explicit flags in the quick start. Volume
+pricing retains its DefiLlama path:
 
 ```bash
 yearn-data price --source defillama
@@ -92,3 +98,6 @@ Event indexing uses resumable `eth_getLogs` block chunks and dedupes logs by `(c
 See [the Envio ingestion guide](docs/historical-envio-ingestion.md) for retired vault discovery, metadata and bounded replay.
 
 For explicit per-chain RPC/Envio windows, including Optimism and Fantom, see [bounded report catch-up](docs/bounded-report-catchup.md).
+
+For the complete scriptable workflow and reproducible CSV exports, see
+[Refresh and export earnings and fees](docs/earnings-and-fees.md).
