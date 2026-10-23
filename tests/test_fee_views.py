@@ -58,14 +58,15 @@ def test_yvusd_groups_external_capital_and_keeps_underlying_rates():
     assert product['performanceFee'] == pytest.approx((60 * 400 + 35 * 496) / 95)
 
 
-@pytest.mark.parametrize('anchor', ['absent', 'unpriced'])
+@pytest.mark.parametrize('anchor', ['absent', 'gross-unpriced', 'external-unpriced'])
 @pytest.mark.parametrize('known_fee', [True, False])
-def test_standalone_locker_keeps_own_fee_when_yvusd_cannot_be_grouped(anchor, known_fee):
+def test_locker_own_fee_fallback_depends_on_yvusd_entry_presence(anchor, known_fee):
     rows = [{'chain_id': 1, 'vault': LOCKED, 'name': 'Locked yvUSD',
              'tvl_usd': '40', 'external_tvl_usd': '35'}]
-    if anchor == 'unpriced':
+    if anchor != 'absent':
         rows.append({'chain_id': 1, 'vault': YVUSD, 'name': 'yvUSD',
-                     'tvl_usd': None, 'external_tvl_usd': None})
+                     'tvl_usd': '100' if anchor == 'external-unpriced' else None,
+                     'external_tvl_usd': None})
     positions = [{'chain_id': 1, 'parent': LOCKED, 'strategy': YVUSD,
                   'child': YVUSD, 'debt_usd': None, 'status': 'unavailable'}]
     configs = {'vaults': [{'chainId': 1, 'address': LOCKED,
@@ -74,6 +75,16 @@ def test_standalone_locker_keeps_own_fee_when_yvusd_cannot_be_grouped(anchor, kn
     result = fee_stack(rows, positions, configs)
     assert len(result['entries']) == 1
     locker = result['entries'][0]
+    if anchor == 'external-unpriced':
+        assert locker['vault']['address'] == YVUSD
+        assert locker['feeRateBasis'] == 'product'
+        assert locker['adjustedTvlUsd'] is None
+        assert locker['performanceFee'] is locker['managementFee'] is None
+        assert set(locker['memberAddresses']) == {YVUSD, LOCKED}
+        locked_root = next(root for root in locker['roots'] if root['vault']['address'] == LOCKED)
+        assert (locked_root['perfFee'], locked_root['mgmtFee']) == (125, 25)
+        assert locked_root['feeAvailability']['state'] == ('available' if known_fee else 'unavailable')
+        return
     assert locker['vault']['address'] == LOCKED
     assert locker['performanceFee'] == (125 if known_fee else None)
     assert locker['managementFee'] == (25 if known_fee else None)

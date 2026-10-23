@@ -25,8 +25,11 @@ own-fee support independently of the stack's `availability`.
   external TVL, independently for performance and management fees. Unknown rates
   on funded members or unknown capital make the corresponding product rate
   unavailable; zero-weight members do not invalidate it. Individual roots retain
-  their own fees. If the unlocked yvUSD entry is absent or unpriced, visible
-  lockers remain standalone own-fee entries, even with incomplete allocations.
+  their own fees. If no unlocked yvUSD entry exists (for example, its gross TVL
+  is missing), visible lockers remain standalone own-fee entries, even with
+  incomplete allocations. A present yvUSD entry with unknown external capital
+  remains grouped, with unavailable product rates and adjusted TVL; component
+  roots still expose their own verified fees.
   See [yvUSD effective product fees](../yvusd-effective-fees.md) for the policy.
 
 `/api/fees/stack` retains raw `chains` and their calculated rates. Its canonical
