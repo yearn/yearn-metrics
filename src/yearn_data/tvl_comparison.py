@@ -28,8 +28,20 @@ def finance_overlap_status(position, recognized):
 
 def discrepancy_details(rows, evidence, dataset_id):
     """Do not mix inventory/adapter evidence from another published dataset."""
-    if not evidence or evidence.get('tvlDatasetId') != dataset_id:
+    if not isinstance(evidence, dict) or evidence.get('tvlDatasetId') != dataset_id:
         return {'state': 'unavailable', 'reason': 'Bidirectional evidence is not prepared for this TVL dataset'}
+    required = {'vaults', 'asOfTimestamp', 'coverage', 'sources'}
+    def records_complete(records, fields):
+        return isinstance(records, list) and all(
+            isinstance(record, dict) and fields <= record.keys() for record in records)
+    if (not required <= evidence.keys()
+            or not isinstance(evidence['coverage'], dict)
+            or not isinstance(evidence['sources'], dict)
+            or not records_complete(evidence['vaults'], {'protocol', 'chainId', 'address'})
+            or not records_complete(evidence.get('overlapChecks', []), {'protocol', 'status'})
+            or any(check['status'] in ('missed', 'handled') and 'ourDeductionUsd' not in check
+                   for check in evidence.get('overlapChecks', []))):
+        return {'state': 'unavailable', 'reason': 'Comparison evidence is incomplete for this TVL dataset'}
     local = {(r['chain_id'], r['vault'].lower()): r for r in rows}
     external = {(v['protocol'], v['chainId'], v['address'].lower()): v for v in evidence['vaults']}
     categories = []

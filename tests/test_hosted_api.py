@@ -444,3 +444,20 @@ def test_new_history_uses_new_dataset_and_date_index(published):
     assert Registry(database).tvl(tvl.id).dates() == (DAY, DAY+7*86400, DAY+8*86400)
     status, body = api.response('/api/tvl')
     assert status == 200 and body['datasetId'] == tvl.id and body['totalTvl'] == 300
+
+
+@pytest.mark.parametrize('missing', ['vaults', 'asOfTimestamp', 'coverage', 'sources'])
+def test_publish_with_incomplete_comparison_evidence(published, missing):
+    from yearn_data.analytics import put_input
+    database, financial, history, _ = published
+    tvl_id = Registry(database).selection()['tvlDatasetId']
+    body = {'tvlDatasetId': tvl_id, 'asOfTimestamp': DAY, 'vaults': [], 'coverage': {}, 'sources': {}}
+    del body[missing]
+    with closing(connect(database)) as conn:
+        put_input(conn, 'comparison-evidence', body, 'partial')
+    release = publish(database, financial, history, prepare_analytics=True)
+    api = HostedAPI(database)
+    assert Registry(database).selection()['releaseId'] == release
+    status, payload = api.response('/api/comparison/defillama-comparable')
+    assert status == 200
+    assert payload['reconciliation']['state'] == 'unavailable'

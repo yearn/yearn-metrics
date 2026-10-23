@@ -83,6 +83,11 @@ revisions require review rather than silently using older recognition rules.
 To release, insert the reviewed body using
 `put_input(conn, 'comparison-evidence', body, 'partial')`, prepare matching analytics,
 and select a coherent hosted release through the existing publication workflow.
+Matching evidence must include `vaults`, `asOfTimestamp`, `coverage` and `sources`,
+with protocol/chain/address identities on vault rows and protocol/status on overlap
+checks (plus `ourDeductionUsd` for handled or missed checks). Incomplete evidence
+leaves reconciliation unavailable; analytics preparation and hosted publication
+can still complete. It never establishes scope exclusions or overlap conclusions.
 Refresh the evidence for a new TVL dataset; do not retag the old bundle. No price
 repairs or exclusions are made by this comparison workflow.
 
