@@ -53,12 +53,15 @@ python -m ruff check .
 Ruff is pinned in `pyproject.toml`. The enabled `E9` and `F` rules check syntax,
 undefined names, unused imports and variables, and other Python correctness
 errors. They preserve the existing formatting style. The independent `lint`
-CI job needs no database or credentials. See the [Postgres test guide](docs/postgres.md#tests)
+CI job needs no database or credentials. Both CI jobs use `uv sync --locked --extra dev`
+to validate and install the committed lockfile before running checks. See the [Postgres test guide](docs/postgres.md#tests)
 to run the test suite.
 
-Imported pytest fixtures use explicit aliases such as `from test_helpers import db as db`
-so Ruff recognizes their intentional use by pytest. Do not remove these imports
-as dead code. Ruff does not detect every unused function; disconnected test
+Fixtures defined in `tests/conftest.py` are available automatically; request them
+as test arguments without importing them. Fixtures defined in other test modules
+use explicit aliases, such as `from test_canonical_fees import db as db`, so Ruff
+recognizes their intentional use by pytest. Keep those imports while the tests
+use their fixtures. Ruff does not detect every unused function; disconnected test
 helpers still need review when their callers or monkeypatches are removed.
 
 ## Useful Options

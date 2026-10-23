@@ -19,9 +19,9 @@ python -m yearn_data.cli --env .env --db neon serve-pairing --analytics \
 ```
 
 Use the existing imported financial publications; selecting different financial
-analyses remains the existing `select-pairing` operation. Do not pass
-`--comparison-db` for this cutover. Collection and preparation are explicit worker
-operations. Refresh them after updating core financial/TVL inputs; API requests do
+analyses remains the existing `select-pairing` operation. The `--comparison-db`
+flag has been removed; comparison data comes from the analytics publication.
+Collection and preparation are explicit worker operations. Refresh them after updating core financial/TVL inputs; API requests do
 not initiate a refresh of these prepared analytics. `--analytics` requires
 `--current-bridge-policy retired-registry`; startup rejects `none` to prevent
 comparison and TVL routes from using different accounting policies.

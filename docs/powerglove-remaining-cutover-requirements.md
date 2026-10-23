@@ -21,7 +21,7 @@ Developer availability, coverage and provenance belong in Yearn Data. Powerglove
 
 - The three new routes are absent from the current Yearn Data API. The comparable-membership route also needs implementing rather than copying an existing working legacy route.
 - The hosted Postgres database stores TVL observations, nesting positions and valued fee/report outputs, but currently has no DefiLlama reference tables or fee-configuration snapshots. Actual charged fees do not establish configured fee rates.
-- `TvlDataset.comparison()` in [tvl_api.py](../src/yearn_data/tvl_api.py) currently reads `defillama_snapshots` from the separate database configured by `--comparison-db`.
+- The former `TvlDataset.comparison()` read `defillama_snapshots` from a separate database configured by `--comparison-db`. Both the method and flag have since been removed; comparison now uses the analytics publication.
 - Powerglove's consumer contracts are in `src/components/landing/native-stats/AuditPanel.tsx`, `types.ts` and `FeesPanel.tsx`. Its routing keeps these supplementary analytics on legacy origins.
 - The existing fee-stack implementation recognizes direct vault-address matches. The new implementation must use stored, verified relationships and preserve intermediary paths where those paths are known.
 
