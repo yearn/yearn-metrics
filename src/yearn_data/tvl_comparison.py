@@ -1,5 +1,6 @@
 """Symmetric, evidence-backed scope and overlap comparison for a pinned TVL close."""
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+import math
 
 
 def finance_replay_routes(replays):
@@ -34,12 +35,17 @@ def discrepancy_details(rows, evidence, dataset_id):
     def records_complete(records, fields):
         return isinstance(records, list) and all(
             isinstance(record, dict) and fields <= record.keys() for record in records)
+    def known_deduction(number):
+        try:
+            return not isinstance(number, bool) and math.isfinite(float(Decimal(str(number))))
+        except (InvalidOperation, ValueError, OverflowError):
+            return False
     if (not required <= evidence.keys()
             or not isinstance(evidence['coverage'], dict)
             or not isinstance(evidence['sources'], dict)
             or not records_complete(evidence['vaults'], {'protocol', 'chainId', 'address'})
             or not records_complete(evidence.get('overlapChecks', []), {'protocol', 'status'})
-            or any(check['status'] in ('missed', 'handled') and 'ourDeductionUsd' not in check
+            or any(check['status'] in ('missed', 'handled') and not known_deduction(check.get('ourDeductionUsd'))
                    for check in evidence.get('overlapChecks', []))):
         return {'state': 'unavailable', 'reason': 'Comparison evidence is incomplete for this TVL dataset'}
     local = {(r['chain_id'], r['vault'].lower()): r for r in rows}

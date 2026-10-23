@@ -461,3 +461,21 @@ def test_publish_with_incomplete_comparison_evidence(published, missing):
     status, payload = api.response('/api/comparison/defillama-comparable')
     assert status == 200
     assert payload['reconciliation']['state'] == 'unavailable'
+
+
+@pytest.mark.parametrize('status', ['missed', 'handled'])
+@pytest.mark.parametrize('deduction', [None, 'not-a-number', 'NaN', 'Infinity'])
+def test_publish_with_unknown_overlap_deduction(published, status, deduction):
+    from yearn_data.analytics import put_input
+    database, financial, history, _ = published
+    tvl_id = Registry(database).selection()['tvlDatasetId']
+    body = {'tvlDatasetId': tvl_id, 'asOfTimestamp': DAY, 'vaults': [], 'coverage': {}, 'sources': {},
+            'overlapChecks': [{'protocol': 'yearn-finance', 'status': status, 'ourDeductionUsd': deduction}]}
+    with closing(connect(database)) as conn:
+        put_input(conn, 'comparison-evidence', body, 'partial')
+    release = publish(database, financial, history, prepare_analytics=True)
+    api = HostedAPI(database)
+    assert Registry(database).selection()['releaseId'] == release
+    code, payload = api.response('/api/comparison/defillama-comparable')
+    assert code == 200
+    assert payload['reconciliation']['state'] == 'unavailable'
