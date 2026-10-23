@@ -54,7 +54,10 @@ Ruff is pinned in `pyproject.toml`. The enabled `E9` and `F` rules check syntax,
 undefined names, unused imports and variables, and other Python correctness
 errors. They preserve the existing formatting style. The independent `lint`
 CI job needs no database or credentials. Both CI jobs use `uv sync --locked --extra dev`
-to validate and install the committed lockfile before running checks. See the [Postgres test guide](docs/postgres.md#tests)
+to validate and install the committed lockfile before running checks. Lint and
+tests use the interpreter pinned in `.python-version`; tests also run on the
+Python 3.10 minimum declared in `pyproject.toml`. uv uses the interpreter supplied
+by CI, with managed interpreter downloads disabled. See the [Postgres test guide](docs/postgres.md#tests)
 to run the test suite.
 
 Fixtures defined in `tests/conftest.py` are available automatically; request them
