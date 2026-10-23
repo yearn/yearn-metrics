@@ -117,6 +117,11 @@ No automatic ingestion schedule is installed.
 Yearn-only pricing, paired analyses, one full-catalog TVL close and chart
 preparation. Select block bounds and a closed UTC cutoff explicitly. A report
 window covers the selected chain; it does not claim all-chain fee freshness.
+For chains with product Tokenized Strategies, choose `--to-block` at a finalized
+block whose timestamp is strictly before `--cutoff`. A finalized head at or after
+the cutoff is incompatible with this updater; choose the last finalized block
+before the cutoff instead. The updater checks this relationship by RPC before
+catch-up, fee indexing or any database write. RPC failures also stop preflight.
 The publication root contains `fees/` and `tvl/` directories. Preparation uses a
 separate pointer before publishing the serving TVL selection. The updater then
 publishes a coherent hosted release and performs

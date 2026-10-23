@@ -309,3 +309,33 @@ def test_observed_product_config_records_failure_kind(monkeypatch, failure):
         assert stored['failureReason'] and 'private provider URL' not in str(stored)
         assert stored['fixedRateSupported'] is False and stored['availability']=='unavailable'
     finally:conn.close()
+
+
+@pytest.mark.parametrize('failed_address', [YVUSD, LOCKED, LOAN])
+def test_product_discloses_retained_fee_observations(failed_address):
+    from yearn_data.analytics import SCHEMA, put_input, selected_input
+    with connect('staging') as conn:
+        conn.executescript(SCHEMA)
+        configs = [{'chainId': 1, 'address': a, 'performanceFee': fee, 'managementFee': 0,
+                    'fixedRateSupported': True, 'observedAt': 1}
+                   for a, fee in [(YVUSD, 0), (LOCKED, 100), (LOAN, 500)]]
+        original = put_input(conn, 'fee-config', {'vaults': configs}, observed_at=1)
+        failed = next(c for c in configs if c['address'] == failed_address) | {
+            'performanceFee': None, 'managementFee': None, 'fixedRateSupported': False,
+            'observedAt': 2, 'failureKind': 'acquisition_failed'}
+        put_input(conn, 'fee-config', {'vaults': [failed]}, status='partial', observed_at=2)
+        rows = [{'chain_id': 1, 'vault': a, 'tvl_usd': 100, 'external_tvl_usd': capital}
+                for a, capital in [(YVUSD, 60), (LOCKED, 40), (LOAN, 0)]]
+        positions = [{'chain_id': 1, 'parent': YVUSD, 'strategy': LOAN, 'child': LOAN,
+                      'debt_usd': 100, 'status': 'ok'}]
+        def product():
+            result = fee_stack(rows, positions, selected_input(conn, 'fee-config')['body'])
+            return next(e for e in result['entries'] if e['vault']['address'] == YVUSD)
+        entry = product()
+        assert entry['performanceFee'] == pytest.approx(340)
+        assert entry['retainedFeeConfigurations'] == [{
+            'chainId': 1, 'address': failed_address, 'observedAt': 1,
+            'retainedFromInputId': original, 'retryObservedAt': 2,
+            'failureKind': 'acquisition_failed'}]
+        put_input(conn, 'fee-config', {'vaults': configs}, observed_at=3)
+        assert product()['retainedFeeConfigurations'] == []

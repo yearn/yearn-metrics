@@ -18,7 +18,7 @@ def main():
     parser.add_argument('--publication-root',type=Path,required=True)
     parser.add_argument('--deferred-manifest',type=Path)
     args=parser.parse_args()
-    if args.cutoff%86400 or args.from_block>args.to_block:
+    if args.cutoff%86400 or min(args.from_block,args.to_block)<0 or args.from_block>args.to_block:
         parser.error('cutoff must be UTC midnight and block range must be ordered')
     from yearn_data.analysis import run_lifetime_yield
     from yearn_data.fee_valuation import run_fee_usd,closed_cutoff
@@ -31,11 +31,6 @@ def main():
     from contextlib import closing
     load_environment([args.env])
     closed_cutoff(args.cutoff)
-    base=[sys.executable,'-m','yearn_data.cli','--env',str(args.env),'--db',args.db]
-    def run(*command):
-        subprocess.run(base+list(command),check=True)
-    run('catch-up','--chain',args.chain,'--from-block',str(args.from_block),'--to-block',str(args.to_block))
-    run('index-fees','--canonical','--chains',args.chain,'--limit','500')
     # Product staking legs are Tokenized Strategies, not allocator reports.
     # Keep their fee events current within the same explicitly bounded update.
     from yearn_data.fee_products import PRODUCTS
@@ -46,6 +41,19 @@ def main():
     chain = normalize_chain_key(args.chain)
     inventory = [v for v in load_inventory() if v['chain_id'] == CHAINS[chain].chain_id
                  and (v['chain_id'], v['address']) in members]
+    # Validate the Tokenized cutoff before catch-up or fee indexing can write.
+    if inventory:
+        from yearn_data.chains import web3_for
+        client = web3_for(chain)
+        if client.eth.chain_id != CHAINS[chain].chain_id:
+            parser.error('RPC chain mismatch')
+        if int(client.eth.get_block(args.to_block)['timestamp']) >= args.cutoff:
+            parser.error('--to-block timestamp must be strictly before --cutoff for product fee indexing')
+    base=[sys.executable,'-m','yearn_data.cli','--env',str(args.env),'--db',args.db]
+    def run(*command):
+        subprocess.run(base+list(command),check=True)
+    run('catch-up','--chain',args.chain,'--from-block',str(args.from_block),'--to-block',str(args.to_block))
+    run('index-fees','--canonical','--chains',args.chain,'--limit','500')
     if inventory:
         with closing(connect(args.db)) as conn:
             index_tokenized_fees(conn, inventory, chain, args.from_block, args.to_block, args.cutoff,

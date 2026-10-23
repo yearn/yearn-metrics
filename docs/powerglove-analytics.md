@@ -41,7 +41,8 @@ atomically selects the current publication. The same Postgres store also holds t
 imported TVL, fees, reports and prepared daily TVL chart rows.
 
 Known zero rates/amounts are preserved. An unavailable retry retains a previous
-known observation and records the retained observation's age; it does not erase
+known observation and records the retained observation's age (fee entries expose
+`retainedFeeConfigurations`, with per-root `feeObservation` provenance); it does not erase
 known inputs. Retained fee configurations preserve the full supported observation,
 including its block and contract family, and record the unavailable retry separately.
 A changed accountant or rejected verification cannot reuse old supported rates.

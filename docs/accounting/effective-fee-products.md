@@ -46,7 +46,14 @@ Product-accountant failures are recorded in the stored `fee-config` input.
 result; `failureReason` records only the exception type. `verification_rejected`
 identifies evidence that contradicts the pinned accountant, runtime hash,
 recipient or asset, with the failed check recorded as its reason. Both leave the
-current rate unavailable; neither substitutes a stale rate for current evidence.
+current rate unavailable when no compatible prior verified configuration exists.
+An acquisition failure may retain the last known rate for the same accountant;
+verification rejection or an accountant change never retains that rate. Served
+fee-stack roots expose `feeObservation`, and each fee entry lists
+`retainedFeeConfigurations` (chain/address, original observation time, source
+input ID, retry time and failure kind), including downstream rates used by the
+combined yvUSD entry. An empty list means no explicitly retained configuration
+was used. Retained rates are last-known observations, not fresh RPC evidence.
 
 ## Historical verification and publication
 

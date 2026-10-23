@@ -63,4 +63,19 @@ def fee_view_entries(chains, rows):
         anchor['feeRateBasis'] = 'product'
         for entry in members:
             del entries[key(entry['vault'])]
+    for entry in entries.values():
+        retained = {}
+        def collect(node):
+            observation = node.get('feeObservation', {})
+            if observation.get('retainedAfterUnavailableRetry'):
+                identity = key(node['vault'])
+                retained[identity] = {'chainId': identity[0], 'address': identity[1],
+                    **{field: observation.get(field) for field in
+                       ('observedAt', 'retainedFromInputId', 'retryObservedAt', 'failureKind')}}
+            if entry['feeRateBasis'] != 'vault':
+                for child in node['children']:
+                    collect(child)
+        for root in entry['roots']:
+            collect(root)
+        entry['retainedFeeConfigurations'] = list(retained.values())
     return list(entries.values())

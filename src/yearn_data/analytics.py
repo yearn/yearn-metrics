@@ -16,7 +16,7 @@ from .tvl_api import CHAINS, encoded, key, money
 
 DAY = 86400
 YEAR = 365 * DAY
-VERSION = 'powerglove-analytics-18'
+VERSION = 'powerglove-analytics-19'
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS analytics_inputs (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, observed_at INTEGER NOT NULL,
@@ -142,6 +142,11 @@ def fee_stack(rows, positions, configurations):
                          'apiVersion':cfg.get('apiVersion'),
                          'contractFamily':cfg.get('contractFamily') or (row.get('version') if row.get('version') in ('v1','v2','morpho-v1','morpho-v2','erc4626') else None)},
                 'feeAvailability':{'state':'available' if fee_known else 'unavailable'},
+                'feeObservation':{'observedAt':cfg.get('observedAt'),
+                    'retainedAfterUnavailableRetry':bool(cfg.get('retainedAfterUnavailableRetry')),
+                    'retainedFromInputId':cfg.get('retainedFromInputId'),
+                    'retryObservedAt':cfg.get('unavailableRetry',{}).get('observedAt'),
+                    'failureKind':cfg.get('unavailableRetry',{}).get('failureKind')},
                 'capitalUsd':capital,'perfFee':perf,'mgmtFee':mgmt,'children':children,
                 'availability':{'state':'available' if complete else 'partial','truncatedAllocations':truncated}}
     def effective(root):
