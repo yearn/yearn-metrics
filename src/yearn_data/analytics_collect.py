@@ -396,10 +396,10 @@ def collect(database,progress=print):
         try:
             response=fetch('https://api.llama.fi/protocol/'+protocol);body=response.json()
             latest=body.get('tvl',[])[-1]
-            by_chain={name:rows['tvl'][-1]['totalLiquidityUSD'] for name,rows in body.get('chainTvls',{}).items() if not '-' in name and rows.get('tvl')}
+            by_chain={('HyperEVM' if name=='Hyperliquid L1' else name):rows['tvl'][-1] for name,rows in body.get('chainTvls',{}).items() if not '-' in name and rows.get('tvl')}
             snapshots.append({'protocol':protocol,'timestamp':latest['date'],'total':latest['totalLiquidityUSD'],
-                              'byChain':{('HyperEVM' if k=='Hyperliquid L1' else k):v for k,v in by_chain.items()},
-                              'byChainTimestamps':{k:v['tvl'][-1]['date'] for k,v in body.get('chainTvls',{}).items() if '-' not in k and v.get('tvl')},'source':'https://api.llama.fi/protocol/'+protocol,'payloadSha256':hashlib.sha256(response.content).hexdigest()})
+                              'byChain':{k:v['totalLiquidityUSD'] for k,v in by_chain.items()},
+                              'byChainTimestamps':{k:v['date'] for k,v in by_chain.items()},'source':'https://api.llama.fi/protocol/'+protocol,'payloadSha256':hashlib.sha256(response.content).hexdigest()})
         except (requests.RequestException,ValueError,KeyError,IndexError):failures.append(protocol)
     with closing(connect(database)) as conn:
         ref_id=put_input(conn,'defillama',{'snapshots':snapshots,'failedProtocols':failures},'partial' if failures else 'available',now)

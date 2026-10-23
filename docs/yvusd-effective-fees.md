@@ -19,8 +19,9 @@ external capital alone does not remove an otherwise present yvUSD entry: its
 product remains grouped with unavailable rates and adjusted TVL, while component
 roots retain their own fee configuration and availability.
 
-Analytics methodology `powerglove-analytics-18` invalidates publications prepared
-under the old own-fee override. Reprepare analytics against the selected TVL and
+Analytics methodology `powerglove-analytics-18` introduced this effective-rate policy.
+Current publication jobs use the version in [the fee policy](accounting/effective-fee-products.md);
+later versions also include retained-input disclosure and comparison validation. Reprepare analytics against the selected TVL and
 financial publications before serving the new result. This does not require a
 TVL/history rebuild or financial fee recollection.
 

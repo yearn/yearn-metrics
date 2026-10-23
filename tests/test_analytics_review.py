@@ -334,3 +334,24 @@ def test_profitability_groups_explain_partial_subtotals():
         assert group['availability']['fees']=={'state':'partial','known':2,'expected':3,'complete':1}
         assert group['availability']['feeYield']=={'state':'unavailable','known':0,'expected':3}
     assert result['vaults'][0]['availability']['fees']=={'state':'partial','known':1,'expected':2}
+
+
+def test_collected_chain_totals_and_timestamps_use_same_names(monkeypatch):
+    from yearn_data import analytics_collect as collect
+    from yearn_data.storage import init_db
+    with connect('staging') as conn:
+        init_db(conn)
+    body = {'tvl': [{'date': 20, 'totalLiquidityUSD': 30}], 'chainTvls': {
+        'Hyperliquid L1': {'tvl': [{'date': 18, 'totalLiquidityUSD': 10}]},
+        'Ethereum': {'tvl': [{'date': 19, 'totalLiquidityUSD': 20}]},
+        'Ethereum-staking': {'tvl': [{'date': 19, 'totalLiquidityUSD': 99}]}}}
+    monkeypatch.setattr(collect, 'fetch', lambda url: SimpleNamespace(json=lambda:body, content=b'fixture', text='fixture'))
+    monkeypatch.setattr(collect, 'rules', lambda *args: {})
+    monkeypatch.setattr(collect, 'curator_factories', lambda source: [])
+    collect.collect('staging', progress=lambda message: None)
+    with connect('staging') as conn:
+        snapshots = selected_input(conn, 'defillama')['body']['snapshots']
+    assert len(snapshots) == 2
+    for snapshot in snapshots:
+        assert snapshot['byChain'] == {'HyperEVM': 10, 'Ethereum': 20}
+        assert snapshot['byChainTimestamps'] == {'HyperEVM': 18, 'Ethereum': 19}

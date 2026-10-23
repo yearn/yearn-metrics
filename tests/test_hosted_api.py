@@ -479,3 +479,18 @@ def test_publish_with_unknown_overlap_deduction(published, status, deduction):
     code, payload = api.response('/api/comparison/defillama-comparable')
     assert code == 200
     assert payload['reconciliation']['state'] == 'unavailable'
+
+
+@pytest.mark.parametrize('field', ['units', 'replayTvlUsd'])
+def test_publish_with_malformed_vault_valuation(published, field):
+    from yearn_data.analytics import put_input
+    database, financial, history, _ = published
+    tvl_id = Registry(database).selection()['tvlDatasetId']
+    vault = {'protocol': 'yearn-finance', 'chainId': 1, 'address': 'absent',
+             'units': '10', 'replayTvlUsd': '20', field: 'n/a'}
+    body = {'tvlDatasetId': tvl_id, 'asOfTimestamp': DAY, 'vaults': [vault], 'coverage': {}, 'sources': {}}
+    with closing(connect(database)) as conn:
+        put_input(conn, 'comparison-evidence', body, 'partial')
+    publish(database, financial, history, prepare_analytics=True)
+    code, payload = HostedAPI(database).response('/api/comparison/defillama-comparable')
+    assert code == 200 and payload['reconciliation']['state'] == 'unavailable'

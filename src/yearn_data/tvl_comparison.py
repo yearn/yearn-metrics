@@ -35,17 +35,29 @@ def discrepancy_details(rows, evidence, dataset_id):
     def records_complete(records, fields):
         return isinstance(records, list) and all(
             isinstance(record, dict) and fields <= record.keys() for record in records)
-    def known_deduction(number):
+    def known_number(number):
         try:
             return not isinstance(number, bool) and math.isfinite(float(Decimal(str(number))))
         except (InvalidOperation, ValueError, OverflowError):
             return False
     if (not required <= evidence.keys()
+            or type(evidence['asOfTimestamp']) is not int or evidence['asOfTimestamp'] < 0
             or not isinstance(evidence['coverage'], dict)
             or not isinstance(evidence['sources'], dict)
+            or not isinstance(evidence['coverage'].get('incompleteChains', []), list)
             or not records_complete(evidence['vaults'], {'protocol', 'chainId', 'address'})
+            or any(not isinstance(v['protocol'], str) or not isinstance(v['address'], str)
+                   or not v['address'] or type(v['chainId']) is not int or v['chainId'] <= 0
+                   or (v.get('quote') is not None and not isinstance(v['quote'], dict))
+                   or any(v.get(field) is not None and
+                          (not isinstance(v[field], str) or not known_number(v[field]))
+                          for field in ('units', 'replayTvlUsd'))
+                   for v in evidence['vaults'])
             or not records_complete(evidence.get('overlapChecks', []), {'protocol', 'status'})
-            or any(check['status'] in ('missed', 'handled') and not known_deduction(check.get('ourDeductionUsd'))
+            or any(not isinstance(check['protocol'], str)
+                   or check['status'] not in ('missed', 'handled', 'unverified')
+                   for check in evidence.get('overlapChecks', []))
+            or any(check['status'] in ('missed', 'handled') and not known_number(check.get('ourDeductionUsd'))
                    for check in evidence.get('overlapChecks', []))):
         return {'state': 'unavailable', 'reason': 'Comparison evidence is incomplete for this TVL dataset'}
     local = {(r['chain_id'], r['vault'].lower()): r for r in rows}

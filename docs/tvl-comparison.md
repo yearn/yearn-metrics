@@ -86,7 +86,9 @@ and select a coherent hosted release through the existing publication workflow.
 Matching evidence must include `vaults`, `asOfTimestamp`, `coverage` and `sources`,
 with protocol/chain/address identities on vault rows and protocol/status on overlap
 checks (plus a known, finite numeric `ourDeductionUsd` for handled or missed checks).
-Null, nonnumeric and non-finite deductions are incomplete evidence. Incomplete evidence
+Null, nonnumeric and non-finite deductions are incomplete evidence. Vault `units`
+and `replayTvlUsd` must be finite decimal strings when known; null or absent values
+remain unresolved observations. Malformed values make reconciliation unavailable. Incomplete evidence
 leaves reconciliation unavailable; analytics preparation and hosted publication
 can still complete. It never establishes scope exclusions or overlap conclusions.
 Refresh the evidence for a new TVL dataset; do not retag the old bundle. No price

@@ -112,12 +112,16 @@ def test_prepared_publication_pins_evidence_without_rewriting_previous_result(tm
 
 
 @pytest.mark.parametrize('missing', ['vaults', 'asOfTimestamp', 'coverage', 'sources',
-    'vault.protocol', 'vault.chainId', 'vault.address', 'check.protocol', 'check.status', 'check.ourDeductionUsd'])
+    'vault.protocol', 'vault.chainId', 'vault.address', 'check.protocol', 'check.status', 'check.ourDeductionUsd']
+    + [(field, value) for field in ('units', 'replayTvlUsd') for value in ('n/a', 'NaN', 'Infinity', 123, [], {}, True)]
+    + [('address', None), ('chainId', []), ('protocol', {}), ('quote', [])])
 def test_incomplete_evidence_does_not_abort_preparation(missing):
     from types import SimpleNamespace
     from yearn_data.analytics import prepare, AnalyticsStore
     body = evidence([external('ours')], [dict(protocol='yearn-finance', status='missed', ourDeductionUsd='10')])
-    if missing.startswith('vault.'):
+    if isinstance(missing, tuple):
+        body['vaults'][0][missing[0]] = missing[1]
+    elif missing.startswith('vault.'):
         del body['vaults'][0][missing.split('.')[1]]
     elif missing.startswith('check.'):
         del body['overlapChecks'][0][missing.split('.')[1]]
