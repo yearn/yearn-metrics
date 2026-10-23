@@ -42,15 +42,105 @@ def test_yvusd_groups_external_capital_and_keeps_underlying_rates():
     product = entries[YVUSD]
     assert product['vault']['name'] == 'yvUSD'
     assert product['adjustedTvlUsd'] == 95  # Locked capital owned upstream stays excluded.
-    assert product['performanceFee'] == product['managementFee'] == 0
+    assert product['performanceFee'] == pytest.approx(400)
+    assert product['managementFee'] == 0
     assert product['feeRateBasis'] == 'product'
     assert len(product['roots']) == 2
     assert product['roots'][0]['children'][0]['perfFee'] == 500
     assert any(c['effectivePerfFee'] > 0 for c in result['chains'])
     rows[1]['external_tvl_usd'] = None
-    assert next(r for r in fee_stack(rows, positions, configs)['entries'] if r['vault']['address'] == YVUSD)['adjustedTvlUsd'] is None
+    unavailable = next(r for r in fee_stack(rows, positions, configs)['entries'] if r['vault']['address'] == YVUSD)
+    assert unavailable['adjustedTvlUsd'] is None
+    assert unavailable['performanceFee'] is unavailable['managementFee'] is None
+    rows[1]['external_tvl_usd'] = '35'
     configs['vaults'][1]['performanceFee'] = 100
-    assert next(r for r in fee_stack(rows, positions, configs)['entries'] if r['vault']['address'] == YVUSD)['performanceFee'] is None
+    product = next(r for r in fee_stack(rows, positions, configs)['entries'] if r['vault']['address'] == YVUSD)
+    assert product['performanceFee'] == pytest.approx((60 * 400 + 35 * 496) / 95)
+
+
+def product_entries(capital=(60, 35), performance=(500, 900), management=(10, 30)):
+    from yearn_data.fee_views import fee_view_entries
+    chains = []
+    rows = []
+    for address, gross, external, perf, mgmt in zip(
+            (YVUSD, LOCKED), (100, 40), capital, performance, management):
+        root = {'vault': {'chainId': 1, 'address': address, 'name': address},
+                'capitalUsd': gross, 'perfFee': 0, 'mgmtFee': 0, 'children': [],
+                'feeAvailability': {'state': 'available'}, 'availability': {'state': 'available'}}
+        chains.append({'root': root, 'effectivePerfFee': perf, 'effectiveMgmtFee': mgmt})
+        rows.append({'chain_id': 1, 'vault': address,
+                     'external_tvl_usd': str(external) if external is not None else None})
+    entries = fee_view_entries(chains, rows)
+    assert len(entries) == 1
+    return entries[0], chains
+
+
+def test_product_weights_member_stacks_by_external_not_gross_capital():
+    product, chains = product_entries()
+    assert product['performanceFee'] == pytest.approx((60 * 500 + 35 * 900) / 95)
+    assert product['managementFee'] == pytest.approx((60 * 10 + 35 * 30) / 95)
+    assert product['adjustedTvlUsd'] == 95
+    assert product['roots'] == [chain['root'] for chain in chains]
+    assert product['memberAddresses'] == [YVUSD, LOCKED]
+    assert all(root['perfFee'] == root['mgmtFee'] == 0 for root in product['roots'])
+
+
+@pytest.mark.parametrize(('capital', 'performance', 'expected'), [
+    ((60, 35), (500, None), None),
+    ((60, 35), (None, 900), None),
+    ((60, None), (500, 900), None),
+    ((0, 0), (500, 900), None),
+    ((60, 0), (500, None), 500),
+    ((0, 35), (None, 900), 900),
+    ((60, 35), (0, 0), 0),
+])
+def test_product_rate_preserves_unavailable_zero_and_unfunded_members(capital, performance, expected):
+    product, _ = product_entries(capital=capital, performance=performance)
+    if expected is None:
+        assert product['performanceFee'] is None
+    else:
+        assert product['performanceFee'] == pytest.approx(expected)
+
+
+def test_product_missing_management_rate_does_not_erase_known_performance_rate():
+    product, _ = product_entries(management=(10, None))
+    assert product['performanceFee'] == pytest.approx((60 * 500 + 35 * 900) / 95)
+    assert product['managementFee'] is None
+
+
+def test_product_keeps_every_visible_locker_without_repeating_its_capital():
+    from yearn_data.fee_views import fee_view_entries
+    from yearn_data.yvusd_fees import ACCOUNTANTS
+    _, chains = product_entries()
+    second = next(address for address in ACCOUNTANTS if address != LOCKED)
+    root = dict(chains[1]['root'], vault={'chainId': 1, 'address': second, 'name': 'Second locker'})
+    chains.append({'root': root, 'effectivePerfFee': 1500, 'effectiveMgmtFee': 50})
+    rows = [{'chain_id': 1, 'vault': address, 'external_tvl_usd': str(capital)}
+            for address, capital in [(YVUSD, 60), (LOCKED, 35), (second, 5)]]
+    entries = fee_view_entries(chains, rows)
+    assert len(entries) == 1
+    product = entries[0]
+    assert product['adjustedTvlUsd'] == 100
+    assert product['performanceFee'] == pytest.approx(690)
+    assert product['managementFee'] == pytest.approx(19)
+    assert set(product['memberAddresses']) == {YVUSD, LOCKED, second}
+    assert len(product['roots']) == 3
+
+
+def test_missing_downstream_fee_is_not_replaced_with_yvusd_own_zero():
+    rows = [{'chain_id': 1, 'vault': address, 'name': address,
+             'tvl_usd': str(gross), 'external_tvl_usd': str(external)}
+            for address, gross, external in [(YVUSD, 100, 60), (LOCKED, 40, 40), (LOAN, 80, 0)]]
+    positions = [{'chain_id': 1, 'parent': parent, 'strategy': child, 'child': child,
+                  'debt_usd': str(debt), 'status': 'ok'}
+                 for parent, child, debt in [(LOCKED, YVUSD, 40), (YVUSD, LOAN, 80)]]
+    configs = {'vaults': [{'chainId': 1, 'address': address, 'performanceFee': fee, 'managementFee': 0}
+                         for address, fee in [(YVUSD, 0), (LOCKED, 0), (LOAN, None)]]}
+    product = next(entry for entry in fee_stack(rows, positions, configs)['entries']
+                   if entry['vault']['address'] == YVUSD)
+    assert product['performanceFee'] is None
+    assert product['adjustedTvlUsd'] == 100
+    assert len(product['roots']) == 2
 
 
 def reader(monkeypatch, address, code_hash, response):
@@ -141,7 +231,7 @@ def test_adding_standalone_entries_preserves_nested_stacks_and_counts_each_vault
     assert entries[standalone]['performanceFee'] == pytest.approx(1000)
     assert entries[standalone]['managementFee'] == 200
     assert entries[LOAN]['adjustedTvlUsd'] == 0  # Upstream-owned capital remains deducted.
-    assert entries[YVUSD]['performanceFee'] == 0
+    assert entries[YVUSD]['performanceFee'] == pytest.approx(300)
     assert entries[YVUSD]['roots'][0]['children'][0]['perfFee'] == 500
 
 

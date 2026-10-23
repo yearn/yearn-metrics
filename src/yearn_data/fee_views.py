@@ -37,7 +37,7 @@ def fee_view_entries(chains, rows):
         visit(chain['root'])
     for identity, entry in entries.items():
         node = entry['roots'][0]
-        if identity[0] == 1 and identity[1] in (YBOLD, STAKER, YVUSD, *ACCOUNTANTS):
+        if identity[0] == 1 and identity[1] in (YBOLD, STAKER):
             own = node['feeAvailability']['state'] == 'available'
             entry.update(performanceFee=node['perfFee'] if own else None,
                          managementFee=node['mgmtFee'] if own else None, feeRateBasis='vault')
@@ -50,10 +50,15 @@ def fee_view_entries(chains, rows):
         anchor['roots'] += [root for entry in members for root in entry['roots']]
         capital = [anchor['adjustedTvlUsd'], *[entry['adjustedTvlUsd'] for entry in members]]
         anchor['adjustedTvlUsd'] = sum(capital) if all(value is not None for value in capital) else None
-        # Product fees include the unlocked accountant and every visible locker.
+        # Each member's stack already includes its downstream fees. Weight only
+        # external capital so locked shares held in the unlocked vault count once.
         for field in ('performanceFee', 'managementFee'):
             rates = [anchor[field], *[entry[field] for entry in members]]
-            anchor[field] = 0 if all(value == 0 for value in rates) else None
+            funded = [(weight, rate) for weight, rate in zip(capital, rates) if weight is not None and weight > 0]
+            total = anchor['adjustedTvlUsd']
+            anchor[field] = (sum(weight * rate for weight, rate in funded) / total
+                             if total is not None and total > 0 and all(rate is not None for _, rate in funded)
+                             else None)
         anchor['feeRateBasis'] = 'product'
         for entry in members:
             del entries[key(entry['vault'])]
