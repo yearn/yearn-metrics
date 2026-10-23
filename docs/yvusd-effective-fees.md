@@ -6,9 +6,10 @@ rates now include downstream fees, using the existing effective stack rate for
 each member, weighted by that member's external capital. Gross member capital is
 not summed as the weight because it repeats the locked shares held in yvUSD.
 
-Unknown rates on funded members or unknown capital make the corresponding
-effective rate unavailable. A known-zero-weight member does not make another
-member's known rate unavailable. Performance and management rates are combined
+Unknown rates on funded members, unknown capital, or zero total external capital
+make the corresponding effective rate unavailable. If all external capital is
+known zero, adjusted TVL remains zero while the rates are unavailable. A known-zero-weight
+member does not make another positively funded member's known rate unavailable. Performance and management rates are combined
 independently. Individual nodes retain their own rates; the combined effective
 rate must not be presented as the selected vault layer's own charge. The yBOLD
 own-rate policy and historical paid-fee accounting are unchanged. When no unlocked

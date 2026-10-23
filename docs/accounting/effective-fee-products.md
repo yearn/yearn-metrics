@@ -23,8 +23,10 @@ own-fee support independently of the stack's `availability`.
   not an additional fee.
 - The combined yvUSD row displays member downstream effective rates weighted by
   external TVL, independently for performance and management fees. Unknown rates
-  on funded members or unknown capital make the corresponding product rate
-  unavailable; zero-weight members do not invalidate it. Individual roots retain
+  on funded members, unknown capital, or zero total external capital make the
+  corresponding product rate unavailable. Zero-weight members do not invalidate
+  a rate when other members supply known positive external capital. When all
+  external capital is known zero, adjusted TVL remains zero but rates are unavailable. Individual roots retain
   their own fees. If no unlocked yvUSD entry exists (for example, its gross TVL
   is missing), visible lockers remain standalone own-fee entries, even with
   incomplete allocations. A present yvUSD entry with unknown external capital
