@@ -11,7 +11,9 @@ effective rate unavailable. A known-zero-weight member does not make another
 member's known rate unavailable. Performance and management rates are combined
 independently. Individual nodes retain their own rates; the combined effective
 rate must not be presented as the selected vault layer's own charge. The yBOLD
-own-rate policy and historical paid-fee accounting are unchanged.
+own-rate policy and historical paid-fee accounting are unchanged. When no unlocked
+yvUSD entry is available to form a combined product, visible lockers keep their
+verified own rates, even if downstream allocation history is incomplete.
 
 Analytics methodology `powerglove-analytics-18` invalidates publications prepared
 under the old own-fee override. Reprepare analytics against the selected TVL and

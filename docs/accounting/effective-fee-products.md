@@ -1,8 +1,10 @@
 # Current fee entries for yBOLD and yvUSD
 
 The Effective Fees table distinguishes a verified fee at the selected vault from
-an unavailable combined rate across all of its underlying allocations. A partial
-allocation history must not erase a known contract fee. `feeAvailability` tracks
+an unavailable combined rate across all of its underlying allocations. For own-layer entries, a partial
+allocation history must not erase a known contract fee. The combined yvUSD product
+rate includes downstream allocations and is unavailable when funded member rates
+or member capital are unknown. `feeAvailability` tracks
 own-fee support independently of the stack's `availability`.
 
 ## Source and display rules
@@ -19,10 +21,13 @@ own-fee support independently of the stack's `availability`.
   `getVaultConfig(address)`. Verify its runtime and underlying asset before
   reading management and performance fees. The locker bonus is a distribution,
   not an additional fee.
-- At the user's request, the combined yvUSD row displays its own product fee;
-  underlying fees remain in the expanded breakdown. The current rates are zero
-  at both product components. Unknown or future nonzero grouped configurations
-  remain unavailable until their combined rate has an explicit definition.
+- The combined yvUSD row displays member downstream effective rates weighted by
+  external TVL, independently for performance and management fees. Unknown rates
+  on funded members or unknown capital make the corresponding product rate
+  unavailable; zero-weight members do not invalidate it. Individual roots retain
+  their own fees. If the unlocked yvUSD entry is absent or unpriced, visible
+  lockers remain standalone own-fee entries, even with incomplete allocations.
+  See [yvUSD effective product fees](../yvusd-effective-fees.md) for the policy.
 
 `/api/fees/stack` retains raw `chains` and their calculated rates. Its canonical
 `entries` provide names, component roots, adjusted TVL and `feeRateBasis` (`stack`,
@@ -38,7 +43,7 @@ identifies evidence that contradicts the pinned accountant, runtime hash,
 recipient or asset, with the failed check recorded as its reason. Both leave the
 current rate unavailable; neither substitutes a stale rate for current evidence.
 
-## Verification and publication
+## Historical verification and publication
 
 Finalized Ethereum block **26178806** confirms a 10% staked yBOLD fee and zero own
 fees for unstaked yBOLD and both current yvUSD components. yvUSD's `lockerBonus`
@@ -61,7 +66,7 @@ publications were retained. Current [canonical consolidation](../canonical-histo
 retires older releases, so recorded release IDs do not guarantee rollback. Tests cover incomplete allocations, genuine zero fees, grouped
 external TVL, unknown recipients/code, changing product rates and locker bonuses.
 
-## Carry-forward onto the newer TVL publication
+## Historical carry-forward onto the newer TVL publication
 
 A concurrent TVL publication used the previous analytics method and omitted
 canonical fee entries. Carry the corrected entries forward without rolling back
@@ -75,8 +80,8 @@ The financial dataset is unchanged, as are the product fee rates and combined
 yvUSD external TVL. The previous TVL release
 `b04af26bf93ac8065d439063d2c788abb9274f3728b80d2ba0b6faba8c32c113` was retained at that rollout.
 
-Future publication jobs must use `powerglove-analytics-5` from this change so
-refreshing the TVL dataset also retains the canonical fee entries.
+That rollout used `powerglove-analytics-5`. Current publication jobs use
+`powerglove-analytics-18`, as described in the linked yvUSD policy.
 
 
 ## Standalone direct-deposit entries
@@ -91,8 +96,9 @@ Existing product grouping, nested breakdowns and historical fee/earnings data
 are preserved. Zero-TVL and unpriced standalone vaults retain their existing
 eligibility; historical pricing repair is a separate task.
 
-The methodology version is `powerglove-analytics-5` so preparation cannot reuse
-a cached stack-only publication with the same inputs.
+The standalone-entry rollout used `powerglove-analytics-5` to prevent reuse of
+a cached stack-only publication with the same inputs; current preparation uses
+the newer methodology above.
 
 The selected standalone-entry release is
 `01a0d47cbf1ef5a03c0beac08691b7b378cbe1ad89814a09ecbb64c881ea5805`, with analytics

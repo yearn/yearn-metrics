@@ -58,6 +58,30 @@ def test_yvusd_groups_external_capital_and_keeps_underlying_rates():
     assert product['performanceFee'] == pytest.approx((60 * 400 + 35 * 496) / 95)
 
 
+@pytest.mark.parametrize('anchor', ['absent', 'unpriced'])
+@pytest.mark.parametrize('known_fee', [True, False])
+def test_standalone_locker_keeps_own_fee_when_yvusd_cannot_be_grouped(anchor, known_fee):
+    rows = [{'chain_id': 1, 'vault': LOCKED, 'name': 'Locked yvUSD',
+             'tvl_usd': '40', 'external_tvl_usd': '35'}]
+    if anchor == 'unpriced':
+        rows.append({'chain_id': 1, 'vault': YVUSD, 'name': 'yvUSD',
+                     'tvl_usd': None, 'external_tvl_usd': None})
+    positions = [{'chain_id': 1, 'parent': LOCKED, 'strategy': YVUSD,
+                  'child': YVUSD, 'debt_usd': None, 'status': 'unavailable'}]
+    configs = {'vaults': [{'chainId': 1, 'address': LOCKED,
+                          'performanceFee': 125, 'managementFee': 25,
+                          'fixedRateSupported': known_fee}]}
+    result = fee_stack(rows, positions, configs)
+    assert len(result['entries']) == 1
+    locker = result['entries'][0]
+    assert locker['vault']['address'] == LOCKED
+    assert locker['performanceFee'] == (125 if known_fee else None)
+    assert locker['managementFee'] == (25 if known_fee else None)
+    assert locker['feeRateBasis'] == 'vault'
+    assert locker['adjustedTvlUsd'] == 35
+    assert locker['roots'][0]['availability']['state'] == 'partial'
+
+
 def product_entries(capital=(60, 35), performance=(500, 900), management=(10, 30)):
     from yearn_data.fee_views import fee_view_entries
     chains = []

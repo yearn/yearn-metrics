@@ -35,15 +35,16 @@ def fee_view_entries(chains, rows):
             'feeRateBasis': 'stack'}
     for chain in chains:
         visit(chain['root'])
+    anchor = entries.get((1, YVUSD))
     for identity, entry in entries.items():
         node = entry['roots'][0]
-        if identity[0] == 1 and identity[1] in (YBOLD, STAKER):
+        if identity[0] == 1 and (identity[1] in (YBOLD, STAKER)
+                                 or (anchor is None and identity[1] in ACCOUNTANTS)):
             own = node['feeAvailability']['state'] == 'available'
             entry.update(performanceFee=node['perfFee'] if own else None,
                          managementFee=node['mgmtFee'] if own else None, feeRateBasis='vault')
         value = current.get(identity, {}).get('external_tvl_usd')
         entry['adjustedTvlUsd'] = float(value) if value is not None else None
-    anchor = entries.get((1, YVUSD))
     if anchor:
         members = [entries[(1, address)] for address in sorted(ACCOUNTANTS) if (1, address) in entries]
         anchor['memberAddresses'] += [entry['vault']['address'] for entry in members]
