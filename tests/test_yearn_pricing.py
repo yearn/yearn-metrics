@@ -35,7 +35,7 @@ def test_yearn_prices_batches_normalize_and_respect_route_limits():
 
 
 def test_price_unpriced_reports_uses_yearn_prices_eod_and_exact_fallback(monkeypatch, tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     asset = "0x0000000000000000000000000000000000000002"
@@ -124,7 +124,7 @@ def test_price_unpriced_reports_uses_yearn_prices_eod_and_exact_fallback(monkeyp
 def test_price_unpriced_reports_uses_defillama_only_for_unresolved_yearn_prices(
     monkeypatch, tmp_path
 ):
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     first_asset = "0x0000000000000000000000000000000000000002"
@@ -204,7 +204,7 @@ def test_price_unpriced_reports_falls_back_after_yearn_prices_transport_failure(
 ):
     from yearn_data.pricing import YearnPricesRequestError
 
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     asset = "0x0000000000000000000000000000000000000002"
@@ -325,7 +325,7 @@ def test_yearn_only_command_disables_both_fallbacks(tmp_path, monkeypatch):
     from yearn_data import cli
     calls = []
     monkeypatch.setattr(cli, 'price_unpriced_reports', lambda conn, **kw: calls.append(kw) or 0)
-    assert cli.main(['--db', str(tmp_path / 'prices.sqlite'), 'price', '--source', 'yearn-prices',
+    assert cli.main(['--db', 'staging', 'price', '--source', 'yearn-prices',
                      '--no-provider-fallback', '--no-onchain-fallbacks']) == 0
     assert calls[0]['source'] == 'yearn-prices'
     assert calls[0]['fallback'] is None
@@ -343,7 +343,7 @@ def test_malformed_batch_preserves_other_targets_and_exact_provider_fallbacks(
 ):
     from yearn_data import pricing
 
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     assets = ["0x" + "2" * 40, "0x" + "4" * 40]
@@ -407,7 +407,7 @@ def test_malformed_batch_preserves_other_targets_and_exact_provider_fallbacks(
 def test_yearn_only_pricing_rejects_enabled_onchain_fallbacks_before_requests(monkeypatch, tmp_path):
     from yearn_data import pricing
 
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     monkeypatch.setattr(pricing, "_price_rows_with_yearn_prices",
                         lambda *_: pytest.fail("Must reject unsupported policy before fetching"))
@@ -421,7 +421,7 @@ def test_response_error_recovery_preserves_fatal_authentication_and_configuratio
 ):
     from yearn_data import pricing
 
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     row = {"chain_id": 1, "asset": "0x" + "2" * 40,
            "block_timestamp": 100, "block_number": 10}
@@ -447,7 +447,7 @@ def test_response_error_recovery_preserves_fatal_authentication_and_configuratio
 def test_default_batch_preserves_valid_points_and_only_verifies_invalid_target(monkeypatch, tmp_path, problem):
     from yearn_data import pricing
 
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     first, second = "0x" + "2" * 40, "0x" + "4" * 40
     rows = [{"chain_id": 1, "asset": asset, "block_timestamp": timestamp, "block_number": 10}
@@ -530,7 +530,7 @@ def test_run_rejects_unsupported_fallback_flags_before_discovery_or_indexing(mon
     for name in ["discover", "discover_from_envio", "index_all_reports", "import_reports_from_envio"]:
         monkeypatch.setattr(cli, name, lambda *_args, **_kwargs: pytest.fail("Must reject before writes"))
     with pytest.raises(ValueError, match="onchain.*DefiLlama"):
-        cli.main(["--db", str(tmp_path / "test.sqlite"), "run", "lifetime-yield", "--no-provider-fallback"])
+        cli.main(["--db", 'staging', "run", "lifetime-yield", "--no-provider-fallback"])
 
 
 @pytest.mark.parametrize("fallback_status", ["missing", "retryable", "invalid", "ok"])
@@ -538,7 +538,7 @@ def test_yearn_fallback_does_not_replace_good_stored_prices_with_failures(monkey
     from yearn_data import pricing
     from yearn_data.analysis import run_lifetime_yield
 
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     assets = ["0x" + digit * 40 for digit in ["2", "4", "6"]]
@@ -591,7 +591,7 @@ def test_open_day_prices_wait_until_close_and_retry_on_an_ordinary_run(
     from yearn_data import pricing
     from yearn_data.analysis import run_lifetime_yield
 
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     asset = "0x" + "2" * 40
@@ -653,7 +653,7 @@ def test_open_day_prices_wait_until_close_and_retry_on_an_ordinary_run(
 def test_unsupported_chain_stays_unpriced_without_aborting_configured_chains(monkeypatch, tmp_path, unsupported_chain):
     from yearn_data import pricing
 
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     asset = "0x" + "2" * 40
@@ -711,7 +711,7 @@ def test_run_checks_yearn_credentials_before_discovery_and_allows_configured_run
         monkeypatch.setattr(cli, name, stage(name))
     monkeypatch.setattr(cli, "_run_analysis", lambda *_args, **_kwargs: 1)
     monkeypatch.setattr(cli, "export_analysis", lambda *_args, **_kwargs: [])
-    command = ["--db", str(tmp_path / "test.sqlite"), "run", "lifetime-yield"]
+    command = ["--db", 'staging', "run", "lifetime-yield"]
     if source == "defillama":
         command.extend(["--price-source", source])
     if source == "yearn-prices" and not has_key:
@@ -725,7 +725,7 @@ def test_run_checks_yearn_credentials_before_discovery_and_allows_configured_run
 
 def test_report_pricing_uses_the_client_chain_capability(monkeypatch, tmp_path):
     from yearn_data import pricing
-    conn = connect(tmp_path / 'chain-capability.sqlite')
+    conn = connect('staging')
     init_db(conn)
     asset = '0x' + '2' * 40
     conn.execute("""INSERT INTO strategy_reports (

@@ -19,11 +19,11 @@ HTTP requests allow three attempts by default.
 Use these commands to price and analyze reports already stored in the database:
 
 ```bash
-yearn-data --db data/yearn.sqlite price --source yearn-prices \
+yearn-data --db neon price --source yearn-prices \
   --no-provider-fallback --no-onchain-fallbacks --limit 500
-yearn-data --db data/yearn.sqlite analyze lifetime-yield \
+yearn-data --db neon analyze lifetime-yield \
   --price-source yearn-prices --no-provider-fallback
-yearn-data --db data/yearn.sqlite export lifetime-yield --out exports/earnings
+yearn-data --db neon export lifetime-yield --out exports/earnings
 ```
 
 `--no-provider-fallback` prevents the use of DefiLlama prices.

@@ -1,11 +1,12 @@
 # Powerglove TVL cutover
 
 The read-only pairing server can serve TVL alongside fees and reported earnings from
-`data/yearn.sqlite`. Powerglove's `codex/stats-page` uses this source for current TVL,
-history, constant-price history, curation products, the vault audit tree and the
-Yearn side of the DefiLlama comparison. Fee-stack and profitability analytics retain
-the existing fees service. Supplementary graph endpoints retain the existing TVL
-service until those consumers migrate.
+Postgres (`neon` or `staging`). Powerglove's `codex/stats-page` uses this source for current TVL,
+history, constant-price history, curation products and the vault audit tree.
+With `--analytics`, prepared fee-stack, profitability and DefiLlama
+membership/comparison results also come from Postgres.
+See [owned Powerglove analytics](powerglove-analytics.md) for the complete cutover.
+Unused supplementary graph routes retain their fallback configuration.
 
 ## Start the API
 
@@ -15,12 +16,12 @@ Keep the existing fees/earnings publication selected, then run:
 yearn-data serve-pairing --publication data/powerglove \
   --tvl-publication data/powerglove-tvl \
   --current-bridge-policy retired-registry \
-  --comparison-db /path/to/defillama-reference.sqlite \
+  --analytics \
   --host 127.0.0.1 --port 3492
 ```
 
-The optional comparison database supplies only stored `defillama_snapshots`
-reference rows. No Yearn TVL figures are read from it. The API makes no RPC or
+Prepared analytics supply stored DefiLlama references from the same owned
+Postgres publication. No legacy reference database is required. The API makes no RPC or
 pricing requests and opens its source databases read-only. Configure a reverse
 proxy for production; set `--cors-origin` when Powerglove uses a different origin.
 
@@ -34,6 +35,41 @@ VITE_PUBLIC_YEARN_DATA_API_URL=https://your-data-api.example
 
 Existing TVL and fee service settings continue to serve supplementary analytics.
 Without a Yearn Data target, the TVL proxy retains its existing TVL-service fallback.
+
+## Hosted database connection
+
+The Postgres-only runtime supports these API contracts with a hosted database. Keep `NEON_DB_URL` in Yearn Data's ignored environment file;
+never put this credential into a `VITE_*` variable or the browser bundle. The
+Powerglove consumer talks to the API, which opens Neon read-only.
+
+Publish the existing completed Postgres analyses, then start the API:
+
+```bash
+python -m yearn_data.cli --env /path/to/yearn-data/.env --db neon select-pairing \
+  --earnings-run-id 13 --fees-run-id 12 --out data/powerglove-neon
+
+python -m yearn_data.cli --env /path/to/yearn-data/.env serve-pairing \
+  --publication data/powerglove-neon --tvl-publication data/powerglove-tvl-neon \
+  --current-bridge-policy retired-registry \
+  --analytics \
+  --host 127.0.0.1 --port 3491
+```
+
+The example run IDs match the imported current financial publication. Fee dataset
+identity is preserved when the imported outputs are identical. The TVL dataset ID
+changes because its publication records the logical database reference `neon`.
+Restart the consumer when switching the target so it obtains the new TVL selection;
+do not reuse an old file-backed TVL dataset ID against a Neon publication.
+
+Set Powerglove's ignored `.env.local` to
+`VITE_YEARN_DATA_API_TARGET=http://127.0.0.1:3491` and restart its local server or
+preview. For a remotely deployed consumer, configure the public **API** URL using
+`VITE_PUBLIC_YEARN_DATA_API_URL`; a hosted database alone does not deploy an API.
+
+Use the collection/preparation commands in [owned analytics](powerglove-analytics.md)
+before enabling `--analytics`. Keep Postgres recovery backups and validate TVL,
+core fees, weekly history and comparison results before changing consumers.
+SQLite-backed serving and rollback are retired; historical archives remain untouched.
 
 ## Publication and automatic selection
 
@@ -73,8 +109,13 @@ addressable after a subsequent collection publishes another one.
 | `/api/tvl/history/runs/latest` | Sampled historical TVL |
 | `/api/tvl/history/runs/latest/constant-price` | Actual and constant-price history |
 | `/api/tvl/curation-products` | Morpho and positively identified V3 allocator products |
+| `/api/tvl/graph` | Dated vault/holder/child flows with the same TVL accounting |
 | `/api/audit/tree` | Dated vault/strategy positions and current bridge exclusions |
-| `/api/comparison` | Native Yearn figures versus stored DefiLlama references |
+
+`/api/comparison` belongs to the prepared `--analytics` surface; it is not
+a TVL pairing route. See [owned analytics comparison](powerglove-analytics.md)
+for its response contract and `publicationId` pin. Without `--analytics`, this
+server returns 404 for comparison requests.
 
 Filters include `datasetId`, `chainId`, inclusive `from`/`to`, `groupBy`
 (`chain`, `category`, `type`, `vault`), `mode` (`external`, `raw`) and `interval`
@@ -84,6 +125,9 @@ The legacy `includeCurrent` parameter is accepted; current means the latest stor
 close, never a live RPC snapshot.
 
 Native accounting caps verified nested holdings by both parent and child TVL.
+The graph accepts `chainId`, `category`, `includeRetired`, and `datasetId`.
+See [TVL overlap conditions](tvl-overlaps.md) for its flow-versus-deduction fields,
+router and wrapper corrections, cross-chain verification, and review procedure.
 The headline retains the existing service's separate curation-layer convention;
 the curation-product view explicitly deducts verified curated child ownership.
 Powerglove uses external TVL directly rather than scaling raw historical values to

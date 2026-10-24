@@ -24,7 +24,7 @@ from yearn_data.config import load_environment, TVL_EXCLUDED_CHAIN_IDS
 from yearn_data.multicall import MULTICALL3, MULTICALL3_ABI
 from yearn_data.pricing import fetch_yearn_price, fetch_yearn_prices_batch, yearn_prices_token_key
 from yearn_data.pricing import YearnPricesAuthenticationError, YearnPricesConfigurationError
-from yearn_data.storage import connect, init_db, is_postgres, database_reference
+from yearn_data.storage import connect, init_db, database_reference
 from yearn_data.tvl import export_tvl, BACKFILL_SCHEMA
 from yearn_data import tvl_sources as sources
 
@@ -258,7 +258,7 @@ def export_batch(conn,out,run_id):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--db',required=True,help='SQLite path, or neon to use NEON_DB_URL')
+    p.add_argument('--db',required=True,help='Postgres logical database: neon or staging')
     p.add_argument('--heads',type=Path,required=True,help='Verified finalized-head preflight JSON')
     p.add_argument('--env',type=Path,required=True)
     p.add_argument('--out',type=Path,required=True)
@@ -267,20 +267,16 @@ def main():
     p.add_argument('--limit-batches',type=int)
     args=p.parse_args()
     args.out.mkdir(parents=True,exist_ok=True)
-    lock_path = args.out/'.backfill.lock' if is_postgres(args.db) else Path(args.db).with_suffix('.backfill.lock')
+    lock_path = args.out/'.backfill.lock'
     lock=lock_path.open('w')
     fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     load_environment([args.env])
     conn=connect(args.db,direct=True)
-    if is_postgres(args.db):
-        # A direct connection keeps the advisory lock on the same backend for
-        # this job's lifetime, including when another host starts a backfill.
-        if not conn.execute('SELECT pg_try_advisory_lock(743219887)').fetchone()[0]:
-            conn.close()
-            raise ValueError('a TVL backfill already holds the database lock')
+    # A direct connection retains the lock for this backfill job.
+    if not conn.execute('SELECT pg_try_advisory_lock(743219887)').fetchone()[0]:
+        conn.close()
+        raise ValueError('a TVL backfill already holds the database lock')
     init_db(conn)
-    if not is_postgres(args.db):
-        conn.execute('PRAGMA journal_mode=WAL');conn.execute('PRAGMA busy_timeout=60000')
     conn.executescript(SCHEMA)
     heads={r['chain_id']:r for r in json.loads(args.heads.read_text())}
     start=int(datetime.strptime(args.from_date,'%Y-%m-%d').replace(tzinfo=UTC).timestamp())+86399

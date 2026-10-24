@@ -29,7 +29,7 @@ class FakeRedis:
 
 
 def _db_with_lifetime_yield(tmp_path, value="125.123456789"):
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     run_id = create_analysis_run(conn, "lifetime-yield")
     write_output(

@@ -40,8 +40,8 @@ def seed(conn, cases=CASES):
                         and l['topics'][0] in REPORT_TOPICS and int(l['logIndex'],16)>e['log_index'])
         v = inventory[(e['chain_id'],e['vault_address'])]
         version = 'v2' if e['contract_family']=='yearn-v2-vault' else 'v3'
-        conn.execute('''INSERT OR IGNORE INTO vaults(chain_id,address,version,asset,asset_decimals,api_version,active,updated_at)
-            VALUES (?,?,?,?,?,?,?,1)''',(e['chain_id'],e['vault_address'],version,e['asset_address'],e['asset_decimals'],e['api_version'],not v['is_retired']))
+        conn.execute('''INSERT INTO vaults(chain_id,address,version,asset,asset_decimals,api_version,active,updated_at)
+            VALUES (?,?,?,?,?,?,?,1) ON CONFLICT DO NOTHING''',(e['chain_id'],e['vault_address'],version,e['asset_address'],e['asset_decimals'],e['api_version'],int(not v['is_retired'])))
         conn.execute('''INSERT INTO strategy_reports(chain_id,version,vault_address,strategy_address,tx_hash,log_index,
             block_number,block_timestamp,asset,asset_decimals,gain_raw,loss_raw,net_raw,
             protocol_fees_raw,total_fees_raw,total_refunds_raw) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
@@ -55,7 +55,7 @@ def seed(conn, cases=CASES):
 
 @pytest.fixture
 def db(tmp_path):
-    c = connect(tmp_path/'fees.sqlite')
+    c = connect('staging')
     init_db(c)
     yield c
     c.close()
@@ -187,7 +187,7 @@ def test_decoder_rejects_ambiguous_fee_pairing():
 
 
 def test_cli_can_project_and_export_allocator_fees_offline(tmp_path):
-    path=tmp_path/'cli.sqlite'
+    path='staging'
     conn=connect(path);init_db(conn)
     seed(conn,[c for c in DIRECT if c['event']['contract_family']=='yearn-v3-allocator'])
     conn.close()
@@ -538,7 +538,7 @@ def test_cli_explicit_execution_keeps_report_scope(db, tmp_path, monkeypatch):
         captured.update(options)
         return 0
     monkeypatch.setattr(cli, 'index_canonical_fees', index)
-    database = db.execute('PRAGMA database_list').fetchone()['file']
+    database = 'staging'
     assert cli.main(['--db', database, 'index-fees', '--canonical', '--reconstruct-v2',
                      '--verify-selective', '--verify-execution', '--report-keys', str(selector),
                      '--trace-limit', '2']) == 0

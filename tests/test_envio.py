@@ -59,7 +59,7 @@ def _v2_report_node(*, block: int = 100, log_index: int = 7) -> dict[str, str | 
 
 
 def _db(tmp_path):
-    conn = connect(tmp_path / "envio.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     return conn
@@ -170,7 +170,7 @@ def test_cli_index_fees_keeps_rpc_implementation_when_envio_is_selected(tmp_path
     )
 
     assert cli.main(
-        ["--db", str(tmp_path / "unused.sqlite"), "index-fees", "--chains", "eth"]
+        ["--db", 'staging', "index-fees", "--chains", "eth"]
     ) == 0
     assert len(calls) == 1
 
@@ -480,7 +480,7 @@ def test_cli_routes_experimental_v2_option_to_envio_discovery(tmp_path, monkeypa
     assert cli.main(
         [
             "--db",
-            str(tmp_path / "unused.sqlite"),
+            'staging',
             "discover",
             "--chains",
             "eth",
@@ -534,7 +534,7 @@ def test_cli_combined_lifetime_yield_uses_envio(tmp_path, monkeypatch):
     assert cli.main(
         [
             "--db",
-            str(tmp_path / "unused.sqlite"),
+            'staging',
             "run",
             "lifetime-yield",
             "--chains",
@@ -576,7 +576,7 @@ def test_cli_combined_volume_keeps_rpc_path_when_envio_is_selected(tmp_path, mon
     assert cli.main(
         [
             "--db",
-            str(tmp_path / "unused.sqlite"),
+            'staging',
             "run",
             "vault-volume",
             "--chains",
@@ -690,7 +690,7 @@ def test_cli_historical_import_persists_reports_without_moving_forward_cursor(tm
     monkeypatch.setattr(envio, "_pull_window", lambda *args, **kwargs: [_v3_report_node()])
 
     assert cli.main([
-        "--db", str(tmp_path / "envio.sqlite"), "index-events",
+        "--db", 'staging', "index-events",
         "--chains", "eth", "--versions", "v3", "--include-inactive",
         "--from-block", "90", "--to-block", "110", "--vaults", VAULT,
     ]) == 0
@@ -716,7 +716,7 @@ def test_cli_rejects_envio_history_flags_before_rpc_work(tmp_path, monkeypatch, 
     monkeypatch.setattr(cli, "discover", unexpected_rpc)
     monkeypatch.setattr(cli, "index_all_reports", unexpected_rpc)
     with pytest.raises(ValueError, match="requires? Envio"):
-        cli.main(["--db", str(tmp_path / "history.sqlite"), *arguments])
+        cli.main(["--db", 'staging', *arguments])
 
 
 @pytest.mark.parametrize(("from_block", "to_block"), [(-1, 100), (101, 100)])
@@ -765,7 +765,7 @@ def test_failed_historical_window_can_be_replayed_after_reopening_database(tmp_p
         envio.import_reports_from_envio(conn, ["eth"], **arguments)
     conn.close()
 
-    conn = connect(tmp_path / "envio.sqlite")
+    conn = connect('staging')
     assert conn.execute("SELECT block_number FROM strategy_reports").fetchone()[0] == 90
     assert envio._get_envio_cursor(conn, 1, "StrategyReported") == 500
     monkeypatch.setattr(envio, "_pull_window", lambda entity, fields, chain, lo, hi, **kwargs: [
@@ -949,7 +949,7 @@ def test_discovery_rejects_unsupported_source_flags_before_acquisition(tmp_path,
     monkeypatch.setattr(cli, "discover", lambda *a, **kw: pytest.fail("unsupported RPC flags"))
     monkeypatch.setattr(cli, "discover_from_envio", lambda *a, **kw: pytest.fail("unsupported Envio flags"))
     with pytest.raises(ValueError, match=arguments[0]):
-        cli.main(["--db", str(tmp_path / "flags.sqlite"), "discover", "--chains", "eth", *arguments])
+        cli.main(["--db", 'staging', "discover", "--chains", "eth", *arguments])
 
 
 def test_explicit_rpc_path_retains_non_yearn_report_ingestion(tmp_path, monkeypatch):
@@ -1046,7 +1046,7 @@ def test_lifetime_run_keeps_retired_vault_reports(tmp_path, monkeypatch, previou
                 and lo <= n["blockNumber"] <= hi and VAULT in scope["address_values"]]
 
     monkeypatch.setattr(envio, "_pull_window", reports)
-    command = ["--db", str(tmp_path / "unused.sqlite"), "run", "lifetime-yield", "--chains", "eth", "--to-block"]
+    command = ["--db", 'staging', "run", "lifetime-yield", "--chains", "eth", "--to-block"]
     monkeypatch.setenv("YEARN_PRICE_PROD_KEY", "test-only")
     if previous_run:
         assert cli.main(command + ["100"]) == 0

@@ -1,12 +1,11 @@
 import json
-import sqlite3
 from decimal import Decimal
 
 import pytest
 
 from yearn_data.storage import connect, init_db
 from yearn_data.tvl import account, asset_units, export_tvl
-from yearn_data.tvl_sources import ArchiveReader, collect_tvl, import_service_catalog, scan_holders, candidate_edges
+from yearn_data.tvl_sources import ArchiveReader, collect_tvl, scan_holders, candidate_edges
 from yearn_data.cli import main
 
 
@@ -18,7 +17,7 @@ def address(n):
 def test_collection_stops_on_operator_price_errors(tmp_path, monkeypatch, failure):
     from unittest.mock import Mock
     from yearn_data import pricing, tvl_sources
-    conn = connect(tmp_path / 'operator-error.sqlite'); init_db(conn)
+    conn = connect('staging'); init_db(conn)
     conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at) "
                  "VALUES (1,'v3',?,?,18,1)", (address(1), address(2))); conn.commit()
     reader = Mock(); reader.block_at.return_value = 1
@@ -44,6 +43,53 @@ def snapshot(n,value,version='v3',chain=1):
 def edge(parent,strategy,child,debt,owned,chain=1):
     return {'chain_id':chain,'parent':address(parent),'strategy':address(strategy),'child':address(child),
             'timestamp':100,'debt_usd':debt,'owned_usd':owned,'status':'ok'}
+
+
+@pytest.mark.parametrize('replacement', ['missing', 'verified', 'wrong-block', 'wrong-parent',
+                                       'wrong-date', 'no-getter', 'failed', 'missing-value', 'zero'])
+def test_superseded_registry_position_needs_dated_replacement(replacement):
+    correction = {'chainId':1,'strategyAddress':address(9),'targetVaultAddress':address(3),
+                  'supersededTargetVaultAddresses':[address(2)]}
+    stale = dict(edge(1,9,2,'50','80'), method='service-registry', block_number=123)
+    repaired = dict(edge(1,9,3,'50','60'), method='service-registry', block_number=123,
+                    vault_getter='vault()')
+    if replacement == 'wrong-block': repaired['block_number'] = 124
+    if replacement == 'wrong-parent': repaired['parent'] = address(4)
+    if replacement == 'wrong-date': repaired['timestamp'] = 101
+    if replacement == 'no-getter': repaired.pop('vault_getter')
+    if replacement == 'failed': repaired['status'] = 'unavailable'
+    if replacement == 'missing-value': repaired['owned_usd'] = None
+    if replacement == 'zero': repaired.update(debt_usd='0', owned_usd=None)
+    positions = [stale] + ([] if replacement == 'missing' else [repaired])
+    rows, positions, total = account([snapshot(i,'100') for i in (1,2,3)], positions,
+                                    target_corrections=[correction])
+    assert rows[1]['external_tvl_usd'] == '100'
+    assert positions[0]['overlap_usd'] == '0'
+    assert positions[0]['accounting_excluded'] is True
+    assert positions[0]['reason'] == 'superseded_registry_target'
+    assert positions[0]['accounting_unresolved'] is (replacement not in ('verified','zero'))
+    if replacement in ('verified','zero'):
+        assert total['status'] == 'complete'
+        assert total['external_tvl_usd'] == ('250' if replacement == 'verified' else '300')
+    else:
+        assert total['status'] == 'incomplete'
+        assert total['external_tvl_usd'] is None
+        assert 'superseded_registry_target' in total['issues']
+    # No rewriting or relabelling of raw historical ownership.
+    assert stale['owned_usd'] == '80' and stale['child'] == address(2)
+
+
+@pytest.mark.parametrize('dated_getter,zero_debt', [(True,False),(False,True)])
+def test_registry_correction_preserves_dated_getter_or_zero(dated_getter,zero_debt):
+    correction = {'chainId':1,'strategyAddress':address(9),'targetVaultAddress':address(3),
+                  'supersededTargetVaultAddresses':[address(2)]}
+    position = dict(edge(1,9,2,'0' if zero_debt else '50','80'),
+                    method='service-registry', block_number=123)
+    if dated_getter: position['vault_getter'] = 'vault()'
+    _, _, total = account([snapshot(i,'100') for i in (1,2,3)], [position],
+                          target_corrections=[correction])
+    assert total['status'] == 'complete'
+    assert total['external_tvl_usd'] == ('300' if zero_debt else '250')
 
 
 def test_three_level_nesting_counts_capital_once():
@@ -78,6 +124,27 @@ def test_curation_is_an_explicit_accounting_choice():
     points=[snapshot(1,'100'),snapshot(2,'100','curation')]
     assert account(points,[edge(1,9,2,'100','100')])[2]['external_tvl_usd']=='200'
     assert account(points,[edge(1,9,2,'100','100')],include_curation=True)[2]['external_tvl_usd']=='100'
+
+
+def test_curation_nesting_is_deducted_without_merging_product_layers():
+    points=[snapshot(1,'100'),snapshot(2,'100','morpho-v2') | {'category':'curation'},
+            snapshot(3,'110','morpho-v1') | {'category':'curation'}]
+    positions=[edge(1,8,2,'100','100'),edge(2,9,3,'100','105')]
+    rows,edges,total=account(points,positions)
+    assert [r['external_tvl_usd'] for r in rows]==['100','100','10']
+    assert total['external_tvl_usd']=='210'
+    assert edges[0]['reason']=='curation_separate_product'
+    assert edges[1]['overlap_usd']=='100'
+    assert account(points,positions,include_curation=True)[2]['external_tvl_usd']=='110'
+    assert account(points,positions,deduct_internal_curation=False)[2]['external_tvl_usd']=='310'
+
+
+def test_internal_curation_missing_price_is_unavailable_not_zero_overlap():
+    points=[snapshot(1,'100','curation'),snapshot(2,None,'curation')]
+    _,edges,total=account(points,[edge(1,9,2,'100',None)])
+    assert edges[0]['overlap_usd'] is None
+    assert edges[0]['reason']=='missing_position_valuation'
+    assert total['status']=='incomplete'
 
 
 def test_missing_values_are_not_zero_or_complete_totals():
@@ -116,7 +183,7 @@ def test_versioned_debt_layouts():
 
 @pytest.fixture
 def db(tmp_path):
-    conn=connect(tmp_path/'test.sqlite')
+    conn=connect('staging')
     init_db(conn)
     for n,version in [(1,'v3'),(2,'v3'),(3,'v1'),(4,'curation')]:
         conn.execute('''INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at,active)
@@ -174,29 +241,11 @@ def test_share_scan_discovers_nonregistry_intermediaries(db):
     assert any(e['strategy']==address(9) and e['child']==address(2) for e in candidate_edges(db,vaults))
 
 
-def test_migration_is_read_only_idempotent_and_includes_all_categories(tmp_path):
-    path=tmp_path/'legacy.sqlite'
-    source=sqlite3.connect(path)
-    source.executescript('''CREATE TABLE vaults(id INTEGER,chain_id INTEGER,address TEXT,category TEXT,
-        asset_address TEXT,asset_symbol TEXT,asset_decimals INTEGER,name TEXT,api_version TEXT,is_retired INTEGER);
-        CREATE TABLE strategies(chain_id INTEGER,address TEXT,vault_id INTEGER,name TEXT);''')
-    for n,version in [(1,'v1'),(2,'v2'),(3,'v3'),(4,'curation')]:
-        source.execute('INSERT INTO vaults VALUES (?,?,?,?,?,?,?,?,?,?)',(n,999,address(n),version,address(8),'USD',6,'name',None,1))
-    source.execute('INSERT INTO strategies VALUES (999,?,3,NULL)',(address(9),))
-    source.commit();source.close()
-    original=path.read_bytes()
-    conn=connect(tmp_path/'new.sqlite');init_db(conn)
-    assert import_service_catalog(conn,path)==4
-    assert import_service_catalog(conn,path)==4
-    assert conn.execute('SELECT COUNT(*) FROM tvl_vaults').fetchone()[0]==4
-    assert path.read_bytes()==original
-    assert conn.execute('SELECT COUNT(*) FROM tvl_strategies WHERE chain_id=999').fetchone()[0]==1
-    conn.close()
 
 
 def test_cli_export_empty_run_is_actionable(tmp_path):
     with pytest.raises(ValueError,match='no collected TVL run'):
-        main(['--db',str(tmp_path/'cli.sqlite'),'tvl','export','--out',str(tmp_path/'out')])
+        main(['--db','staging','tvl','export','--out',str(tmp_path/'out')])
 
 
 def test_yearn_prices_requires_day_end_state(db):
@@ -254,6 +303,9 @@ def test_known_child_outside_sample_stays_a_known_relationship(db,monkeypatch):
     position=json.loads(db.execute('SELECT data_json FROM tvl_positions WHERE run_id=?',(run,)).fetchone()[0])
     assert position['method']=='direct-strategy'
     assert position['mapping_status']=='child_outside_selection'
+    assert position['status']=='unavailable'
+    assert position['reason']=='child_outside_selection'
+    assert db.execute('SELECT status FROM tvl_runs WHERE id=?',(run,)).fetchone()[0]=='incomplete'
     assert Decimal(position['debt_usd'])==60
 
 
@@ -314,7 +366,7 @@ def test_empty_v1_does_not_require_undefined_share_price():
 @pytest.mark.parametrize('ids', [(1,2,3),(3,2,1)])
 @pytest.mark.parametrize('share_prices', [True,False])
 def test_multilevel_wrappers_use_leaf_value_in_any_order(tmp_path,monkeypatch,ids,share_prices):
-    conn=connect(tmp_path/'wrappers.sqlite');init_db(conn)
+    conn=connect('staging');init_db(conn)
     outer,middle,leaf=map(address,ids)
     for vault,asset,decimals in [(outer,middle,18),(middle,leaf,18),(leaf,address(90),6)]:
         conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at) VALUES (1,'v3',?,?,?,1)",(vault,asset,decimals))
@@ -345,7 +397,7 @@ def test_multilevel_wrappers_use_leaf_value_in_any_order(tmp_path,monkeypatch,id
 
 @pytest.mark.parametrize('failure', ['membership','assets','positive-debt','zero-debt'])
 def test_unresolved_adapter_read_failure_cannot_export_complete(tmp_path,monkeypatch,failure):
-    conn=connect(tmp_path/'adapter.sqlite');init_db(conn)
+    conn=connect('staging');init_db(conn)
     conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at) VALUES (1,'curation',?,?,18,1)",(address(1),address(90)))
     conn.execute('INSERT INTO tvl_strategies VALUES (1,?,?,?)',(address(1),address(9),'fixture'))
     conn.execute("INSERT INTO tvl_catalog_evidence VALUES (1,?,?,'unresolved','{}',1)",(address(9),'adapter:'+address(1)))
@@ -377,7 +429,7 @@ def test_unresolved_adapter_read_failure_cannot_export_complete(tmp_path,monkeyp
 
 @pytest.mark.parametrize('cycle', [False,True])
 def test_nested_valuation_without_a_known_leaf_stays_unavailable(tmp_path,monkeypatch,cycle):
-    conn=connect(tmp_path/'unknown.sqlite');init_db(conn)
+    conn=connect('staging');init_db(conn)
     for vault,asset in [(address(1),address(2)),(address(2),address(1) if cycle else address(90))]:
         conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at) VALUES (1,'v3',?,?,18,1)",(vault,asset))
     conn.commit()

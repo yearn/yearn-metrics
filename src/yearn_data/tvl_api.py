@@ -18,6 +18,7 @@ import time
 from urllib.parse import parse_qs, urlsplit
 
 from .tvl import account, decimal
+from .tvl_policy import VAULT_POLICIES, TARGET_CORRECTIONS, classify_vault
 from .storage import connect, database_reference, table_exists, DATABASE_ERRORS
 
 CHAINS = {1: 'Ethereum', 10: 'Optimism', 100: 'Gnosis', 137: 'Polygon', 250: 'Fantom',
@@ -38,6 +39,25 @@ def read_db(path):
 
 def key(row):
     return row['chain_id'], row['vault'].lower()
+
+
+def observation_selection(table):
+    """The canonical identity and quality order used by reads and consolidation."""
+    if table == 'tvl_snapshots':
+        return ('chain_id,vault,timestamp',
+                "CASE WHEN json_extract(data_json,'$.tvl_usd') IS NOT NULL THEN 2 "
+                "WHEN json_extract(data_json,'$.asset_units') IS NOT NULL THEN 1 ELSE 0 END")
+    if table == 'tvl_positions':
+        # Legacy targeted collections marked an edge ok even when its child was
+        # not collected and ownership could not be valued. Prefer complete dated
+        # evidence; a verified zero debt needs no ownership valuation.
+        return ('chain_id,parent,strategy,child,timestamp',
+                "CASE WHEN json_extract(data_json,'$.status')='ok' "
+                "AND json_extract(data_json,'$.debt_usd') IS NOT NULL "
+                "AND (json_extract(data_json,'$.owned_usd') IS NOT NULL "
+                "OR CAST(json_extract(data_json,'$.debt_usd') AS REAL)=0) THEN 2 "
+                "WHEN json_extract(data_json,'$.status')='ok' THEN 1 ELSE 0 END")
+    raise ValueError('unsupported observation table')
 
 
 def money(rows, field):
@@ -94,14 +114,16 @@ def publish_tvl(database, publication, *, current_bridge_policy='none'):
             raise ValueError('no finished TVL observations')
         if not conn.execute("SELECT 1 FROM tvl_snapshots s JOIN tvl_runs r ON r.id=s.run_id WHERE r.status IN ('complete','incomplete') AND r.completed_at IS NOT NULL LIMIT 1").fetchone():
             raise ValueError('no stored finished TVL observations')
-        catalog = [dict(r) for r in conn.execute('SELECT * FROM tvl_vaults ORDER BY chain_id,address')]
+        catalog = [classify_vault(r) for r in conn.execute('SELECT * FROM tvl_vaults ORDER BY chain_id,address')]
         # Allocator recognition uses positive report evidence, not a V3 display label.
         allocator_keys = []
         if table_exists(conn, 'strategy_reports'):
             allocator_keys = [list(r) for r in conn.execute(
                 "SELECT DISTINCT chain_id,lower(vault_address) FROM strategy_reports WHERE version='v3'")]
     context = {'runs': runs, 'catalog': catalog, 'allocatorKeys': sorted(allocator_keys),
-               'currentBridgePolicy': current_bridge_policy, 'selectionPolicy': 'known-value-then-newest-finished-common-close-6', 'bridgeMigrations': BRIDGE_MIGRATIONS, 'priceRejections': PRICE_REJECTIONS,
+               'deductInternalCuration': True,
+               'vaultPolicies': VAULT_POLICIES, 'targetCorrections': TARGET_CORRECTIONS,
+               'currentBridgePolicy': current_bridge_policy, 'selectionPolicy': 'known-value-then-newest-finished-common-close-8', 'bridgeMigrations': BRIDGE_MIGRATIONS, 'priceRejections': PRICE_REJECTIONS,
                'historicalBridgePolicy': 'dated-evidence-only', 'database': database_reference(database)}
     dataset_id = hashlib.sha256(encoded(context).encode()).hexdigest()
     root = Path(publication)
@@ -177,12 +199,7 @@ class TvlDataset:
         Successful later repairs supersede earlier values only at the same identity
         and timestamp. Positions remain dated and must match the selected block.
         """
-        dimensions = ('chain_id,vault,timestamp' if table == 'tvl_snapshots'
-                      else 'chain_id,parent,strategy,child,timestamp')
-        quality = ("CASE WHEN json_extract(data_json,'$.tvl_usd') IS NOT NULL THEN 2 "
-                   "WHEN json_extract(data_json,'$.asset_units') IS NOT NULL THEN 1 ELSE 0 END"
-                   if table == 'tvl_snapshots' else
-                   "CASE WHEN json_extract(data_json,'$.status')='ok' THEN 1 ELSE 0 END")
+        dimensions, quality = observation_selection(table)
         run_marks = ','.join('?' for _ in self.run_ids)
         date_marks = ','.join('?' for _ in timestamps)
         where = f'run_id IN ({run_marks}) AND timestamp IN ({date_marks})'
@@ -191,12 +208,15 @@ class TvlDataset:
             where += ' AND chain_id=?'
             args += (chain_id,)
         joins = ' AND '.join('s.'+field+'=w.'+field for field in dimensions.split(','))
+        # A table rewrite can change the order of rows sharing a close and chain.
+        # Use the full identity so API collections stay stable after compaction.
+        order = 's.timestamp,'+','.join('s.'+field for field in dimensions.split(',') if field != 'timestamp')
         sql = f'''WITH winners AS (
             SELECT {dimensions},MAX(({quality})*{self.base}+run_id) AS rank
             FROM {table} WHERE {where} GROUP BY {dimensions})
             SELECT s.run_id,s.data_json FROM {table} s JOIN winners w
-            ON {joins} AND s.run_id=w.rank%{self.base} ORDER BY s.timestamp,s.chain_id'''
-        records=conn.stream(sql,args) if hasattr(conn,'raw') else conn.execute(sql,args)
+            ON {joins} AND s.run_id=w.rank%{self.base} ORDER BY {order}'''
+        records=conn.stream(sql,args)
         for row in records:
             data = json.loads(row['data_json'])
             data['source_run_id'] = row['run_id']
@@ -241,12 +261,30 @@ class TvlDataset:
         for row in conn.execute(sql,args):
             yield self.validate_price(json.loads(row['data_json']))
 
-    @lru_cache(maxsize=8)
-    def frames(self, timestamps, chain_id=None, include_curation=False):
-        return tuple(self.iter_frames(timestamps, chain_id, include_curation))
+    def frames(self, timestamps, chain_id=None, include_curation=False, include_retired=True):
+        # Normalize positional/keyword calls and share accounting across chains.
+        frames = self._network_frames(tuple(timestamps), include_curation, include_retired)
+        if chain_id is None:
+            return frames
+        return tuple((timestamp,
+                      [r for r in rows if r['chain_id']==chain_id],
+                      [p for p in positions if p['chain_id']==chain_id or p.get('child_chain_id',p['chain_id'])==chain_id],
+                      diagnostics) for timestamp,rows,positions,diagnostics in frames)
 
-    def iter_frames(self, timestamps, chain_id=None, include_curation=False):
+    @lru_cache(maxsize=8)
+    def _network_frames(self, timestamps, include_curation, include_retired):
+        return tuple(self.iter_frames(timestamps, None, include_curation, include_retired))
+
+    def iter_frames(self, timestamps, chain_id=None, include_curation=False, include_retired=True):
         if not timestamps:
+            return
+        if chain_id is not None:
+            # Cross-chain ownership must be accounted with both endpoints, then
+            # attributed to the receiving chain. Filtering first loses the edge.
+            for timestamp,rows,positions,diagnostics in self.iter_frames(timestamps,None,include_curation,include_retired):
+                selected = [r for r in rows if r['chain_id']==chain_id]
+                related = [p for p in positions if p['chain_id']==chain_id or p.get('child_chain_id',p['chain_id'])==chain_id]
+                yield timestamp,selected,related,diagnostics
             return
         with closing(read_db(self.database)) as conn, conn:
             snapshots = groupby(self.selected_rows(conn, 'tvl_snapshots', timestamps, chain_id), lambda r: r['timestamp'])
@@ -260,49 +298,70 @@ class TvlDataset:
                 positions = list(edge_group[1]) if edge_group and edge_group[0] == timestamp else []
                 if edge_group and edge_group[0] == timestamp:
                     edge_group = next(edges, None)
-                by_key = {key(row): row for row in points}
-                for edge in positions:
-                    parent = by_key.get((edge['chain_id'], edge['parent'].lower()))
-                    if parent and edge.get('block_number') != parent.get('block_number'):
-                        edge.update(status='unavailable', reason='selected_block_mismatch')
-                excluded = set()
-                for point in points:
-                    migration = self.bridge_migrations.get(key(point))
-                    if migration is not None:
-                        # A dated migration takes precedence over today's active
-                        # flag, including when the latest close is pre-migration.
-                        if timestamp >= migration['migrationTimestamp']:
-                            excluded.add(key(point))
-                    elif timestamp == self.as_of() and self.manifest['currentBridgePolicy'] == 'retired-registry':
-                        meta = self.catalog.get(key(point), {})
-                        if point.get('bridge_target_chain') in {c for c,_ in self.catalog} and meta.get('active') == 0:
-                            excluded.add(key(point))
-                # Excluded parents must not also deduct their holdings from child
-                # TVL. Keep their dated raw positions available for diagnostics.
-                excluded_positions = [edge for edge in positions if (edge['chain_id'],edge['parent'].lower()) in excluded]
-                included_positions = [edge for edge in positions if (edge['chain_id'],edge['parent'].lower()) not in excluded]
-                account_points = [dict(point,bridge_target_chain=None) if key(point) in self.bridge_migrations else point for point in points]
-                rows, positions, diagnostics = account(account_points, included_positions, include_curation=include_curation)
-                positions.extend(dict(edge,overlap_usd='0',accounting_excluded=True,reason='bridge_parent_excluded') for edge in excluded_positions)
-                for row in rows:
-                    migration = self.bridge_migrations.get(key(row))
-                    if migration:
-                        row['bridge_target_chain'] = migration['targetChainId']
-                    if key(row) in excluded:
-                        row['bridge_excluded_usd'] = row['external_tvl_usd']
-                        if migration:
-                            row['bridge_migration_timestamp'] = migration['migrationTimestamp']
-                        if row['external_tvl_usd'] is not None:
-                            row['external_tvl_usd'] = '0'
-                with localcontext() as ctx:
-                    ctx.prec = 78
-                    bridge_amount = sum((decimal(row['bridge_excluded_usd']) for row in rows if row.get('bridge_excluded_usd') is not None),Decimal(0))
-                    diagnostics['known_bridge_excluded_usd'] = str(bridge_amount)
-                    diagnostics['known_external_tvl_usd'] = str(max(Decimal(0),decimal(diagnostics['known_external_tvl_usd'])-bridge_amount))
-                    if diagnostics['external_tvl_usd'] is not None:
-                        diagnostics['external_tvl_usd'] = str(max(Decimal(0),decimal(diagnostics['external_tvl_usd'])-bridge_amount))
-                diagnostics['position_count'] = len(positions)
+                rows, positions, diagnostics = self.account_frame(timestamp, points, positions, include_curation=include_curation)
+                # Retirement is a display filter, not an ownership boundary.
+                rows = [r for r in rows if include_retired or self.catalog.get(key(r),{}).get('active',1)]
                 yield timestamp, rows, positions, diagnostics
+
+    def account_frame(self, timestamp, points, positions, *, include_curation=False):
+        """Account one captured close without accessing storage."""
+        by_key = {key(row): row for row in points}
+        for edge in positions:
+            parent = by_key.get((edge['chain_id'], edge['parent'].lower()))
+            if parent and edge.get('block_number') != parent.get('block_number'):
+                edge.update(status='unavailable', reason='selected_block_mismatch')
+            if edge.get('child_chain_id') is not None and decimal(edge.get('debt_usd')) != 0:
+                child = by_key.get((edge['child_chain_id'],edge['child'].lower()))
+                if child and edge.get('child_block_number') != child.get('block_number'):
+                    edge.update(status='unavailable', reason='selected_child_block_mismatch')
+        excluded = set()
+        for point in points:
+            migration = self.bridge_migrations.get(key(point))
+            if migration is not None:
+                # A dated migration takes precedence over today's active
+                # flag, including when the latest close is pre-migration.
+                if timestamp >= migration['migrationTimestamp']:
+                    excluded.add(key(point))
+            elif timestamp == self.as_of() and self.manifest['currentBridgePolicy'] == 'retired-registry':
+                meta = self.catalog.get(key(point), {})
+                if point.get('bridge_target_chain') in {c for c,_ in self.catalog} and meta.get('active') == 0:
+                    excluded.add(key(point))
+        # Excluded parents must not also deduct their holdings from child
+        # TVL. Keep their dated raw positions available for diagnostics.
+        excluded_positions = [edge for edge in positions if (edge['chain_id'],edge['parent'].lower()) in excluded]
+        included_positions = [edge for edge in positions if (edge['chain_id'],edge['parent'].lower()) not in excluded]
+        account_points = [dict(point,bridge_target_chain=None) if key(point) in self.bridge_migrations else point for point in points]
+        rows, positions, diagnostics = account(account_points, included_positions,
+            include_curation=include_curation,
+            deduct_internal_curation=self.manifest.get('deductInternalCuration',False),
+            vault_policies=self.manifest.get('vaultPolicies',[]),
+            target_corrections=self.manifest.get('targetCorrections',[]))
+        positions.extend(dict(edge,overlap_usd='0',accounting_excluded=True,reason='bridge_parent_excluded') for edge in excluded_positions)
+        for row in rows:
+            migration = self.bridge_migrations.get(key(row))
+            if migration:
+                row['bridge_target_chain'] = migration['targetChainId']
+            if key(row) in excluded:
+                row['bridge_excluded_usd'] = row['external_tvl_usd']
+                if migration:
+                    row['bridge_migration_timestamp'] = migration['migrationTimestamp']
+                if row['external_tvl_usd'] is not None:
+                    row['external_tvl_usd'] = '0'
+        with localcontext() as ctx:
+            ctx.prec = 78
+            bridge_amount = sum((decimal(row['bridge_excluded_usd']) for row in rows if row.get('bridge_excluded_usd') is not None),Decimal(0))
+            diagnostics['known_bridge_excluded_usd'] = str(bridge_amount)
+            diagnostics['known_external_tvl_usd'] = str(max(Decimal(0),decimal(diagnostics['known_external_tvl_usd'])-bridge_amount))
+            if diagnostics['external_tvl_usd'] is not None:
+                diagnostics['external_tvl_usd'] = str(max(Decimal(0),decimal(diagnostics['external_tvl_usd'])-bridge_amount))
+        diagnostics['position_count'] = len(positions)
+        return rows, positions, diagnostics
+
+    def graph(self, chain_id=None, category=None, include_retired=True):
+        from .tvl_graph import build_graph
+        _, rows, positions, diagnostics = self.frames((self.as_of(),))[0]
+        return build_graph(self, rows, positions, diagnostics, chain_id=chain_id, category=category,
+                           include_retired=include_retired)
 
     def sampled_dates(self, interval, start, end):
         dates = [t for t in self.dates() if t <= self.as_of() and (start is None or t >= start) and (end is None or t <= end)]
@@ -499,7 +558,7 @@ class TvlDataset:
         by_parent = defaultdict(list)
         by_key = {key(r):r for r in rows}
         for edge in positions:
-            child = by_key.get((edge['chain_id'],edge['child'].lower()))
+            child = by_key.get((edge.get('child_chain_id',edge['chain_id']),edge['child'].lower()))
             by_parent[(edge['chain_id'],edge['parent'].lower())].append({
                 'address':edge['strategy'],'name':None,'debtUsd':float(decimal(edge['debt_usd'])) if edge.get('debt_usd') is not None else None,
                 'targetVaultAddress':child['vault'] if child else None,'targetVaultChainId':child['chain_id'] if child else None,
@@ -509,6 +568,7 @@ class TvlDataset:
                 'crossChainOverlap':summary['vaultBridgeExcluded'],'vaultCount':len(rows),
                 'vaults':[{'address':r['vault'],'chainId':r['chain_id'],'name':r.get('name'),'category':r.get('category',r['version']),
                            'vaultType':1 if key(r) in self.allocators else None,'tvlUsd':float(decimal(r['tvl_usd'])) if r['tvl_usd'] is not None else None,
+                           'countedTvlUsd':float(decimal(r['external_tvl_usd'])) if r.get('external_tvl_usd') is not None else None,
                            'isRetired':not self.catalog.get(key(r),{}).get('active',1),'isHidden':False,
                            'strategies':by_parent[key(r)]} for r in rows],
                 'crossChainVaults':[{'address':r['vault'],'chainId':r['chain_id'],'targetChainId':r['bridge_target_chain'],
@@ -520,7 +580,9 @@ class TvlDataset:
         timestamp, all_rows, positions, _ = self.frames((self.as_of(),), chain_id, True)[0]
         selected = [r for r in all_rows if self.catalog.get(key(r),{}).get('active',1) and
                     (r.get('category')=='curation' or key(r) in self.allocators)]
-        rows, edges, _ = account(selected, positions, include_curation=True)
+        rows, edges, _ = account(selected, positions, include_curation=True,
+                                 vault_policies=self.manifest.get('vaultPolicies', []),
+                                 target_corrections=self.manifest.get('targetCorrections', []))
         def family(row):
             return 'morpho_curated' if row.get('category')=='curation' else 'v3_allocator'
         def totals(rs):
@@ -545,48 +607,11 @@ class TvlDataset:
                 'potentialV2':{'grossTvlUsd':gross_v2,'knownPassThroughTvlUsd':passed,'incrementalTvlUsd':incremental,'vaultCount':len(v2),
                                'note':'Potential V2 product attribution remains separate from V3 and Morpho products'},'limitations':[], 'datasetId':self.id}
 
-    def comparison(self, reference_database):
-        """Only DefiLlama reference observations come from the external source."""
-        if reference_database is None:
-            raise ValueError('DefiLlama reference database is not configured')
-        summary = self.summary()
-        if summary['totalTvl'] is None:
-            raise ValueError('no available TVL total for comparison')
-        reference = {}
-        with closing(read_db(reference_database)) as conn:
-            for protocol in ('yearn-finance','yearn-curating'):
-                latest = conn.execute('SELECT timestamp FROM defillama_snapshots WHERE protocol=? ORDER BY id DESC LIMIT 1',(protocol,)).fetchone()
-                if latest is None:
-                    raise ValueError('no stored DefiLlama reference for '+protocol)
-                reference[protocol] = {row['chain'] or 'total':row['tvl_usd'] for row in conn.execute(
-                    'SELECT chain,tvl_usd FROM defillama_snapshots WHERE protocol=? AND timestamp=?',(protocol,latest[0]))}
-        dl_total = sum(reference[p]['total'] for p in reference)
-        by_chain = []
-        names = set(summary['tvlByChain']) | {c for rs in reference.values() for c in rs if c!='total'}
-        for name in sorted(names):
-            gross = summary['tvlByChain'].get(name,0)
-            ours = gross-summary['overlapByChain'].get(name,0)-summary['crossChainOverlapByChain'].get(name,0) if gross is not None else None
-            dl = sum(rs.get(name,0) for rs in reference.values())
-            by_chain.append({'chain':name,'ours':ours,'defillama':dl,'difference':ours-dl if ours is not None else None})
-        _, rows, _, _ = self.frames((self.as_of(),))[0]
-        categories = []
-        for label,protocol,curation in (('V1 + V2 + V3','yearn-finance',False),('Curation','yearn-curating',True)):
-            ours = money([r for r in rows if (r.get('category')=='curation')==curation],'external_tvl_usd')
-            dl = reference[protocol]['total']
-            categories.append({'category':label,'defillamaProtocol':protocol,'ours':ours,'defillama':dl,'difference':ours-dl if ours is not None else None})
-        return {'ourTotal':summary['totalTvl'],'defillamaTotal':dl_total,'difference':summary['totalTvl']-dl_total,
-                'differencePercent':(summary['totalTvl']/dl_total-1)*100 if dl_total else None,
-                'retiredTvl':summary['retiredVaultTvl'],'overlapDeducted':summary['overlapExcluded'],
-                'crossChainOverlap':summary['vaultBridgeExcluded'],'grossTvl':money(rows,'tvl_usd'),
-                'gapComponents':[],'retiredTvlByChain':{name:money([r for r in rows if CHAINS.get(r['chain_id'],f"Chain {r['chain_id']}")==name and not self.catalog.get(key(r),{}).get('active',1)],'tvl_usd') for name in summary['tvlByChain']},
-                'notes':[],'byChain':by_chain,'byCategory':categories,'datasetId':self.id}
-
-
 class TvlStore:
-    def __init__(self, database, publication, *, current_bridge_policy='none', refresh_seconds=30, comparison_database=None):
+    def __init__(self, database, publication, *, current_bridge_policy='none', refresh_seconds=30, auto_publish=True):
         self.database, self.root = database, Path(publication)
         self.policy, self.refresh_seconds = current_bridge_policy, refresh_seconds
-        self.comparison_database = comparison_database
+        self.auto_publish = auto_publish
         self.lock = threading.RLock()
         self.last_check = 0
         self.last_error = None
@@ -595,7 +620,10 @@ class TvlStore:
     def refresh(self):
         with self.lock:
             try:
-                publish_tvl(self.database, self.root, current_bridge_policy=self.policy)
+                if self.auto_publish:
+                    publish_tvl(self.database, self.root, current_bridge_policy=self.policy)
+                elif not (self.root/'current.json').exists():
+                    raise ValueError('published-only serving requires an existing TVL publication')
                 self.last_error = None
             except (OSError, *DATABASE_ERRORS, ValueError) as error:
                 self.last_error = str(error)
@@ -622,12 +650,14 @@ class TvlStore:
 def tvl_response(store, url):
     request = urlsplit(url)
     paths = {'/api/tvl','/api/tvl/','/api/tvl/history/runs/latest','/api/tvl/history/runs/latest/constant-price',
-             '/api/tvl/curation-products','/api/audit/tree','/api/comparison'}
+             '/api/tvl/curation-products','/api/tvl/graph','/api/audit/tree'}
     if request.path not in paths:
         return 404, {'error':'Not found'}
     try:
         query = parse_qs(request.query,keep_blank_values=True)
-        if set(query)-{'chainId','groupBy','mode','interval','from','to','datasetId','includeCurrent','format','top'} or any(len(v)!=1 for v in query.values()):
+        allowed = ({'chainId','category','includeRetired','datasetId'} if request.path=='/api/tvl/graph' else
+                   {'chainId','groupBy','mode','interval','from','to','datasetId','includeCurrent','format','top'})
+        if set(query)-allowed or any(len(v)!=1 for v in query.values()):
             raise ValueError('unsupported or repeated TVL filter')
         def value(name, default=None):
             return query.get(name,[default])[0]
@@ -652,18 +682,22 @@ def tvl_response(store, url):
             raise ValueError('unsupported TVL grouping, mode or interval')
         if value('includeCurrent') not in (None,'true','false'):
             raise ValueError('includeCurrent must be true or false')
+        if value('includeRetired') not in (None,'true','false'):
+            raise ValueError('includeRetired must be true or false')
+        if value('category') is not None and value('category') not in CATEGORIES:
+            raise ValueError('unsupported TVL category')
         dataset = store.get(value('datasetId'))
         if chain_id is not None and chain_id not in {c for c,_ in dataset.catalog}:
             raise ValueError('unsupported TVL chain')
-        if request.path.startswith('/api/tvl/history'):
+        if request.path == '/api/tvl/graph':
+            result = dataset.graph(chain_id,value('category'),value('includeRetired','true')=='true')
+        elif request.path.startswith('/api/tvl/history'):
             result = dataset.history(group,mode,interval,start,end,chain_id,request.path.endswith('/constant-price'))
             if response_format=='chart':result=chart_response(result,top)
         elif request.path.endswith('/curation-products'):
             result = dataset.curation(chain_id)
         elif request.path == '/api/audit/tree':
             result = dataset.audit(chain_id)
-        elif request.path == '/api/comparison':
-            result = dataset.comparison(store.comparison_database)
         else:
             result = dataset.summary(chain_id)
         return 200, result

@@ -1,11 +1,13 @@
-# One database for TVL, fees and earnings
+# Shared Postgres database
 
-Use `data/yearn.sqlite` for all three pipelines, or follow the
-[Postgres migration guide](postgres.md) to host the shared store on Neon.
-TVL owns `tvl_*` tables;
-fee/earnings tables keep their existing names, so selected analyses and consumers
-continue to work. The pipelines share the database file, not mutable catalogs or
-price caches.
+TVL, fee and earnings pipelines share Postgres, keeping their existing table
+names, source provenance and accounting boundaries. Select `neon` for the hosted
+database or `staging` for a separate local installation. Credentials stay in the
+environment; publication manifests contain only logical database names.
+
+## Storage boundary
+
+The pipelines share the Postgres database, not mutable catalogs or price caches.
 
 | Records | Tables |
 | --- | --- |
@@ -21,47 +23,13 @@ writes its own strategy mappings and coverage; TVL discovery does not change the
 fee/earnings catalog, pricing decisions or analysis outputs. Run IDs stay local to
 their respective run tables.
 
-## Combine existing databases
+## Retired migration commands
 
-Check available disk space before writing:
+SQLite file merging, SQLite-to-Postgres migration and legacy catalog import
+commands are retired. The historical migration is complete; do not rerun it or
+replace existing Postgres history. Archived source files and their restore
+receipts remain untouched. Use the corresponding historical Git revision if an
+archive must be inspected in an isolated recovery environment.
 
-```bash
-yearn-data merge-databases \
-  --fees-db /path/to/fees-and-earnings.sqlite \
-  --tvl-db /path/to/tvl-backfill.sqlite \
-  --out /path/to/yearn-shared.sqlite \
-  --check-only
-```
-
-Repeat without `--check-only` to create the shared file. The merge accepts the
-previous standalone TVL schema and the new namespaced schema. It preserves all
-stored history, including superseded repair runs, missing values, checkpoints
-and reserved run IDs. It does not recalculate or fetch historical values.
-
-The command creates a new database and keeps both inputs unchanged. It refuses an
-existing output or fee input that already contains TVL records, because unrelated
-run IDs cannot safely be combined. Disk planning includes the additional database,
-working overhead and a default **4 GiB reserve**. The reserve is checked throughout
-the copy. Inserts use small committed batches to limit journal growth.
-
-The file is published only after table counts, SQLite integrity, foreign-key
-references and unchanged inputs are checked. Interrupted merges remove their
-unfinished staging file. A process killed before cleanup can leave a `.partial`
-file; inspect that file before removing it or choosing another output.
-
-After validating existing consumers, point all jobs at the shared file. Keep the
-originals as rollback copies. A canonical `data/yearn.sqlite` symlink lets existing
-commands keep the same path; stop database users before switching that path.
-
-## Continue using the shared file
-
-```bash
-yearn-data --db data/yearn.sqlite tvl discover
-yearn-data --db data/yearn.sqlite tvl collect \
-  --from-timestamp 1791071999 --to-timestamp 1791071999
-yearn-data --db data/yearn.sqlite tvl export --out exports/tvl
-```
-
-Use the same `--db` path for fee/earnings commands and for the monthly TVL backfill.
-Legacy standalone TVL files should be merged before using the new table layout;
-discovering into a legacy file does not migrate its previous catalog or history.
+See [Postgres operations](postgres.md) for configuration, backup boundaries and
+isolated tests. New inventory comes from `yearn-data --db neon tvl discover`.

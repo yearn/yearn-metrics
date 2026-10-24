@@ -1,21 +1,18 @@
-"""Shared SQLite/Postgres storage entry points."""
+"""Postgres storage entry points."""
 
 from __future__ import annotations
 
 import json
 import os
-import sqlite3
-from pathlib import Path
 from typing import Any, Iterable
 import psycopg
 
 
-DEFAULT_DB_PATH = Path("data/yearn.sqlite")
-DATABASE_ERRORS = (sqlite3.Error, psycopg.Error)
+DEFAULT_DATABASE = "neon"
+DATABASE_ERRORS = (psycopg.Error,)
 
 
 SCHEMA = """
-PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS chains (
     chain_id INTEGER PRIMARY KEY,
@@ -272,51 +269,41 @@ CREATE TABLE IF NOT EXISTS analysis_outputs (
 """
 
 
+POSTGRES_ENV = {'neon': 'NEON_DB_URL', 'staging': 'STAGING_DB_URL'}
+
+
 def is_postgres(database) -> bool:
-    return str(database) == 'neon' or str(database).startswith(('postgresql://', 'postgres://'))
+    return str(database) in POSTGRES_ENV or str(database).startswith(('postgresql://', 'postgres://'))
 
 
 def database_reference(database) -> str:
     """Publication manifests contain a logical name, never database credentials."""
-    if is_postgres(database):
-        if str(database) != 'neon':
-            raise ValueError('use the logical database name neon for publications; URLs contain credentials')
-        return 'neon'
-    return str(Path(database).resolve())
+    if str(database) not in POSTGRES_ENV:
+        if is_postgres(database):
+            raise ValueError('use a logical database name for publications; URLs contain credentials')
+        raise ValueError('SQLite storage is retired; use neon or staging with a Postgres URL')
+    return str(database)
 
 
-def connect(path: str | Path = DEFAULT_DB_PATH, *, readonly=False, schema=None, direct=False):
-    if is_postgres(path):
-        from .postgres import Connection
-        url = os.environ.get('NEON_DB_URL') if str(path) == 'neon' else str(path)
-        if not url:
-            raise ValueError('NEON_DB_URL is required for --db neon')
-        return Connection(url, readonly=readonly,
-                          schema=schema or os.environ.get('YEARN_DATA_DB_SCHEMA', 'public'), direct=direct)
-    db_path = Path(path)
-    if readonly:
-        conn = sqlite3.connect(db_path.resolve().as_uri() + '?mode=ro', uri=True)
-        conn.row_factory = sqlite3.Row
-        conn.execute('PRAGMA query_only=ON')
-        return conn
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+def connect(database=DEFAULT_DATABASE, *, readonly=False, schema=None, direct=False):
+    from .postgres import Connection
+    if not is_postgres(database):
+        raise ValueError('SQLite storage is retired; use neon or staging with a Postgres URL')
+    env = POSTGRES_ENV.get(str(database))
+    url = os.environ.get(env) if env else str(database)
+    if not url:
+        raise ValueError(f'{env} is required for --db {database}')
+    return Connection(url, readonly=readonly,
+                      schema=schema or os.environ.get('YEARN_DATA_DB_SCHEMA', 'public'), direct=direct)
 
 
 def table_columns(conn, table):
-    if hasattr(conn, 'raw'):
-        return [row[0] for row in conn.execute('SELECT column_name FROM information_schema.columns '
-            'WHERE table_schema=current_schema() AND table_name=? ORDER BY ordinal_position', (table,))]
-    return [row['name'] for row in conn.execute(f'PRAGMA table_info("{table}")')]
+    return [row[0] for row in conn.execute('SELECT column_name FROM information_schema.columns '
+        'WHERE table_schema=current_schema() AND table_name=? ORDER BY ordinal_position', (table,))]
 
 
 def table_exists(conn, table):
-    if hasattr(conn, 'raw'):
-        return conn.execute('SELECT to_regclass(?)', (table,)).fetchone()[0] is not None
-    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone() is not None
+    return conn.execute('SELECT to_regclass(?)', (table,)).fetchone()[0] is not None
 
 
 def init_db(conn) -> None:
@@ -326,9 +313,8 @@ def init_db(conn) -> None:
     conn.executescript(COVERAGE_SCHEMA)
     from .tvl import SCHEMA as TVL_SCHEMA
     conn.executescript(TVL_SCHEMA)
-    if hasattr(conn, 'raw'):
-        from .postgres import create_indexes
-        create_indexes(conn)
+    from .postgres import create_indexes
+    create_indexes(conn)
     _ensure_column(conn, "vault_inventory_events", "action", "TEXT NOT NULL DEFAULT 'added'")
     conn.execute("""CREATE TABLE IF NOT EXISTS fee_daily_prices (
         chain_id INTEGER NOT NULL, asset TEXT NOT NULL, eod_timestamp INTEGER NOT NULL,

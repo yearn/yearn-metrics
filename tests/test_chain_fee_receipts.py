@@ -2,7 +2,7 @@
 import hashlib,json
 from pathlib import Path
 import pytest
-from test_canonical_fees import seed,db
+from test_canonical_fees import seed,db as db
 from yearn_data.fees import index_canonical_fees
 from yearn_data.fee_reconstruction import extract_fee_shares
 

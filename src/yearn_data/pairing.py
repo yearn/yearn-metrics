@@ -29,6 +29,10 @@ FEE_FIELDS = {
     'managementFeesUsd': 'management_fee_usd',
     'strategistFeesUsd': 'strategist_fee_usd',
     'totalRefundsUsd': 'total_refunds_usd',
+    'recoveryDistributionUsd': 'recovery_distribution_usd',
+    'stakerDistributionUsd': 'staker_distribution_usd',
+    'lockerBonusUsd': 'locker_bonus_usd',
+    'reportedTotalFeesUsd': 'reported_total_fees_usd',
 }
 EARNINGS_FIELDS = {
     'grossGainsUsd': 'gross_gain_usd', 'lossesUsd': 'loss_usd', 'netYieldUsd': 'net_yield_usd',
@@ -163,8 +167,20 @@ class PairingDataset:
         }
         self.id = hashlib.sha256(_json(self.context | {'vaultNames': vault_names}).encode()).hexdigest()
 
+    def view_rows(self, since, end, chains, vault_address):
+        def included(row):
+            return ((since is None or row['block_timestamp'] >= since) and row['block_timestamp'] < end
+                    and (not chains or row['chain_id'] in chains)
+                    and (vault_address is None or row['vault_address'].lower() == vault_address))
+        fees = [row for row in self.fees if included(row)]
+        earnings = [row for row in self.earnings if included(row)]
+
+        return fees, earnings
+
     @lru_cache(maxsize=128)
-    def view(self, name, since=None, until=None, chains=(), interval='monthly', vault_address=None):
+    def view(self, name, since=None, until=None, chains=(), interval='monthly', vault_address=None, scope='contract'):
+        if scope not in ('contract', 'product'):
+            raise ValueError('scope must be contract or product')
         if name not in ('summary', 'history', 'vaults'):
             raise ValueError('unsupported pairing view')
         if any(chain not in self.chains for chain in chains):
@@ -186,12 +202,18 @@ class PairingDataset:
         if since is not None and since >= self.cutoff:
             raise ValueError('requested range starts outside this dataset')
         end = min(self.cutoff, until if until is not None else self.cutoff)
-        def included(row):
-            return ((since is None or row['block_timestamp'] >= since) and row['block_timestamp'] < end
-                    and (not chains or row['chain_id'] in chains)
-                    and (vault_address is None or row['vault_address'].lower() == vault_address))
-        fees = [row for row in self.fees if included(row)]
-        earnings = [row for row in self.earnings if included(row)]
+        from .fee_products import product_for, group_rows
+        product = product_for(chains[0], vault_address) if scope == 'product' and vault_address else None
+        if product:
+            fees, earnings = [], []
+            for member in product['memberAddresses']:
+                member_fees, member_earnings = self.view_rows(since, end, chains, member)
+                fees.extend(member_fees)
+                earnings.extend(member_earnings)
+        else:
+            fees, earnings = self.view_rows(since, end, chains, vault_address)
+        if scope == 'product':
+            fees, earnings = group_rows(fees, earnings)
 
         def totals(fee_rows, report_rows):
             pnl = _earnings(report_rows)
@@ -233,11 +255,16 @@ class PairingDataset:
             for (chain_id, address), (fee_rows, report_rows) in sorted(buckets.items()):
                 family = fee_rows[0]['contract_family'] if fee_rows else (
                     FAMILIES[0] if report_rows[0]['version'] == 'v2' else FAMILIES[1])
-                vaults.append({'chainId': chain_id, 'address': address,
-                               'name': self.vault_names.get(f'{chain_id}:{address}'), 'contractFamily': family}
+                product = product_for(chain_id, address) if scope == 'product' else None
+                metadata = ({'productId': product['id'], 'memberAddresses': list(product['memberAddresses']),
+                             'earningsAddress': product['earningsAddress']} if product else {})
+                if product:
+                    family = FAMILIES[1]  # The product is represented by its allocator, not by its staking contract.
+                vaults.append(metadata | {'chainId': chain_id, 'address': address,
+                               'name': product['name'] if product else self.vault_names.get(f'{chain_id}:{address}'), 'contractFamily': family}
                               | totals(fee_rows, report_rows))
             result = {'count': len(vaults), 'vaults': vaults}
-        return result | {'datasetId': self.id}
+        return result | {'datasetId': self.id, 'aggregationScope': scope}
 
 
 def select_pairing(database, earnings_run_id, fees_run_id, publication):
@@ -290,7 +317,7 @@ def pairing_response(store, url):
         return 404, {'error': 'Not found'}
     try:
         query = parse_qs(request.query, keep_blank_values=True)
-        if set(query) - {'since', 'until', 'chainId', 'interval', 'datasetId', 'vaultAddress'}:
+        if set(query) - {'since', 'until', 'chainId', 'interval', 'datasetId', 'vaultAddress', 'scope'}:
             raise ValueError('unsupported filter')
         if any(len(values) != 1 for values in query.values()):
             raise ValueError('filters must appear only once')
@@ -311,25 +338,36 @@ def pairing_response(store, url):
         chains = tuple(sorted({int(chain) for chain in raw_chains.split(',')})) if raw_chains else ()
         dataset = store.get(value('datasetId'))
         return 200, dataset.view(paths[request.path], timestamp('since'), timestamp('until'), chains,
-                                 value('interval') or 'monthly', value('vaultAddress'))
+                                 value('interval') or 'monthly', value('vaultAddress'), value('scope') or 'contract')
     except ValueError as error:
         return 400, {'error': str(error)}
 
 
 def serve_pairing(publication, *, host='127.0.0.1', port=3490, cors_origin=None,
-                  tvl_publication=None, current_bridge_policy='retired-registry', comparison_database=None):
+                  tvl_publication=None, current_bridge_policy='retired-registry',
+                  published_tvl_only=False, analytics=False):
+    if analytics and current_bridge_policy != 'retired-registry':
+        raise ValueError('analytics bridge policy mismatch: prepared analytics require retired-registry')
     store = PairingStore(publication)
     dataset = store.get()  # Fail at startup if selection is missing or incompatible.
     tvl_store = None
     if tvl_publication is not None:
         from .tvl_api import TvlStore, tvl_response
         tvl_store = TvlStore(dataset.database, tvl_publication, current_bridge_policy=current_bridge_policy,
-                             comparison_database=comparison_database)
+                             auto_publish=not published_tvl_only)
+
+    analytics_store = None
+    if analytics:
+        from .analytics import AnalyticsStore, analytics_response
+        analytics_store = AnalyticsStore(dataset.database)
+        analytics_store.get()  # Require a validated prepared publication before cutover.
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             try:
-                if tvl_store is not None and (self.path.startswith('/api/tvl') or self.path.startswith('/api/audit/tree') or self.path.split('?')[0]=='/api/comparison'):
+                if analytics_store is not None and self.path.split('?')[0] in ('/api/analytics/publication','/api/fees/stack','/api/profitability','/api/comparison','/api/comparison/defillama-comparable'):
+                    status, payload = analytics_response(analytics_store, self.path)
+                elif tvl_store is not None and (self.path.startswith('/api/tvl') or self.path.startswith('/api/audit/tree')):
                     status, payload = tvl_response(tvl_store, self.path)
                 else:
                     status, payload = pairing_response(store, self.path)

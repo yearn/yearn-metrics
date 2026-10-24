@@ -9,7 +9,7 @@ Use the same database and explicit closed UTC cutoff for both analyses. Disable 
 Record the run IDs printed by the two analyses, then select them explicitly:
 
 ```bash
-yearn-data --db data/yearn.sqlite select-pairing \
+yearn-data --db neon select-pairing \
   --earnings-run-id EARNINGS_RUN_ID --fees-run-id FEES_RUN_ID \
   --out data/powerglove
 ```
@@ -21,7 +21,7 @@ For the verified October 5, 2026 snapshot, the selected runs are earnings **13**
 The local selection command is:
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m yearn_data.cli --db data/yearn.sqlite \
+PYTHONPATH=src .venv/bin/python -m yearn_data.cli --db neon \
   select-pairing --earnings-run-id 13 --fees-run-id 12 --out data/powerglove
 ```
 
@@ -107,12 +107,12 @@ Review `/stats?tab=fees`. The fee cards and monthly/cumulative charts use the se
 For a revaluation using the same October 5 cutoff, these commands create new completed runs without collecting history or fetching prices. Substitute their newly printed IDs in the exports and selection command; do not assume they remain 13 and 12:
 
 ```bash
-yearn-data --db data/yearn.sqlite analyze lifetime-yield \
+yearn-data --db neon analyze lifetime-yield \
   --price-source yearn-prices --no-provider-fallback --before-timestamp 1791158400
-yearn-data --db data/yearn.sqlite analyze fee-usd --before-timestamp 1791158400
-yearn-data --db data/yearn.sqlite export lifetime-yield --run-id EARNINGS_RUN_ID \
+yearn-data --db neon analyze fee-usd --before-timestamp 1791158400
+yearn-data --db neon export lifetime-yield --run-id EARNINGS_RUN_ID \
   --out artifacts/pairing-refresh/lifetime-yield/EARNINGS_RUN_ID
-yearn-data --db data/yearn.sqlite export fee-usd --run-id FEES_RUN_ID \
+yearn-data --db neon export fee-usd --run-id FEES_RUN_ID \
   --out artifacts/pairing-refresh/fee-usd/FEES_RUN_ID
 ```
 

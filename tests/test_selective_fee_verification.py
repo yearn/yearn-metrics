@@ -24,7 +24,7 @@ def evidence():
 
 @pytest.fixture
 def db(tmp_path):
-    c=connect(tmp_path/'test.sqlite');init_db(c)
+    c=connect('staging');init_db(c)
     yield c
     c.close()
 
@@ -88,7 +88,7 @@ def test_verifier_enforces_budget_and_flag_requirements(db,tmp_path):
     with pytest.raises(ValueError,match='positive'):
         index_canonical_fees(db,verify_selective=True,reconstruct_v2=True,trace_limit=0)
     with pytest.raises(ValueError,match='requires --verify-selective'):
-        main(['--db',str(tmp_path/'cli.sqlite'),'index-fees','--canonical','--trace-limit','1'])
+        main(['--db','staging','index-fees','--canonical','--trace-limit','1'])
 
 
 def test_invalid_cached_trace_is_refetched_within_budget(db):

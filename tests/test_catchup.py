@@ -27,7 +27,7 @@ def seed(conn, address=VAULT, management='yearn'):
 
 @pytest.fixture
 def db(tmp_path):
-    conn = connect(tmp_path/'catchup.sqlite')
+    conn = connect('staging')
     init_db(conn)
     seed(conn)
     yield conn
@@ -166,7 +166,7 @@ def test_cli_catchup_only_calls_acquisition(tmp_path, monkeypatch, capsys):
         return dict(status='complete', pin=dict(finality='confirmations:1000'))
     monkeypatch.setattr(catchup, 'catch_up', acquire)
     monkeypatch.setattr(cli, 'price_unpriced_reports', lambda *args, **kwargs: pytest.fail('unexpected pricing'))
-    assert cli.main(['--db', str(tmp_path/'test.sqlite'), 'catch-up', '--chain', 'kat',
+    assert cli.main(['--db', 'staging', 'catch-up', '--chain', 'kat',
         '--from-block', '1', '--to-block', '2', '--confirmations', '1000', '--discover']) == 0
     assert captured == dict(chain='kat', first=1, last=2, source='auto', confirmations=1000,
                             chunk_size=50000, discover=True, experimental=False)

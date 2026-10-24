@@ -6,7 +6,7 @@ from yearn_data.storage import connect, init_db
 
 @pytest.fixture
 def db(tmp_path):
-    conn = connect(tmp_path / "coverage.sqlite")
+    conn = connect('staging')
     init_db(conn)
     yield conn
     conn.close()
@@ -76,3 +76,13 @@ def test_missing_metadata_can_be_enriched_but_financial_conflicts_cannot(db):
     with pytest.raises(ValueError, match='conflicting'):
         with db:
             insert_checked(db, 'events_raw', {**values, 'decoded_json':'{"address":"0xab","gain":2}'}, ('chain_id','tx_hash','log_index'))
+
+
+@pytest.mark.parametrize('committed_table', ['tvl_history_coverage','history_coverage'])
+def test_tvl_and_fee_scan_coverage_do_not_certify_each_other(db,committed_table):
+    scope=Scope(1,'0x'+'11'*20,'inventory:tvl-curation')
+    source={'table':committed_table} if committed_table=='tvl_history_coverage' else {}
+    other={} if source else {'table':'tvl_history_coverage'}
+    commit_range(db,scope,0,10,source='rpc',end_hash='abc',run_id=None,write=lambda _:0,**source)
+    assert list(missing_ranges(db,scope,0,10,20,**source))==[]
+    assert list(missing_ranges(db,scope,0,10,20,**other))==[(0,10)]

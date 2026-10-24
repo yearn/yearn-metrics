@@ -14,7 +14,7 @@ def addr(n):
 
 @pytest.fixture
 def db(tmp_path):
-    conn=connect(tmp_path/'catalog.sqlite')
+    conn=connect('staging')
     init_db(conn)
     yield conn
     conn.close()
@@ -373,8 +373,6 @@ def test_unified_discovery_runs_all_sources_and_retains_summary(db,monkeypatch):
         with conn:store_candidate(conn,1,addr(100),'v2','v2','kong',metadata={'asset':addr(90),'asset_decimals':6},status='ok')
         return {'source':'kong','status':'complete','discovered':1,'enriched':1,'failures':[]}
     monkeypatch.setattr('yearn_data.tvl_sources.refresh_kong_catalog',kong)
-    def forbidden(*args):raise AssertionError('old service must not be read')
-    monkeypatch.setattr('yearn_data.tvl_sources.import_service_catalog',forbidden)
     result=discover_catalog(db,chain_ids=[1],reader_factory=FactoryReader)
     assert result['status']=='complete' and result['catalog_vaults']==30
     assert [r['source'] for r in result['sources']]==['kong','v1-registry','curation-discovery','curation-relations']
@@ -412,7 +410,7 @@ def test_cli_discovery_returns_nonzero_for_partial_source_results(tmp_path,monke
         args_seen.update(kwargs)
         return {'status':'incomplete','run_id':1,'sources':[]}
     monkeypatch.setattr('yearn_data.tvl_discovery.discover_catalog',discover)
-    code=main(['--db',str(tmp_path/'cli.sqlite'),'tvl','discover','--sources','v1',
+    code=main(['--db','staging','tvl','discover','--sources','v1',
                '--chain-ids','1','--from-block','100','--to-block','200','--chunk-size','10'])
     assert code==2
     assert args_seen['sources']==['v1'] and args_seen['chain_ids']==[1]
@@ -437,7 +435,15 @@ def test_kong_refresh_paginates_selected_chain_and_preserves_morpho_family(db,mo
                        for n in (range(1000,1100) if variables['skip']==0 else [1100])]
         return response
     monkeypatch.setattr('yearn_data.tvl_sources.requests.post',request)
-    summary=refresh_kong_catalog(db,chain_ids=[8453],with_summary=True)
+    class TypedConnection:
+        def __getattr__(self,name):return getattr(db,name)
+        def __enter__(self):db.__enter__();return self
+        def __exit__(self,*args):return db.__exit__(*args)
+        def execute(self,sql,params=()):
+            if 'INSERT INTO tvl_vaults' in sql:
+                assert type(params[-2]) is int  # PostgreSQL active is BIGINT.
+            return db.execute(sql,params)
+    summary=refresh_kong_catalog(TypedConnection(),chain_ids=[8453],with_summary=True)
     assert summary['status']=='complete' and summary['discovered']==101
     assert [v['skip'] for v in calls]==[0,100]
     assert db.execute('SELECT COUNT(*) FROM tvl_vaults').fetchone()[0]==101
@@ -495,8 +501,6 @@ def test_fresh_catalog_collect_and_export_without_migration(db,monkeypatch,tmp_p
     def request(query,variables):
         collection='vaultV2s' if 'vaultV2s(' in query else 'vaults'
         return {collection:{'items':[morpho_row(1 if collection=='vaultV2s' else 2)]}}
-    def forbidden(*args):raise AssertionError('old TVL service access forbidden')
-    monkeypatch.setattr('yearn_data.tvl_sources.import_service_catalog',forbidden)
     first=discover_catalog(db,chain_ids=[1],reader_factory=AdapterReader,request=request,chunk_size=10)
     second=discover_catalog(db,chain_ids=[1],reader_factory=AdapterReader,request=request,chunk_size=10)
     assert first['status']==second['status']=='complete'
@@ -516,3 +520,48 @@ def test_fresh_catalog_collect_and_export_without_migration(db,monkeypatch,tmp_p
     assert data['history'][0]['status']=='complete'
     assert float(data['history'][0]['external_tvl_usd'])==160
     assert any(p['strategy']==addr(9).lower() and float(p['overlap_usd'])==40 for p in data['positions'])
+
+
+def test_turtle_predeposits_cannot_be_reclassified_as_curation(db,monkeypatch):
+    from yearn_data.tvl_discovery import store_candidate,discover_curation,CURATION_REGISTRY
+    from yearn_data.tvl_policy import VAULT_POLICIES
+    turtles={p['address'].lower() for p in VAULT_POLICIES}
+    assert not turtles & {v['address'].lower() for v in CURATION_REGISTRY['extra_vaults']}
+    for p in VAULT_POLICIES:
+        # Simulate the legacy import, then an omitted-vault discovery refresh.
+        db.execute("INSERT INTO tvl_vaults(chain_id,address,version,tvl_category,updated_at) VALUES (1,?,'erc4626','curation',1)",(p['address'],))
+    monkeypatch.setattr('yearn_data.tvl_discovery.CURATION_REGISTRY',{'owners':[],'factories':[],'extra_vaults':[]})
+    discover_curation(db,chain_ids=[1])
+    for p in VAULT_POLICIES:
+        # A stale upstream category cannot undo the explicit correction.
+        store_candidate(db,1,p['address'],'erc4626','curation','legacy-extra')
+    assert {tuple(r) for r in db.execute('SELECT version,tvl_category,protocol FROM tvl_vaults')}=={('v3','v3',None)}
+
+
+def test_hyperevm_factory_discovery_retains_unpriced_ousd_candidates(db,monkeypatch):
+    from yearn_data.tvl_discovery import CURATION_REGISTRY,discover_curation
+    factories=[f for f in CURATION_REGISTRY['factories'] if f['chain_id']==999]
+    assert {f['family'] for f in factories}=={'morpho-v1','morpho-v2'}
+    # Real factory configuration must allow chain 999 independently of pricing support.
+    registry={'owners':[{'address':addr(50),'chain_ids':None}],
+              'factories':[dict(f,from_block=100) for f in factories],'extra_vaults':[]}
+    monkeypatch.setattr('yearn_data.tvl_discovery.CURATION_REGISTRY',registry)
+    def empty(query,variables):
+        return {('vaultV2s' if 'vaultV2s' in query else 'vaults'):{'items':[]}}
+    result=discover_curation(db,chain_ids=[999],reader_factory=FactoryReader,request=empty,chunk_size=10)
+    assert result['status']=='complete'
+    assert {tuple(r) for r in db.execute('SELECT chain_id,version,tvl_category FROM tvl_vaults')}=={
+        (999,'morpho-v1','curation'),(999,'morpho-v2','curation')}
+
+
+def test_corrected_registry_target_does_not_reactivate_stored_candidate(monkeypatch):
+    from yearn_data import tvl_sources
+    monkeypatch.setattr(tvl_sources,'REGISTRY',{'targets':[{'chainId':1,'strategyAddress':'strategy','targetVaultAddress':'correct'}]})
+    class Connection:
+        def execute(self,query):
+            return [dict(chain_id=1,strategy='strategy',child='old',source='service-registry'),
+                    dict(chain_id=1,strategy='strategy',child='correct',source='service-registry'),
+                    dict(chain_id=1,strategy='other',child='retained',source='onchain')]
+    result=tvl_sources.defaultdict_targets(Connection())
+    assert result[(1,'strategy')]==[('correct','service-registry')]
+    assert result[(1,'other')]==[('retained','onchain')]

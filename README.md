@@ -41,17 +41,43 @@ ETHERSCAN_API_KEY=
 
 `ETHERSCAN_API_KEY` is optional for most indexing runs, but useful for V2 source/ABI review workflows.
 
+## Development checks
+
+Install the development dependencies with `python -m pip install -e '.[dev]'`,
+then run the same lint command as CI from the repository root:
+
+```bash
+python -m ruff check .
+```
+
+Ruff is pinned in `pyproject.toml`. The enabled `E9` and `F` rules check syntax,
+undefined names, unused imports and variables, and other Python correctness
+errors. They preserve the existing formatting style. The independent `lint`
+CI job needs no database or credentials. Both CI jobs use `uv sync --locked --extra dev`
+to validate and install the committed lockfile before running checks. Lint and
+tests use the interpreter pinned in `.python-version`; tests also run on the
+Python 3.10 minimum declared in `pyproject.toml`. uv uses the interpreter supplied
+by CI, with managed interpreter downloads disabled. See the [Postgres test guide](docs/postgres.md#tests)
+to run the test suite.
+
+Fixtures defined in `tests/conftest.py` are available automatically; request them
+as test arguments without importing them. Fixtures defined in other test modules
+use explicit aliases, such as `from test_canonical_fees import db as db`, so Ruff
+recognizes their intentional use by pytest. Keep those imports while the tests
+use their fixtures. Ruff does not detect every unused function; disconnected test
+helpers still need review when their callers or monkeypatches are removed.
+
 ## Useful Options
 
 ```bash
-yearn-data --db data/yearn.sqlite discover --chains eth arb kat
+yearn-data --db neon discover --chains eth arb kat
 yearn-data index-events --to-block 25400000 --chunk-size 5000
 # Requires YEARN_PRICE_PROD_KEY in .env; use --price-source defillama without it.
 yearn-data run lifetime-yield
 yearn-data run vault-volume
 ```
 
-The database stores raw event rows, normalized strategy reports, prices, resumable cursors, and analysis outputs so later research jobs can reuse the same indexed data. SQLite is the default; see the [Postgres operator guide](docs/postgres.md) for Neon setup and migration of the shared TVL and fee/earnings history.
+The database stores raw event rows, normalized strategy reports, prices, resumable cursors, and analysis outputs so later research jobs can reuse the same indexed data. Postgres is the only supported database, and Neon is the default logical selection. See the [Postgres operator guide](docs/postgres.md) for hosted configuration and isolated local testing.
 
 ## Lifetime Yield Outputs
 
@@ -61,7 +87,7 @@ For selecting completed results and serving the Powerglove fee/earnings views, s
 
 The `lifetime-yield` aggregate columns `gross_gain_usd`, `loss_usd`, and `net_yield_usd` are economic totals adjusted for known Yearn public incident disclosures where vault reports emitted paper losses or compensating phantom profits. The raw report-time accounting values remain available as `raw_gross_gain_usd`, `raw_loss_usd`, and `raw_net_yield_usd`.
 
-Rows changed by an incident adjustment are marked in `reports.csv` with `is_adjusted`, `incident_id`, `incident_classification`, `incident_description`, and `incident_disclosure_url`. Raw indexed `strategy_reports` rows in SQLite are not modified.
+Rows changed by an incident adjustment are marked in `reports.csv` with `is_adjusted`, `incident_id`, `incident_classification`, `incident_description`, and `incident_disclosure_url`. Raw indexed `strategy_reports` rows in Postgres are not modified.
 
 ### Redis Headline
 
@@ -91,7 +117,7 @@ yearn-data price-volume --source defillama
 yearn-data price --source defillama --no-onchain-fallbacks
 ```
 
-Yearn Prices is the default earnings pricing source, with optional DefiLlama fallback; see [historical earnings pricing](docs/earnings-pricing.md). Volume and legacy fee analyses retain their DefiLlama policy. When DefiLlama cannot price a token directly, its pricing path can apply local deterministic fallbacks for canonical stablecoins, canonical wrapped/native equivalents, selected Curve/CRV derivative tokens, exchange-rate wrappers, and Aave aTokens. Use `--source defillama --no-onchain-fallbacks` to record only direct DefiLlama results. All source/status rows are stored in SQLite.
+Yearn Prices is the default earnings pricing source, with optional DefiLlama fallback; see [historical earnings pricing](docs/earnings-pricing.md). Volume and legacy fee analyses retain their DefiLlama policy. When DefiLlama cannot price a token directly, its pricing path can apply local deterministic fallbacks for canonical stablecoins, canonical wrapped/native equivalents, selected Curve/CRV derivative tokens, exchange-rate wrappers, and Aave aTokens. Use `--source defillama --no-onchain-fallbacks` to record only direct DefiLlama results. All source/status rows are stored in Postgres.
 
 ## Backfill Efficiency
 
@@ -115,8 +141,7 @@ vaults, and export nested capital positions with overlap deductions. Start from 
 `tvl export` for CSV/JSON outputs. See [Historical TVL and nested positions](docs/tvl-history.md)
 for the accounting rules, mapping, and coverage boundaries.
 
-Use one shared SQLite file with separate TVL and fee/earnings tables. See
-[Shared database](docs/shared-database.md) to combine existing databases with a
-disk-space check and preserved source copies.
+Use one Postgres database with separate TVL and fee/earnings tables. See
+[Shared database](docs/shared-database.md) for the storage boundary.
 
 Serve the accumulated observations to Powerglove with the [TVL pairing API](docs/powerglove-tvl-api.md).

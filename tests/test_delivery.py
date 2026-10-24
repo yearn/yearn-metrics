@@ -8,7 +8,7 @@ from yearn_data.analysis import (create_analysis_run, complete_analysis_run,
                                  run_lifetime_yield, write_output)
 from yearn_data.cli import main
 from yearn_data.exports import export_analysis
-from test_fee_valuation import db, seed, DAY, CUTOFF, ASSET, OTHER, outputs
+from test_fee_valuation import db as db, seed, DAY, CUTOFF, ASSET, OTHER, outputs
 
 
 def test_closed_day_earnings_include_retired_history_and_require_selected_prices(db):
@@ -49,7 +49,7 @@ def test_explicit_export_pins_csv_and_context_to_same_completed_run(db, tmp_path
     write_output(db, second, 'reports', {'amount':'2'})
     complete_analysis_run(db, second)
     out = tmp_path/'first'
-    path = db.execute('PRAGMA database_list').fetchone()[2]
+    path = 'staging'
     assert main(['--db',path,'export','lifetime-yield','--run-id',str(first),'--out',str(out)]) == 0
     context = json.loads((out/'context.json').read_text())
     assert context['id'] == first and context['name'] == 'lifetime-yield'

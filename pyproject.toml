@@ -18,6 +18,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
+    "ruff==0.17.2",
 ]
 
 [project.scripts]
@@ -32,3 +33,11 @@ yearn_data = ["inventories/*.json"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+required-version = "==0.17.2"
+
+[tool.ruff.lint]
+# Correctness and unused-code checks; preserve the existing formatting style.
+select = ["E9", "F"]

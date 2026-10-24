@@ -408,9 +408,9 @@ def run_vault_fees(conn) -> int:
         {_selected_price_join("r")}
         WHERE r.version='v3'
           AND (
-            CAST(COALESCE(r.protocol_fees_raw, '0') AS INTEGER) > 0
-            OR CAST(COALESCE(r.total_fees_raw, '0') AS INTEGER) > 0
-            OR CAST(COALESCE(r.total_refunds_raw, '0') AS INTEGER) > 0
+            CAST(COALESCE(r.protocol_fees_raw, '0') AS NUMERIC) > 0
+            OR CAST(COALESCE(r.total_fees_raw, '0') AS NUMERIC) > 0
+            OR CAST(COALESCE(r.total_refunds_raw, '0') AS NUMERIC) > 0
           )
         ORDER BY r.chain_id, r.block_number, r.log_index
         """
@@ -469,7 +469,7 @@ def run_vault_fees(conn) -> int:
           ON v.chain_id = fe.chain_id AND v.address = fe.vault_address
         {_selected_price_join("fe")}
         WHERE fe.version='v2'
-          AND CAST(fe.fee_raw AS INTEGER) > 0
+          AND CAST(fe.fee_raw AS NUMERIC) > 0
         ORDER BY fe.chain_id, fe.block_number, fe.log_index
         """
     ).fetchall()

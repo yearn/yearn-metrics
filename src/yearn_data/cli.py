@@ -23,7 +23,7 @@ from .pricing import (
     price_unpriced_volume,
     validate_report_pricing_policy,
 )
-from .storage import DEFAULT_DB_PATH, connect, init_db, seed_chains
+from .storage import DEFAULT_DATABASE, connect, init_db, seed_chains
 
 
 def progress(message: str) -> None:
@@ -93,28 +93,21 @@ def open_db(path: str | Path):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="yearn-data")
-    parser.add_argument("--db", default=str(DEFAULT_DB_PATH), help="SQLite path, or neon to use NEON_DB_URL")
+    parser.add_argument("--db", help="Postgres: neon or staging; defaults to YEARN_DATA_DB or neon")
     parser.add_argument("--env", action="append", default=[], help="Extra .env file to load before defaults")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init-db")
 
-    postgres_p = sub.add_parser('migrate-postgres', help='Stream the shared SQLite history into an empty Neon database')
-    postgres_p.add_argument('--source', required=True, type=Path)
-    postgres_p.add_argument('--check-only', action='store_true')
-    postgres_p.add_argument('--receipt', type=Path, help='Write a credential-free migration receipt')
-
-    merge_p = sub.add_parser("merge-databases", help="Combine fee/earnings and TVL in a new shared database")
-    merge_p.add_argument("--fees-db", required=True)
-    merge_p.add_argument("--tvl-db", required=True)
-    merge_p.add_argument("--out", required=True)
-    merge_p.add_argument("--check-only", action="store_true", help="Report disk needs and table mapping without writing")
-    merge_p.add_argument("--reserve-gib", type=float, default=4)
+    canonical_p = sub.add_parser('consolidate-history', help='Keep one canonical history, verifying every historical key')
+    canonical_p.add_argument('--apply', action='store_true', help='Apply atomically; the default only reports the plan')
+    canonical_p.add_argument('--receipt', type=Path, help='Write key/value preservation counts and selected revision')
 
     tvl_p = sub.add_parser("tvl", help="Historical vault TVL and nested positions")
     tvl_sub = tvl_p.add_subparsers(dest="tvl_command", required=True)
     tvl_prepare=tvl_sub.add_parser('prepare-history',help='Prepare immutable TVL chart rows for fast reads')
     tvl_prepare.add_argument('--publication',required=True,type=Path)
+    tvl_prepare.add_argument('--previous-dataset-id',help='Copy this prepared dataset and recompute only newly rejected quote dates')
     tvl_prepare.add_argument('--current-bridge-policy',choices=['none','retired-registry'],default='retired-registry')
     tvl_discover = tvl_sub.add_parser("discover", help="Create or refresh the TVL catalog independently")
     tvl_discover.add_argument("--sources", nargs="+", choices=["kong", "v1", "curation"], help="Default: all sources")
@@ -122,8 +115,6 @@ def build_parser() -> argparse.ArgumentParser:
     tvl_discover.add_argument("--from-block", type=int, help="Optional lower bound for factory and adapter scans")
     tvl_discover.add_argument("--to-block", type=int, help="Optional finalized upper bound for historical scans")
     tvl_discover.add_argument("--chunk-size", type=int, default=50_000)
-    tvl_import = tvl_sub.add_parser("import-catalog", help="Read the TVL service catalog once")
-    tvl_import.add_argument("--service-db", required=True)
     tvl_sub.add_parser("refresh-kong", help="Refresh paginated V2/V3 vault and strategy inventory")
     tvl_collect = tvl_sub.add_parser("collect", help="Store archive-state TVL at explicit timestamps")
     tvl_collect.add_argument("--from-timestamp", required=True, type=int)
@@ -145,14 +136,29 @@ def build_parser() -> argparse.ArgumentParser:
     pairing_p.add_argument("--fees-run-id", type=int, required=True)
     pairing_p.add_argument("--out", type=Path, default=Path("data/powerglove"))
 
+    hosted_p = sub.add_parser('publish-hosted', help='Validate and atomically select database-backed API publications')
+    hosted_p.add_argument('--publication', type=Path, required=True)
+    hosted_p.add_argument('--tvl-publication', type=Path, required=True)
+    hosted_choice = hosted_p.add_mutually_exclusive_group()
+    hosted_choice.add_argument('--analytics-publication-id')
+    hosted_choice.add_argument('--prepare-analytics', action='store_true', help='Prepare matching analytics; successful consolidation also updates the legacy selection')
+    restore_p = sub.add_parser('select-hosted-release', help='Select a still-retained release; successful consolidation retires older releases')
+    restore_p.add_argument('--release-id', required=True)
+
+    sub.add_parser('collect-analytics', help='Collect owned DefiLlama references, membership and declared fee configurations')
+    prepare_p = sub.add_parser('prepare-analytics', help='Publish remaining Powerglove analytics in the selected database')
+    prepare_p.add_argument('--publication', type=Path, required=True)
+    prepare_p.add_argument('--tvl-publication', type=Path, required=True)
+
     serve_p = sub.add_parser("serve-pairing", help="Serve read-only selected Powerglove views")
     serve_p.add_argument("--publication", type=Path, default=Path("data/powerglove"))
     serve_p.add_argument("--host", default="127.0.0.1")
     serve_p.add_argument("--port", type=int, default=3490)
     serve_p.add_argument("--cors-origin", help="Optional production frontend origin")
     serve_p.add_argument("--tvl-publication", type=Path, help="Automatically publish accumulated finished TVL results too")
+    serve_p.add_argument("--published-tvl-only", action="store_true", help="Serve only the updater's selected TVL publication")
     serve_p.add_argument("--current-bridge-policy", choices=["none", "retired-registry"], default="retired-registry")
-    serve_p.add_argument("--comparison-db", type=Path, help="Read-only external DefiLlama reference database")
+    serve_p.add_argument("--analytics", action="store_true", help="Serve prepared owned analytics and comparison without legacy services")
 
     catchup_p = sub.add_parser("catch-up", help="Acquire one bounded chain window; no pricing or analysis")
     catchup_p.add_argument("--chain", required=True, choices=sorted(CHAINS))
@@ -298,22 +304,46 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.command == "merge-databases":
-        from .shared_db import merge_plan, merge_databases
-        fn = merge_plan if args.check_only else merge_databases
-        result = fn(args.fees_db,args.tvl_db,args.out,reserve_gib=args.reserve_gib)
-        print(json.dumps(result,sort_keys=True))
-        return 0 if result["space_sufficient"] else 2
     load_environment(args.env)
-    if args.command == 'migrate-postgres':
-        from .postgres_migration import migration_plan, migrate_sqlite
-        result = (migration_plan(args.source, args.db) if args.check_only else
-                  migrate_sqlite(args.source, args.db, progress=progress))
+    args.db = args.db or os.environ.get('YEARN_DATA_DB', str(DEFAULT_DATABASE))
+    if args.command == 'consolidate-history':
+        from .canonical_history import consolidate
+        result = consolidate(args.db, apply=args.apply, progress=progress)
         body = json.dumps(result, sort_keys=True, indent=2)
         if args.receipt:
             args.receipt.parent.mkdir(parents=True, exist_ok=True)
-            args.receipt.write_text(body + '\n')
+            args.receipt.write_text(body+'\n')
         print(body)
+        return 0
+    if args.command == 'select-hosted-release':
+        from .hosted_publications import select_release
+        print(json.dumps({'releaseId':select_release(args.db, args.release_id)}))
+        return 0
+    if args.command == 'publish-hosted':
+        from .hosted_publications import publish, PublicationCleanupError
+        try:
+            release = publish(args.db, args.publication, args.tvl_publication,
+                              args.analytics_publication_id, prepare_analytics=args.prepare_analytics)
+        except PublicationCleanupError as exc:
+            print(json.dumps({'releaseId': exc.release_id, 'published': True,
+                              'consolidated': False, 'error': str(exc)}))
+            return 1
+        print(json.dumps({'releaseId': release}))
+        return 0
+    if args.command == 'collect-analytics':
+        from .analytics_collect import collect
+        print(json.dumps(collect(args.db), sort_keys=True))
+        return 0
+    if args.command == 'prepare-analytics':
+        from .analytics import prepare
+        from .pairing import PairingStore
+        from .tvl_api import TvlStore
+        financial = PairingStore(args.publication).get()
+        from .storage import database_reference
+        if database_reference(financial.database) != database_reference(args.db):
+            raise ValueError('financial publication database must match --db')
+        tvl = TvlStore(args.db, args.tvl_publication, current_bridge_policy='retired-registry').get()
+        print(json.dumps({'publicationId':prepare(args.db,financial,tvl)}))
         return 0
     if args.command == "select-pairing":
         from .pairing import select_pairing
@@ -324,20 +354,24 @@ def main(argv: list[str] | None = None) -> int:
         from .pairing import serve_pairing
         serve_pairing(args.publication, host=args.host, port=args.port, cors_origin=args.cors_origin,
                       tvl_publication=args.tvl_publication, current_bridge_policy=args.current_bridge_policy,
-                      comparison_database=args.comparison_db)
+                      published_tvl_only=args.published_tvl_only,
+                      analytics=args.analytics)
         return 0
     if args.command=='tvl' and args.tvl_command=='prepare-history':
         from .tvl_api import TvlStore
-        from .tvl_history_cache import prepare
-        dataset=TvlStore(args.db,args.publication,current_bridge_policy=args.current_bridge_policy).get()
-        print(json.dumps(prepare(dataset,progress=progress),sort_keys=True))
+        from .tvl_history_cache import prepare, prepare_price_repair
+        store=TvlStore(args.db,args.publication,current_bridge_policy=args.current_bridge_policy)
+        dataset=store.get()
+        result=(prepare_price_repair(dataset,store.get(args.previous_dataset_id))
+                if args.previous_dataset_id else prepare(dataset,progress=progress))
+        print(json.dumps(result,sort_keys=True))
         return 0
     conn = open_db(args.db)
     event_source = get_event_source()
 
     if args.command == "tvl":
         from .tvl import export_tvl
-        from .tvl_sources import import_service_catalog, refresh_kong_catalog, collect_tvl, scan_holders
+        from .tvl_sources import refresh_kong_catalog, collect_tvl, scan_holders
         if args.tvl_command == "discover":
             from .tvl_discovery import discover_catalog
             try:
@@ -347,8 +381,6 @@ def main(argv: list[str] | None = None) -> int:
                 return 0 if result["status"] == "complete" else 2
             finally:
                 conn.close()
-        elif args.tvl_command == "import-catalog":
-            result = {"vaults": import_service_catalog(conn, args.service_db)}
         elif args.tvl_command == "refresh-kong":
             result = {"vaults": refresh_kong_catalog(conn)}
         elif args.tvl_command == "map-holders":

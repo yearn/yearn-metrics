@@ -20,7 +20,7 @@ Old analysis runs remain available by their run ID.
 Use `catch-up` for allocator reports:
 
 ```bash
-yearn-data --db /path/to/yearn.sqlite catch-up --chain CHAIN \
+yearn-data --db neon catch-up --chain CHAIN \
   --from-block START --to-block END --discover
 ```
 
@@ -57,7 +57,7 @@ The buffer does not prove protocol finality.
 Run:
 
 ```bash
-yearn-data --db /path/to/yearn.sqlite index-fees --canonical --limit 500
+yearn-data --db neon index-fees --canonical --limit 500
 ```
 
 Repeat the command while reports remain to be processed.
@@ -80,7 +80,7 @@ The following example uses today's UTC midnight.
 Use an earlier midnight to select an earlier reporting boundary.
 
 ```bash
-DB=/path/to/yearn.sqlite
+DB=neon
 CUTOFF=$(python3 -c 'import time; print(int(time.time()) // 86400 * 86400)')
 yearn-data --db "$DB" price --source yearn-prices --no-provider-fallback \
   --no-onchain-fallbacks --limit 500

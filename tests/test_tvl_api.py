@@ -1,12 +1,11 @@
 import json
 from pathlib import Path
-import sqlite3
 
 import pytest
 
 from yearn_data.storage import connect, init_db
 from yearn_data.tvl import SCHEMA
-from yearn_data.tvl_api import TvlStore, publish_tvl, tvl_response
+from yearn_data.tvl_api import TvlStore, tvl_response
 
 DAY = 1704067199  # Sunday UTC close, preceding Monday January 1.
 PARENT = '0x'+'11'*20
@@ -35,7 +34,7 @@ def run(conn, number, timestamp, rows, edges=(), status='complete'):
 
 @pytest.fixture
 def source(tmp_path):
-    path = tmp_path/'yearn.sqlite'
+    path = 'staging'
     conn = connect(path); init_db(conn); conn.executescript(SCHEMA)
     for address, active in ((PARENT,1),(CHILD,1),(BRIDGE,0)):
         conn.execute("INSERT INTO tvl_vaults (chain_id,version,address,active,updated_at) VALUES (1,'v3',?,?,1)", (address,active))
@@ -76,6 +75,116 @@ def test_auto_refresh_and_pinned_publication(source):
     status, result = tvl_response(store,'/api/tvl/history/runs/latest?datasetId='+old)
     assert status == 200 and result['datasetId'] == old
     assert result['chart'][0]['Ethereum'] == 100
+
+
+def test_incomplete_ok_position_cannot_replace_complete_ownership(source):
+    from yearn_data.canonical_history import _stage_observations
+
+    conn,path,root = source
+    run(conn,1,DAY,[(PARENT,'100'),(CHILD,'100')],[(CHILD,'50')])
+    run(conn,2,DAY,[(PARENT,'100')],[(CHILD,'60')])
+    row = json.loads(conn.execute('SELECT data_json FROM tvl_positions WHERE run_id=2').fetchone()[0])
+    row.update(owned_usd=None, mapping_status='child_outside_selection')
+    conn.execute('UPDATE tvl_positions SET data_json=? WHERE run_id=2',(json.dumps(row),))
+    conn.commit()
+
+    dataset = TvlStore(path,root).get()
+    assert dataset.summary()['totalTvl'] == 150
+    assert dataset.frames((DAY,))[0][2][0]['source_run_id'] == 1
+    # Retention must keep the same complete evidence as the API selector.
+    _stage_observations(conn, 'tvl_positions', dataset.run_ids)
+    assert conn.execute('SELECT run_id FROM canonical_keep_tvl_positions').fetchone()[0] == 1
+
+    # A complete later repair still supersedes the old amount.
+    run(conn,3,DAY,[],[(CHILD,'75')])
+    assert TvlStore(path,root).get().summary()['totalTvl'] == 125
+
+    # Observed zero debt is complete even without an owned-value read.
+    run(conn,4,DAY,[],[(CHILD,'0')])
+    row.update(debt_usd='0',debt_raw='0',owned_usd=None)
+    conn.execute('UPDATE tvl_positions SET data_json=? WHERE run_id=4',(json.dumps(row),))
+    run(conn,5,DAY,[],[(CHILD,None)],status='incomplete')
+    dataset = TvlStore(path,root).get()
+    assert dataset.summary()['totalTvl'] == 200
+    assert dataset.frames((DAY,))[0][2][0]['source_run_id'] == 4
+
+
+def test_registry_correction_applies_to_history_and_is_pinned(source, monkeypatch):
+    from yearn_data import tvl_api
+    from yearn_data.canonical_history import _stage_observations
+
+    conn,path,root = source
+    strategy = '0x'+'44'*20
+    old_child = '0x'+'55'*20
+    conn.execute("INSERT INTO tvl_vaults (chain_id,version,address,active,updated_at) VALUES (1,'v3',?,1,1)", (old_child,))
+
+    def position(number, timestamp, child, getter=None):
+        row = {'chain_id':1,'parent':PARENT,'strategy':strategy,'child':child,
+               'timestamp':timestamp,'block_number':100+timestamp,'status':'ok',
+               'method':'service-registry','debt_usd':'50','owned_usd':'80'}
+        if getter: row['vault_getter'] = getter
+        conn.execute('INSERT INTO tvl_positions VALUES (?,?,?,?,?,?,?)',
+                     (number,1,PARENT,strategy,child,timestamp,json.dumps(row)))
+        conn.commit()
+
+    for number, day in ((1,DAY),(2,DAY+86400)):
+        run(conn,number,day,[(PARENT,'100'),(CHILD,'100'),(old_child,'100')])
+        position(number,day,old_child)
+    monkeypatch.setattr(tvl_api,'TARGET_CORRECTIONS',[])
+    old = TvlStore(path,root).get()
+    assert old.summary()['totalTvl'] == 250
+
+    monkeypatch.setattr(tvl_api,'TARGET_CORRECTIONS',[
+        {'chainId':1,'strategyAddress':strategy,'targetVaultAddress':CHILD,
+         'supersededTargetVaultAddresses':[old_child]}])
+    corrected = TvlStore(path,root).get()
+    assert corrected.id != old.id
+    for _, rows, edges, diagnostics in corrected.frames(corrected.dates()):
+        assert next(r for r in rows if r['vault']==old_child)['external_tvl_usd'] == '100'
+        assert edges[0]['overlap_usd'] == '0'
+        assert diagnostics['status'] == 'incomplete'
+        assert diagnostics['external_tvl_usd'] is None
+    # Excluded stale edges still contribute to unresolved accounting diagnostics.
+    for chain,category,expected in ((None,None,1),(1,None,1),(10,None,0),
+                                    (None,'v3',1),(None,'v2',0)):
+        assert corrected.graph(chain_id=chain,category=category)['diagnostics']['unresolvedPositions'] == expected
+
+    # Recollect one date. The other stays explicitly unresolved; amounts are not
+    # transferred from the old child. Failed retries cannot erase the repair.
+    run(conn,3,DAY,[])
+    position(3,DAY,CHILD,'vault()')
+    run(conn,4,DAY,[],status='incomplete')
+    position(4,DAY,CHILD,'vault()')
+    failed = json.loads(conn.execute('SELECT data_json FROM tvl_positions WHERE run_id=4').fetchone()[0])
+    failed.update(status='unavailable',owned_usd=None)
+    conn.execute('UPDATE tvl_positions SET data_json=? WHERE run_id=4',(json.dumps(failed),))
+    conn.commit()
+    repaired = TvlStore(path,root).get()
+    _, rows, edges, diagnostics = repaired.frames((DAY,))[0]
+    assert diagnostics['status'] == 'complete'
+    assert diagnostics['external_tvl_usd'] == '250'
+    assert {r['vault']:r['external_tvl_usd'] for r in rows} == {PARENT:'100',CHILD:'50',old_child:'100'}
+    assert next(e for e in edges if e['child']==CHILD)['source_run_id'] == 3
+    assert repaired.frames((DAY+86400,))[0][3]['status'] == 'incomplete'
+
+    _stage_observations(conn,'tvl_positions',repaired.run_ids)
+    assert {r[0] for r in conn.execute('SELECT DISTINCT run_id FROM canonical_keep_tvl_positions')} == {1,2,3}
+    # Raw observations and publications made with the old policy stay auditable.
+    assert json.loads(conn.execute('SELECT data_json FROM tvl_positions WHERE run_id=1').fetchone()[0])['owned_usd'] == '80'
+    assert TvlStore(path,root).get(old.id).summary()['totalTvl'] == 250
+
+
+def test_complete_position_from_different_block_is_not_applied(source):
+    conn,path,root = source
+    run(conn,1,DAY,[(PARENT,'100'),(CHILD,'100')],[(CHILD,'50')])
+    run(conn,2,DAY,[(PARENT,'100')],[(CHILD,None)])
+    row = json.loads(conn.execute('SELECT data_json FROM tvl_snapshots WHERE run_id=2').fetchone()[0])
+    row['block_number'] += 1
+    conn.execute('UPDATE tvl_snapshots SET data_json=? WHERE run_id=2',(json.dumps(row),))
+    conn.commit()
+    dataset = TvlStore(path,root).get()
+    assert dataset.summary()['totalTvl'] == 200
+    assert dataset.frames((DAY,))[0][2][0]['reason'] == 'selected_block_mismatch'
 
 
 def test_failed_publication_retains_last_selection(source, monkeypatch):
@@ -171,22 +280,6 @@ def test_curation_and_audit_require_positive_allocator_evidence(source):
     assert audit[PARENT]['vaultType'] == 1
     assert audit[CHILD]['vaultType'] is None
     assert audit[PARENT]['strategies'][0]['debtUsd'] == 50
-
-
-def test_comparison_uses_native_totals_only(source, tmp_path):
-    conn, path, root = source
-    run(conn,1,DAY,[(PARENT,'100'),(CHILD,'100')],[(CHILD,'50')])
-    reference_path = tmp_path/'external.sqlite'
-    with sqlite3.connect(reference_path) as reference:
-        reference.execute('CREATE TABLE defillama_snapshots (id INTEGER,protocol TEXT,chain TEXT,tvl_usd REAL,timestamp INTEGER)')
-        reference.executemany('INSERT INTO defillama_snapshots VALUES (?,?,?,?,?)',
-                             [(1,'yearn-finance',None,120,DAY),(2,'yearn-finance','Ethereum',120,DAY),
-                              (3,'yearn-curating',None,10,DAY),(4,'yearn-curating','Ethereum',10,DAY)])
-    result = TvlStore(path,root).get().comparison(reference_path)
-    assert result['ourTotal'] == 150
-    assert result['defillamaTotal'] == 130
-    assert result['difference'] == 20
-    assert result['byChain'] == [{'chain':'Ethereum','ours':150,'defillama':130,'difference':20}]
 
 
 def test_rejected_provider_quote_is_not_served_or_used_as_reference(source, monkeypatch):
@@ -340,6 +433,50 @@ def test_excluded_bridge_parent_does_not_also_deduct_child_holdings(source, monk
     assert positions[0]['overlap_usd'] == '0'
 
 
+def test_turtle_policy_excludes_all_history_and_preserves_raw_evidence(source):
+    from yearn_data.tvl_policy import VAULT_POLICIES
+    from yearn_data.tvl_api import TvlDataset
+    conn,path,root = source
+    turtle=VAULT_POLICIES[0]['address'].lower()
+    conn.execute("INSERT INTO tvl_vaults(chain_id,address,version,tvl_category,updated_at) VALUES (1,?,'erc4626','curation',1)",(turtle,))
+    for number,timestamp in ((1,DAY),(2,DAY+86400)):
+        run(conn,number,timestamp,[(turtle,'100'),(CHILD,'100')],[(CHILD,'50')])
+        raw=json.loads(conn.execute('SELECT data_json FROM tvl_positions WHERE run_id=?',(number,)).fetchone()[0])
+        raw['parent']=turtle
+        conn.execute('UPDATE tvl_positions SET parent=?,data_json=? WHERE run_id=?',(turtle,json.dumps(raw),number))
+    conn.commit()
+    dataset=TvlStore(path,root).get()
+    for mode in ('raw','external'):
+        assert [r['Ethereum'] for r in dataset.history(mode=mode,interval='daily')['chart']]==[100,100]
+    assert dataset.summary()['overlapExcluded']==0
+    assert dataset.catalog[(1,turtle)]['tvl_category']=='v3'
+    assert dataset.catalog[(1,turtle)]['version']=='v3'
+    assert conn.execute('SELECT COUNT(*) FROM tvl_snapshots WHERE vault=?',(turtle,)).fetchone()[0]==2
+    assert all(n.get('address','').lower()!=turtle for n in dataset.graph()['nodes'])
+    # Old manifests have no exclusion policy, even after the code is deployed.
+    legacy=dict(dataset.manifest);legacy.pop('vaultPolicies');legacy['datasetId']='legacy'
+    assert TvlDataset(legacy).summary()['totalTvl']==150
+
+
+def test_internal_curation_policy_is_pinned_and_prepared_history_matches(source):
+    from yearn_data.tvl_api import TvlDataset
+    from yearn_data.tvl_history_cache import prepare
+    conn,path,root=source
+    run(conn,1,DAY,[(PARENT,'100'),(CHILD,'110')],[(CHILD,'100')])
+    for stored in conn.execute('SELECT vault,data_json FROM tvl_snapshots').fetchall():
+        row=json.loads(stored['data_json']);row['category']='curation'
+        conn.execute('UPDATE tvl_snapshots SET data_json=? WHERE vault=?',(json.dumps(row),stored['vault']))
+    conn.commit()
+    dataset=TvlStore(path,root).get()
+    assert dataset.summary()['totalTvl']==110
+    assert dataset.summary()['curationTvl']==210  # Existing summary field is gross.
+    history=dataset.history(interval='daily',group='category')
+    prepare(dataset)
+    assert dataset.history(interval='daily',group='category')['chart']==history['chart']
+    legacy=dict(dataset.manifest);legacy.pop('deductInternalCuration');legacy['datasetId']='legacy'
+    assert TvlDataset(legacy).summary()['totalTvl']==210
+
+
 def test_chain_drilldown_reuses_all_chain_valuations_and_references(source, monkeypatch):
     conn,path,root = source
     run(conn,1,DAY,[(PARENT,'100'),(CHILD,'100')],[(CHILD,'50')])
@@ -361,3 +498,69 @@ def test_chain_drilldown_reuses_all_chain_valuations_and_references(source, monk
     assert sum(v for k,v in optimism['actualChart'][0].items() if k!='timestamp') == main['actualChart'][0]['Optimism']
     assert len(optimism['references']) == 1
     assert optimism['references'][0]['vault'] == '10:'+CHILD
+
+
+@pytest.mark.parametrize('policy_field', [True, False])
+def test_curation_preserves_manifest_policy_over_packaged_inventory(source, policy_field):
+    from yearn_data import tvl_policy
+    from yearn_data.tvl_api import TvlDataset
+    conn, path, root = source
+    parent = tvl_policy.VAULT_POLICIES[0]['address'].lower()
+    conn.execute("INSERT INTO tvl_vaults(chain_id,address,version,active,updated_at) VALUES (1,?,'v3',1,1)", (parent,))
+    run(conn, 1, DAY, [(parent, '100'), (CHILD, '110')], [(CHILD, '50')])
+    edge = json.loads(conn.execute('SELECT data_json FROM tvl_positions').fetchone()[0])
+    edge['parent'] = parent
+    conn.execute('UPDATE tvl_positions SET parent=?,data_json=?', (parent, json.dumps(edge)))
+    for stored in conn.execute('SELECT vault,data_json FROM tvl_snapshots').fetchall():
+        row = json.loads(stored['data_json']); row['category'] = 'curation'
+        conn.execute('UPDATE tvl_snapshots SET data_json=? WHERE vault=?', (json.dumps(row), stored['vault']))
+    conn.commit()
+    manifest = dict(TvlStore(path, root).get().manifest)
+    if policy_field:
+        manifest['vaultPolicies'] = []
+    else:
+        manifest.pop('vaultPolicies')
+    dataset = TvlDataset(manifest)
+    assert dataset.summary()['totalTvl'] == 160
+    assert dataset.graph()['totalTvlUsd'] == 160
+    assert dataset.curation()['totalTvlUsd'] == 160
+    assert {v['address'] for v in dataset.curation()['vaults']} == {parent, CHILD}
+
+
+@pytest.mark.parametrize('analytics_enabled', [False,True])
+def test_pairing_comparison_is_served_only_by_prepared_analytics(source,monkeypatch,analytics_enabled):
+    import inspect
+    import threading
+    from http.server import ThreadingHTTPServer
+    from types import SimpleNamespace
+    from urllib.error import HTTPError
+    from urllib.request import urlopen
+    from yearn_data import pairing, analytics
+    conn,database,publication=source
+    run(conn,1,DAY,[(PARENT,'100')])
+    store=TvlStore(database,publication)
+    assert tvl_response(store,'/api/comparison')[0]==404
+    assert 'comparison_database' not in inspect.signature(TvlStore).parameters
+    assert 'comparison_database' not in inspect.signature(pairing.serve_pairing).parameters
+    monkeypatch.setattr(pairing,'PairingStore',lambda _:SimpleNamespace(get=lambda:SimpleNamespace(database=database)))
+    monkeypatch.setattr(analytics,'AnalyticsStore',lambda _:SimpleNamespace(get=lambda:None))
+    monkeypatch.setattr(analytics,'analytics_response',lambda *_:(200,{'source':'prepared'}))
+    def create_server(address,handler):
+        server=ThreadingHTTPServer(('127.0.0.1',0),handler)
+        serve=server.serve_forever
+        def exercise():
+            thread=threading.Thread(target=serve,daemon=True);thread.start()
+            try:
+                url=f'http://127.0.0.1:{server.server_port}/api/comparison'
+                if analytics_enabled:
+                    with urlopen(url) as response:
+                        assert response.status==200 and json.load(response)=={'source':'prepared'}
+                else:
+                    with pytest.raises(HTTPError) as error:urlopen(url)
+                    assert error.value.code==404
+            finally:
+                server.shutdown();thread.join()
+        server.serve_forever=exercise
+        return server
+    monkeypatch.setattr(pairing,'ThreadingHTTPServer',create_server)
+    pairing.serve_pairing('unused',tvl_publication=publication,analytics=analytics_enabled)

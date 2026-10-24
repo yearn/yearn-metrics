@@ -44,7 +44,7 @@ def test_zero_share_operand_is_positive_and_damaged_arithmetic_rejected(event_id
     with pytest.raises(ValueError, match='inconsistent'):
         verify_case(case)
 
-from test_canonical_fees import seed, db
+from test_canonical_fees import seed, db as db
 from yearn_data.fees import index_canonical_fees
 from yearn_data.fee_recompute import recompute_canonical_fees
 

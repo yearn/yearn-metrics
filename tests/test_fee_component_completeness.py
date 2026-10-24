@@ -1,7 +1,7 @@
 """A known zero fee does not make other positive, unpriced amounts complete."""
 import json
 import pytest
-from test_fee_valuation import db, seed, point, outputs, ASSET, CUTOFF
+from test_fee_valuation import db as db, seed, point, outputs, ASSET, CUTOFF
 from yearn_data import fee_valuation as valuation
 
 

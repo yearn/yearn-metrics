@@ -24,7 +24,7 @@ TX = '0x' + 'cd' * 32
 
 @pytest.fixture
 def db(tmp_path):
-    conn = connect(tmp_path / 'catchup.sqlite')
+    conn = connect('staging')
     init_db(conn)
     yield conn
     conn.close()

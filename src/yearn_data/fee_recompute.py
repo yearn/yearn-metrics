@@ -36,12 +36,27 @@ def recompute_canonical_fees(conn, mode, chains=None, limit=None, version=None, 
     for r in conn.execute(sql,params).fetchall():
         evidence=json.loads(r['evidence_json'])
         if r['version'] == 'v3' and evidence.get('source') == 'strategy_reports':
+            failure_reason = 'cached_allocator_inputs_missing_or_changed'
             try:
                 if evidence.get('allocator_inputs') != allocator_inputs(r):
                     raise ValueError('allocator inputs missing or changed')
-                amounts, reason = normalize_allocator_fees(r), None
+                from .yvusd_fees import ACCOUNTANTS, applies, accounting
+                from .ybold_fees import ACCOUNTANT as YBOLD_ACCOUNTANT, applies as is_ybold, accounting as ybold_accounting
+                from .yeth_fees import ACCOUNTANT as YETH_ACCOUNTANT, applies as is_yeth, accounting as yeth_accounting
+                if applies(dict(r)) or is_ybold(dict(r)) or is_yeth(dict(r)):
+                    failure_reason = 'cached_distribution_evidence_missing_or_invalid'
+                if applies(dict(r)) and evidence['yvusd']['accountant'].lower() not in ACCOUNTANTS:
+                    failure_reason = 'rejected_yvusd_accountant'
+                if is_ybold(dict(r)) and evidence['ybold']['accountant'].lower() != YBOLD_ACCOUNTANT:
+                    failure_reason = 'rejected_ybold_accountant'
+                if is_yeth(dict(r)) and evidence['yeth']['accountant'].lower() != YETH_ACCOUNTANT:
+                    failure_reason = 'rejected_yeth_accountant'
+                amounts = (yeth_accounting(r, evidence['yeth']) if is_yeth(dict(r)) else
+                           ybold_accounting(r, evidence['ybold']) if is_ybold(dict(r)) else
+                           accounting(r, evidence['yvusd']) if applies(dict(r)) else normalize_allocator_fees(r))
+                reason = None
             except (ValueError, KeyError, TypeError):
-                amounts, reason = None, 'cached_allocator_inputs_missing_or_changed'
+                amounts, reason = None, failure_reason
             _save(conn, r, amounts, reason, evidence, r['log_index'])
             counts['processed'] += 1
             counts['accepted' if amounts is not None else 'unavailable'] += 1
