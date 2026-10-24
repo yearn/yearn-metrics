@@ -53,6 +53,8 @@ records=[]
 for protocol,scope in scopes.items():
  for key in sorted(scope):
   r=rows[key];units=D(r['asset_units'] or 0)
+  if protocol=='yearn-finance' and r.get('asset_decimals') is None and any(parent==key for parent,strategy in finance_debt):
+   raise SystemExit(f'Missing asset decimals for chain {key[0]} vault {key[1]}: cannot scale Finance debt deductions')
   if protocol=='yearn-finance':units=max(D(0),units-sum((v/D(10)**r['asset_decimals'] for (parent,strategy),v in finance_debt.items() if parent==key),D(0)))
   if protocol=='yearn-finance' and current:
    raw=net.get(key)
@@ -72,6 +74,8 @@ for v in replays:
  parent=(v['chain'],v['vault'].lower());child=(v['chain'],v['child'].lower())
  if parent not in cur or child not in cur:continue
  child_record=record_by_key[('yearn-curating',*child)]
+ if rows[child].get('asset_decimals') is None:
+  raise SystemExit(f'Missing asset decimals for chain {child[0]} vault {child[1]}: cannot scale curation replay deductions')
  units=max(D(0),D(child_record['units'])-D(v['convertedAssets'])/D(10)**rows[child]['asset_decimals'])
  child_record['units']=str(units)
  if child_record.get('quote'):child_record['replayTvlUsd']=str(units*D(str(child_record['quote']['price'])))
