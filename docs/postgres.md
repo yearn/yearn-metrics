@@ -15,7 +15,10 @@ a logical name so credentials cannot appear in manifests or status files.
 
 The pooled Neon URL works for ordinary jobs and APIs. Explicit direct operations
 use its direct endpoint. Local Postgres URLs need `?sslmode=disable`; hosted Neon
-retains TLS. `YEARN_DATA_DB_SCHEMA` selects an already-created schema, defaulting
+uses `verify-full` with the system CA store by default, checking both certificate
+trust and hostname. Remote URLs cannot weaken this verification; `sslrootcert`
+may select an explicit CA bundle. Only loopback or Unix-socket connections may
+explicitly use `sslmode=disable`. `YEARN_DATA_DB_SCHEMA` selects an already-created schema, defaulting
 to `public`. Use the same schema and logical database when reading a publication.
 
 ```bash
@@ -156,7 +159,7 @@ the local staging database described below.
 Staging uses a separate Postgres 18 container (matching Neon), database, role and Docker volume.
 It binds only `127.0.0.1:55435` and restarts automatically. Its credentials are in
 ignored `.env` / `data/local-postgres.env` files. Set `STAGING_DB_URL` to its local
-connection URL with `?sslmode=disable`; hosted Neon continues to require TLS.
+connection URL with `?sslmode=disable`; hosted Neon requires certificate and hostname verification.
 Select staging explicitly with `--db staging`; its publications store `staging`
 rather than a credential-bearing URL. Keep staging publications separate from
 Neon publications.

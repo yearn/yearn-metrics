@@ -323,3 +323,31 @@ def test_yvusd_product_includes_both_lockers_and_preserves_underlying_earnings()
         assert product['memberAddresses'] == tuple(addresses)
     assert product_for(10, VAULT) is None
     assert fees[1]['vault_address'] != VAULT
+
+
+@pytest.mark.parametrize('encoding,compressed',[('GZIP',True),('Gzip',True),('gzip;q=0',False)])
+def test_pairing_compression_encoding_case(monkeypatch,encoding,compressed):
+    import gzip
+    import threading
+    from http.server import ThreadingHTTPServer
+    from types import SimpleNamespace
+    from urllib.request import Request,urlopen
+    from yearn_data import pairing
+    payload={'data':'x'*2000}
+    monkeypatch.setattr(pairing,'PairingStore',lambda _:SimpleNamespace(get=lambda:None))
+    monkeypatch.setattr(pairing,'pairing_response',lambda *_:(200,payload))
+    def create_server(address,handler):
+        server=ThreadingHTTPServer(('127.0.0.1',0),handler);serve=server.serve_forever
+        def exercise():
+            thread=threading.Thread(target=serve,daemon=True);thread.start()
+            try:
+                request=Request(f'http://127.0.0.1:{server.server_port}/api/fees',headers={'Accept-Encoding':encoding})
+                with urlopen(request) as response:
+                    assert (response.headers.get('Content-Encoding')=='gzip')==compressed
+                    body=response.read()
+                    assert json.loads(gzip.decompress(body) if compressed else body)==payload
+            finally:server.shutdown();thread.join()
+        server.serve_forever=exercise
+        return server
+    monkeypatch.setattr(pairing,'ThreadingHTTPServer',create_server)
+    pairing.serve_pairing('unused')

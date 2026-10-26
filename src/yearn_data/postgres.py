@@ -6,6 +6,7 @@ driver parameters; this module translates placeholders, not interpolated values.
 from __future__ import annotations
 
 import re
+from ipaddress import ip_address
 import uuid
 
 import psycopg
@@ -124,7 +125,17 @@ class Connection:
     def __init__(self, url, *, readonly=False, schema='public', direct=False):
         from psycopg.conninfo import conninfo_to_dict
         params = conninfo_to_dict(url)
-        params.setdefault('sslmode', 'require')
+        def local_host(host):
+            if host == 'localhost' or host.startswith('/'):
+                return True
+            try:return ip_address(host).is_loopback
+            except ValueError:return False
+        hosts = params.get('host', '').split(',')
+        addresses = params.get('hostaddr', '').split(',') if params.get('hostaddr') else []
+        local = all(local_host(host) for host in hosts + addresses)
+        if not local or params.get('sslmode') != 'disable':
+            params['sslmode'] = 'verify-full'
+            params.setdefault('sslrootcert', 'system')
         params['connect_timeout'] = '15'
         if direct and params.get('host', '').endswith('.neon.tech'):
             params['host'] = params['host'].replace('-pooler.', '.')

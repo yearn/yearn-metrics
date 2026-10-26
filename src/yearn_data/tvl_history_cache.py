@@ -65,6 +65,9 @@ def prepare_totals(dataset):
     with closing(connect(dataset.database,direct=True)) as conn:
         conn.executescript(SCHEMA)
         with conn:
+            if not conn.execute('SELECT pg_try_advisory_xact_lock(743219889)').fetchone()[0]:
+                raise ValueError('TVL chart preparation is already running')
+            if totals_ready(dataset):return
             conn.execute('DELETE FROM tvl_chart_totals WHERE dataset_id=?',(dataset.id,))
             for offset in range(0,len(dates),31):
                 batch=[]

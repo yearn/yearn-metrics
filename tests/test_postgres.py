@@ -332,3 +332,89 @@ def test_removed_comparison_selector_is_rejected_before_server_start(monkeypatch
         with pytest.raises(SystemExit) as error:
             cli.main(['serve-pairing','--comparison-db',selector])
         assert error.value.code==2
+
+
+@pytest.mark.parametrize('url,mode,root', [
+    ('postgresql://db.example/test', 'verify-full', 'system'),
+    ('postgresql://db.example/test?sslmode=require', 'verify-full', 'system'),
+    ('postgresql://db.example/test?sslmode=disable', 'verify-full', 'system'),
+    ('postgresql://db.example/test?sslrootcert=/custom/ca.pem', 'verify-full', '/custom/ca.pem'),
+    ('postgresql://127.0.0.1/test?sslmode=disable', 'disable', None),
+    ('postgresql://[::1]/test?sslmode=disable', 'disable', None),
+])
+def test_connection_authenticates_remote_servers(monkeypatch,url,mode,root):
+    from yearn_data.postgres import Connection
+    class Captured(Exception):pass
+    def capture(**params):
+        assert params['sslmode']==mode
+        assert params.get('sslrootcert')==root
+        raise Captured
+    monkeypatch.setattr(psycopg,'connect',capture)
+    with pytest.raises(Captured):Connection(url)
+
+
+def test_totals_preparation_refuses_concurrent_builder(pg,tmp_path,monkeypatch):
+    import threading
+    from test_tvl_api import run,DAY,PARENT
+    from yearn_data import tvl_history_cache as cache
+    from yearn_data.tvl_api import TvlStore,TvlDataset
+    conn,_=pg;init_db(conn);run(conn,1,DAY,[(PARENT,'100')])
+    dataset=TvlStore('staging',tmp_path/'publication').get();cache.prepare(dataset)
+    with conn:
+        conn.execute('DELETE FROM tvl_chart_totals WHERE dataset_id=?',(dataset.id,))
+        conn.execute('UPDATE tvl_chart_publications SET version=? WHERE dataset_id=?',(cache.VERSION,dataset.id))
+    entered=threading.Event();release=threading.Event();errors=[]
+    original=cache.rows
+    def paused(*args,**kwargs):
+        entered.set()
+        if not release.wait(10):raise RuntimeError('totals test timed out')
+        yield from original(*args,**kwargs)
+    monkeypatch.setattr(cache,'rows',paused)
+    def build():
+        try:cache.prepare_totals(dataset)
+        except BaseException as error:errors.append(error)
+    worker=threading.Thread(target=build,daemon=True);worker.start()
+    try:
+        assert entered.wait(5)
+        with pytest.raises(ValueError,match='TVL chart preparation is already running'):
+            cache.prepare(TvlDataset(dataset.manifest))
+    finally:
+        release.set();worker.join(15)
+    assert not worker.is_alive() and not errors
+    assert cache.totals_ready(dataset)
+    assert dataset.history(interval='daily')['chart'][0]['Ethereum']==100
+
+
+@pytest.mark.parametrize('trust_ca', [False,True])
+def test_remote_tls_rejects_untrusted_or_wrong_hostname(tmp_path,trust_ca):
+    import socket
+    import ssl
+    import subprocess
+    import threading
+    from yearn_data.postgres import Connection
+    cert,key=tmp_path/'cert.pem',tmp_path/'key.pem'
+    subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','1',
+                    '-subj','/CN=wrong.invalid','-addext','subjectAltName=DNS:wrong.invalid',
+                    '-keyout',str(key),'-out',str(cert)],check=True,capture_output=True)
+    context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(cert,key)
+    errors=[]
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1',0));listener.listen();listener.settimeout(5)
+        def peer():
+            try:
+                with listener.accept()[0] as client:
+                    client.settimeout(5)
+                    assert client.recv(8)==b'\x00\x00\x00\x08\x04\xd2\x16\x2f'
+                    client.sendall(b'S')
+                    try:
+                        with context.wrap_socket(client,server_side=True):pass
+                    except ssl.SSLError:pass  # The client must reject this peer.
+            except BaseException as error:errors.append(error)
+        thread=threading.Thread(target=peer,daemon=True);thread.start()
+        dsn=f'host=db.example hostaddr=127.0.0.1 port={listener.getsockname()[1]} dbname=test gssencmode=disable'
+        if trust_ca:dsn+=f' sslrootcert={cert}'
+        try:
+            with pytest.raises(psycopg.OperationalError,match='does not match host name' if trust_ca else 'certificate verify failed'):
+                Connection(dsn)
+        finally:thread.join(10)
+        assert not thread.is_alive() and not errors

@@ -379,7 +379,7 @@ def serve_pairing(publication, *, host='127.0.0.1', port=3490, cors_origin=None,
             gzip_allowed=False
             for encoding in accept_encoding.split(','):
                 parts=encoding.strip().split(';')
-                if parts[0]=='gzip':
+                if parts[0].strip().lower()=='gzip':
                     quality=next((part.strip()[2:] for part in parts[1:] if part.strip().startswith('q=')),'1')
                     try:gzip_allowed=0<float(quality)<=1
                     except ValueError:pass
