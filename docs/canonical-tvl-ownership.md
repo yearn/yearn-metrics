@@ -25,7 +25,9 @@ Aggregate endpoints retain available-subtotal semantics. They do not certify
 complete TVL when some vaults are unavailable. Historical series omit unavailable
 vault values rather than inserting zero. Prepared history and constant-price
 history preserve those distinctions. Graph deductions sum available accounting
-evidence, rather than treating a missing adjusted value as a deduction.
+evidence, rather than treating a missing adjusted value as a deduction. Graph
+`diagnostics.unavailableNodes` also identifies nodes with incomplete ownership;
+their observed `rawTvlUsd` remains available while adjusted fields remain null.
 
 Diagnostic `known_gross_tvl_usd` sums observed gross values, including vaults whose
 ownership is incomplete. `known_overlap_usd` sums verified position deductions,
@@ -40,7 +42,9 @@ deduction. Public `overlapExcluded` sums only available vault-level overlap valu
 
 `tvl export` uses unified curation deductions by default. `--include-curation`
 keeps that default; `--no-include-curation` explicitly selects the separate-product
-export convention. This export switch does not change a publication's policy.
+export convention, including its best-effort ownership availability. `tvl.json`
+records both `include_curation` and `require_complete_ownership` in its run
+metadata. This export switch does not change a publication's policy.
 
 Powerglove's existing contract consumes these values directly:
 

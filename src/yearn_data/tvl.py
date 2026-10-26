@@ -334,9 +334,12 @@ def export_tvl(conn, out, run_id=None, *, include_curation=True):
     for row in conn.execute('SELECT data_json FROM tvl_positions WHERE run_id=? ORDER BY timestamp,chain_id,parent,strategy,child', (run_id,)):
         data = json.loads(row['data_json'])
         positions[data['timestamp']].append(data)
+    # The export opt-out retains both legacy layering and legacy availability.
+    require_complete_ownership = include_curation
     output = {'vaults': [], 'positions': [], 'history': []}
     for timestamp, points in snapshots.items():
-        rows, edges, summary = account(points, positions[timestamp], include_curation=include_curation)
+        rows, edges, summary = account(points, positions[timestamp], include_curation=include_curation,
+                                       require_complete_ownership=require_complete_ownership)
         output['vaults'].extend(rows)
         output['positions'].extend(edges)
         output['history'].append(summary)
@@ -351,6 +354,7 @@ def export_tvl(conn, out, run_id=None, *, include_curation=True):
     metadata = dict(run)
     metadata['params'] = json.loads(metadata.pop('params_json'))
     metadata['include_curation'] = include_curation
+    metadata['require_complete_ownership'] = require_complete_ownership
     metadata['mapping_scope'] = 'known candidates; positive share scans expand coverage, absence is not proof of no nesting'
     (out / 'tvl.json').write_text(json.dumps({'run': metadata, **output}, indent=2) + '\n')
     return out

@@ -5,7 +5,7 @@ from decimal import Decimal
 import pytest
 
 from yearn_data.analytics import fee_stack
-from yearn_data.tvl import account
+from yearn_data.tvl import account, export_tvl
 from yearn_data.tvl_api import TvlDataset, TvlStore
 from yearn_data.tvl_history_cache import prepare
 from test_tvl import edge, snapshot
@@ -109,7 +109,9 @@ def test_missing_dated_ownership_is_not_zero_or_filled_from_latest(source):
     assert repaired.history(interval='daily', group='category')['chart'][0]['curation'] == 200
 
 
-def test_same_chain_child_valuation_must_match_holdings_block(source):
+@pytest.mark.parametrize('chain_id,category,expected', [(None, None, True), (1, 'curation', True),
+                                                      (10, None, False), (None, 'v3', False)])
+def test_same_chain_child_valuation_must_match_holdings_block(source, chain_id, category, expected):
     conn, path, root = source
     run(conn, 1, DAY, [(PARENT, '100'), (CHILD, '200')], [(CHILD, '80')])
     row = json.loads(conn.execute('SELECT data_json FROM tvl_snapshots WHERE vault=?', (CHILD,)).fetchone()[0])
@@ -120,7 +122,15 @@ def test_same_chain_child_valuation_must_match_holdings_block(source):
     _, rows, positions, _ = dataset.frames((DAY,))[0]
     assert positions[0]['reason'] == 'selected_child_block_mismatch'
     assert next(r for r in rows if r['vault'] == CHILD)['external_tvl_usd'] is None
-    assert dataset.graph()['totalOverlapTvlUsd'] == 0  # Unavailable is not a $200 deduction.
+    graph = dataset.graph(chain_id=chain_id, category=category)
+    # A scope containing only unknown ownership has no available subtotal.
+    assert graph['totalOverlapTvlUsd'] == (None if category == 'curation' else 0)
+    assert graph['diagnostics']['unavailableNodes'] == (
+        [{'nodeId': f'1:{CHILD}', 'reason': 'incomplete_ownership'}] if expected else [])
+    if expected:
+        node = next(node for node in graph['nodes'] if node['address'] == CHILD)
+        assert node['rawTvlUsd'] == 200
+        assert node['externalTvlUsd'] is node['upstreamOwnedTvlUsd'] is None
 
 
 def test_incomplete_ownership_keeps_gross_and_partial_evidence_distinct(source):
@@ -147,3 +157,20 @@ def test_incomplete_ownership_keeps_gross_and_partial_evidence_distinct(source):
     assert summary['tvlByChain']['Ethereum'] == 400
     assert summary['totalTvl'] == 200
     assert summary['overlapExcluded'] == 0  # No complete child-level deduction is available.
+
+
+@pytest.mark.parametrize('include_curation', [True, False])
+def test_export_records_current_and_legacy_ownership_policy(source, tmp_path, include_curation):
+    conn, _, _ = source
+    # A non-curation edge verifies that legacy availability is restored too.
+    run(conn, 1, DAY, [(PARENT, '100'), (CHILD, '200')], [(CHILD, None)])
+    out = export_tvl(conn, tmp_path / 'export', include_curation=include_curation)
+    exported = json.loads((out / 'tvl.json').read_text())
+    assert exported['run']['include_curation'] is include_curation
+    assert exported['run']['require_complete_ownership'] is include_curation
+    child = next(row for row in exported['vaults'] if row['vault'] == CHILD)
+    assert child['tvl_usd'] == '200'
+    assert child['external_tvl_usd'] == (None if include_curation else '200')
+    assert child['overlap_usd'] == (None if include_curation else '0')
+    assert exported['history'][0]['known_external_tvl_usd'] == ('100' if include_curation else '300')
+    assert exported['history'][0]['external_tvl_usd'] is None
