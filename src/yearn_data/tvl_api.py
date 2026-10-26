@@ -134,8 +134,8 @@ def publish_tvl(database, publication, *, current_bridge_policy='none'):
     (root/'datasets').mkdir(parents=True, exist_ok=True)
     manifest = context | {'datasetId': dataset_id, 'publishedAt': int(time.time())}
     target = root/'datasets'/f'{dataset_id}.json'
+    dataset = TvlDataset(manifest)
     if not target.exists():
-        dataset = TvlDataset(manifest)
         manifest['asOfTimestamp'] = dataset.as_of()
         _, rows, edges, diagnostics = dataset.frames((manifest['asOfTimestamp'],))[0]
         manifest['diagnostics'] = diagnostics | {
@@ -153,6 +153,10 @@ def publish_tvl(database, publication, *, current_bridge_policy='none'):
     return manifest
 
 
+class RetiredTvlDataset(ValueError):
+    """A publication no longer has all of its backing observations."""
+
+
 class TvlDataset:
     def __init__(self, manifest):
         self.manifest = manifest
@@ -163,7 +167,13 @@ class TvlDataset:
         self.allocators = {tuple(r) for r in manifest['allocatorKeys']}
         self.bridge_migrations = {(r['sourceChainId'],r['sourceVaultAddress'].lower()):r for r in manifest.get('bridgeMigrations',[])}
         self.base = max(self.run_ids)+1
-        self.price_rejections = {(r['chainId'],r['asset'].lower(),r['timestamp']): r for r in manifest.get('priceRejections',[])}
+        self.price_rejections = {}
+        for row in manifest.get('priceRejections', []):
+            coordinate = (row['chainId'], row['asset'].lower(), row['timestamp'])
+            previous = self.price_rejections.get(coordinate)
+            if previous is not None and previous['priceUsd'] != row['priceUsd']:
+                raise ValueError('TVL publication cannot use conflicting quotes at one rejection coordinate')
+            self.price_rejections[coordinate] = row
         self._lock = threading.RLock()
         self._pending = {}
         self._history_cache = OrderedDict()
@@ -176,6 +186,29 @@ class TvlDataset:
             from .tvl_history_cache import ready
             self._prepared=ready(self)
         return self._prepared
+
+    def assert_available(self):
+        # Check the durable receipt even for cached datasets. Consolidation keeps
+        # winners from this run union; a superset selects the same retained rows.
+        with closing(read_db(self.database)) as conn:
+            if not table_exists(conn, 'canonical_history_receipts'):
+                return
+            row = conn.execute('SELECT receipt_json FROM canonical_history_receipts ORDER BY id DESC LIMIT 1').fetchone()
+            if row is None:
+                return
+            receipt = json.loads(row[0])
+            canonical_id = receipt['selection']['tvlDatasetId']
+            if self.id == canonical_id:
+                return
+            required = receipt.get('tvlRunIds')
+            if required is None:
+                # Compatibility with receipts written before run provenance was
+                # included. The canonical manifest may already be retired too.
+                row = conn.execute("SELECT body_json FROM api_manifests WHERE kind='tvl' AND id=?", (canonical_id,)).fetchone()
+                if row is not None:
+                    required = [run['id'] for run in json.loads(row[0])['runs']]
+            if required is None or not set(required).issubset(self.run_ids):
+                raise RetiredTvlDataset('TVL dataset retired by canonical history consolidation; request the current dataset')
 
     @lru_cache(maxsize=1)
     def dates(self):
@@ -691,7 +724,9 @@ class TvlStore:
                 dataset_id = json.loads((self.root/'current.json').read_text())['datasetId']
             if not isinstance(dataset_id,str) or not re.fullmatch('[a-f0-9]{64}',dataset_id):
                 raise ValueError('invalid TVL datasetId')
-            return self.load(dataset_id)
+            dataset = self.load(dataset_id)
+            dataset.assert_available()
+            return dataset
 
 
 def tvl_response(store, url):
@@ -749,6 +784,9 @@ def tvl_response(store, url):
             result = dataset.audit(chain_id)
         else:
             result = dataset.summary(chain_id)
+        dataset.assert_available()
         return 200, result
+    except RetiredTvlDataset as error:
+        return 410, {'error':str(error)}
     except ValueError as error:
         return 400, {'error':str(error)}

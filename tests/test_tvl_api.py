@@ -766,3 +766,14 @@ def test_history_omits_empty_policy_dates_but_keeps_unvalued_dates(source, monke
     offline = api.TvlDataset(dataset.manifest)
     monkeypatch.setattr(offline, 'history_prepared', lambda: False)
     assert [row['timestamp'] for row in offline.history(group=group, interval='daily', constant=True)['chart']] == [DAY+86400, DAY+2*86400]
+
+
+def test_publish_rejects_conflicting_price_rejections(source, monkeypatch):
+    from yearn_data import tvl_api
+    conn, database, publication = source
+    run(conn, 1, DAY, [(PARENT, '100')])
+    quote = {'chainId':1, 'asset':'0x'+'aa'*20, 'timestamp':DAY, 'priceUsd':'10'}
+    monkeypatch.setattr(tvl_api, 'PRICE_REJECTIONS', [quote, quote | {'asset':quote['asset'].upper(), 'priceUsd':'20'}])
+    with pytest.raises(ValueError, match='conflicting quotes'):
+        tvl_api.publish_tvl(database, publication)
+    assert not (publication/'current.json').exists()

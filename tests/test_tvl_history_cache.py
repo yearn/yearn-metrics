@@ -256,10 +256,10 @@ def test_repair_rejects_conflicting_quote_that_would_undo_prior_rejection(tmp_pa
     previous=TvlDataset(manifest);prepare(previous)
     updated=deepcopy(manifest);updated['datasetId']='e'*64
     updated['priceRejections'].append(rejected|{'priceUsd':'12'})
-    target=TvlDataset(updated)
     with pytest.raises(ValueError,match='conflicting quotes'):
-        prepare_price_repair(target,previous)
-    assert not ready(target)
+        prepare_price_repair(TvlDataset(updated),previous)
+    with closing(connect(path,readonly=True)) as conn:
+        assert conn.execute('SELECT 1 FROM tvl_chart_publications WHERE dataset_id=?', (updated['datasetId'],)).fetchone() is None
     assert previous.history(interval='daily')['chart'][0].get('Ethereum') is None
 
 

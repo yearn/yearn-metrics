@@ -57,7 +57,7 @@ Consolidation rolls back if any preservation check fails.
 Superseded TVL observations, older derived caches, older analysis outputs and old
 hosted publications are removed. Old completed analysis metadata is marked
 `superseded`; its IDs are not reused. A small `canonical_history_receipts` row
-records the selected revision and all preservation counts.
+records the selected revision, its TVL run IDs and all preservation counts.
 
 ## Ongoing updates
 
@@ -78,8 +78,12 @@ Use the updated hosted API with the updated publisher: its obsolete-pin and
 in-flight revision checks are part of this retention contract. Applying the
 database consolidation alone does not deploy those API changes.
 
-Older local manifest files may remain as small operational records. Their old
-results are no longer supported; use the current published pointers. Do not
+Older local manifest files may remain as small operational records. The file-backed
+TVL API checks the latest consolidation receipt before serving a cached or newly
+loaded pin and again before returning success. It returns HTTP 410 if the pin lacks
+the canonical run union, because its observations may have been removed. Pins that
+include that union remain usable; publishing a new dataset alone does not retire
+old pins. On 410, retry without the dataset pin to use the current local pointer. Do not
 reselect an obsolete release or treat removed historical editions as backups.
 
 ## Storage reclamation and validation

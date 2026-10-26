@@ -227,7 +227,7 @@ def consolidate(database, *, apply=False, progress=None):
             if not run_ids:
                 raise ValueError('selected TVL publication has no historical runs')
             report = {'database': database_reference(database), 'applied': apply,
-                      'selection': selection, 'observations': {}, 'derived': {}}
+                      'selection': selection, 'tvlRunIds': list(run_ids), 'observations': {}, 'derived': {}}
             for table in OBSERVATIONS:
                 notify('Inventorying canonical keys: '+table)
                 report['observations'][table] = _stage_observations(conn, table, run_ids)
