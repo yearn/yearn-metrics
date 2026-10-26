@@ -148,3 +148,24 @@ this implementation.
 
 The full-suite duration is not a test-performance comparison: frontend
 validation ran concurrently after the isolated serving benchmark completed.
+
+## Grouped-response cache budget (PR review follow-up)
+
+Grouped `vault-history` responses now bypass the existing 128-entry cache used
+by other fee views. A shared process-wide LRU retains at most 8 MiB of serialized
+JSON payload bytes across all filters and dataset identities, with at most 16
+entries. Responses larger than 8 MiB are returned without caching. Keys use a
+weak source-instance reference and query arguments, preserving source isolation
+without retaining dataset objects.
+A lock protects lookup, recency and byte accounting; simultaneous cache misses
+may calculate independently.
+
+The 8 MiB budget measures the actual retained byte payloads, not an estimate of
+expanded Python response trees: only JSON bytes are cached and hits decode a
+fresh result. It excludes the bounded entry/key/container bookkeeping, source
+datasets, other existing caches and transient results/serialization buffers for
+active requests. It is therefore a retained grouped-payload limit, not a process
+RSS or concurrent-request memory limit. Decimal strings, nulls, source-order
+calculations, publication pins and returned list order are preserved. The warm
+calculation timings above predate this change: cache hits now decode JSON and
+should not be interpreted as measurements of this bounded cache.

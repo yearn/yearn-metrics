@@ -428,6 +428,8 @@ def test_grouped_vault_history_preserves_exact_month_views_and_empty_ranges(monk
     assert len(reads) == 1
     assert grouped['dataCutoffTimestamp'] == dataset.cutoff
     assert grouped['datasetId'] == dataset.id and grouped['aggregationScope'] == scope
+    assert dataset.view('vault-history', DAY, until, (1,), interval, scope=scope) == grouped
+    assert len(reads) == 1
     assert grouped['buckets'][-1]['count'] == 0
     assert grouped['buckets'][-1]['vaults'] == []
     for bucket in grouped['buckets']:
@@ -459,3 +461,57 @@ def test_grouped_vault_history_preserves_exact_month_views_and_empty_ranges(monk
 
     huge = dataset.view('vault-history', DAY, 10**30, (1,), interval, scope=scope)
     assert huge['buckets'] == grouped['buckets']
+
+
+@pytest.mark.parametrize('budget,limit', [(1200, 16), (10000, 2)])
+def test_grouped_history_cache_bounds_bytes_across_filters_and_datasets(monkeypatch, budget, limit):
+    """Large filter variants must evict globally, without retaining decoded trees."""
+    from collections import OrderedDict
+    from yearn_data import pairing
+    from yearn_data.hosted_fees import PublishedFees
+    monkeypatch.setattr(pairing, '_vault_history_cache', OrderedDict())
+    monkeypatch.setattr(pairing, '_vault_history_cache_bytes', 0)
+    monkeypatch.setattr(pairing, 'VAULT_HISTORY_CACHE_BYTES', budget)
+    monkeypatch.setattr(pairing, 'VAULT_HISTORY_CACHE_ENTRIES', limit)
+    first = PairingDataset.__new__(PairingDataset)
+    second = PublishedFees.__new__(PublishedFees)
+    first.id = second.id = 'first-publication'  # Equal pins must still isolate source instances.
+    calls = []
+    def compute(self, name, since, *args):
+        calls.append((self.id, since))
+        return {'datasetId': self.id, 'totalFeesPaidUsd': '0.123456789123456789',
+                'netLifetimeEarningsUsd': None, 'padding': 'x' * (20000 if since == 99 else 400)}
+    monkeypatch.setattr(PairingDataset, '_view', compute)
+    def request(dataset, since):
+        return dataset.view('vault-history', since=since)
+    initial = request(first, 1)
+    initial['totalFeesPaidUsd'] = 'caller mutation'
+    cached = request(first, 1)
+    assert cached['totalFeesPaidUsd'] == '0.123456789123456789'
+    assert cached['netLifetimeEarningsUsd'] is None
+    assert calls == [('first-publication', 1)]
+    request(second, 1)
+    request(first, 1)  # Touch first so the other publication is evicted next.
+    request(first, 2)
+    request(first, 1)
+    assert len(calls) == 3
+    request(second, 1)
+    assert len(calls) == 4
+    for since in range(3, 30):
+        result = request(first, since)
+        assert result['datasetId'] == first.id
+        assert pairing._vault_history_cache_bytes <= budget
+        assert len(pairing._vault_history_cache) <= limit
+        assert all(isinstance(value, bytes) for value in pairing._vault_history_cache.values())
+        assert pairing._vault_history_cache_bytes == sum(map(len, pairing._vault_history_cache.values()))
+    keys = list(pairing._vault_history_cache)
+    request(first, 99)
+    request(first, 99)
+    assert calls[-2:] == [(first.id, 99), (first.id, 99)]
+    assert list(pairing._vault_history_cache) == keys
+    import gc
+    import weakref
+    reference = weakref.ref(first)
+    del first
+    gc.collect()
+    assert reference() is None

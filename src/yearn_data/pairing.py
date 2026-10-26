@@ -1,7 +1,7 @@
 """Read-only Powerglove views over explicitly selected completed analyses."""
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, localcontext
@@ -14,11 +14,19 @@ from pathlib import Path
 import re
 import threading
 import time
+import weakref
 from urllib.parse import parse_qs, urlsplit
 
 from .analysis import closed_cutoff
 from .fee_valuation import POLICY
 from .storage import connect, database_reference, DATABASE_ERRORS
+
+# Shared across datasets: large grouped responses cannot multiply per publication.
+VAULT_HISTORY_CACHE_BYTES = 8 * 1024 * 1024
+VAULT_HISTORY_CACHE_ENTRIES = 16
+_vault_history_cache = OrderedDict()
+_vault_history_cache_bytes = 0
+_vault_history_cache_lock = threading.Lock()
 
 FAMILIES = ('yearn-v2-vault', 'yearn-v3-allocator', 'yearn-v3-tokenized-strategy')
 FEE_FIELDS = {
@@ -203,8 +211,40 @@ class PairingDataset:
 
         return fees, earnings
 
-    @lru_cache(maxsize=128)
     def view(self, name, since=None, until=None, chains=(), interval='monthly', vault_address=None, scope='contract'):
+        global _vault_history_cache_bytes
+        args = (name, since, until, chains, interval, vault_address, scope)
+        if name != 'vault-history':
+            return self._cached_view(*args)
+        # Keep the source-instance namespace without retaining its source graph.
+        # Only serialized bytes are retained, never expanded response trees.
+        key = (weakref.ref(self), args)
+        with _vault_history_cache_lock:
+            payload = _vault_history_cache.get(key)
+            if payload is not None:
+                _vault_history_cache.move_to_end(key)
+        if payload is not None:
+            return json.loads(payload)
+        result = self._view(*args)
+        payload = json.dumps(result, separators=(',', ':'), allow_nan=False).encode()
+        if len(payload) <= VAULT_HISTORY_CACHE_BYTES:
+            with _vault_history_cache_lock:
+                previous = _vault_history_cache.pop(key, None)
+                if previous is not None:
+                    _vault_history_cache_bytes -= len(previous)
+                _vault_history_cache[key] = payload
+                _vault_history_cache_bytes += len(payload)
+                while (_vault_history_cache_bytes > VAULT_HISTORY_CACHE_BYTES or
+                       len(_vault_history_cache) > VAULT_HISTORY_CACHE_ENTRIES):
+                    _, removed = _vault_history_cache.popitem(last=False)
+                    _vault_history_cache_bytes -= len(removed)
+        return result
+
+    @lru_cache(maxsize=128)
+    def _cached_view(self, *args):
+        return self._view(*args)
+
+    def _view(self, name, since=None, until=None, chains=(), interval='monthly', vault_address=None, scope='contract'):
         if scope not in ('contract', 'product'):
             raise ValueError('scope must be contract or product')
         if name not in ('summary', 'history', 'vaults', 'vault-history'):
