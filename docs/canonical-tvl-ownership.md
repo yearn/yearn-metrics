@@ -66,7 +66,7 @@ combined value unavailable.
 The manifest adds `ownershipAccounting: all-yearn-v1`, changing the dataset hash
 even when the raw runs are unchanged. Old manifests retain their previous
 accounting and remain reproducible while retained. Analytics methodology advances
-to `powerglove-analytics-23`. Prepared rows/totals must be regenerated for the new
+to `powerglove-analytics-24`. Prepared rows/totals must be regenerated for the new
 TVL identity; the price-repair copy shortcut rejects changed accounting policy.
 
 For an authorized deployment, prepare a new TVL publication and its full dated
@@ -90,3 +90,8 @@ observed zero and block mismatches. Existing TVL, bridge, graph, analytics and f
 product tests cover their unchanged behavior. The Powerglove consumer suites
 `direct-deposit-fees`, `effective-fee-capital` and `EffectiveFeesTable` validate
 canonical values and unavailable handling without a frontend accounting change.
+
+DefiLlama reconciliation requires complete local counted TVL for each compared
+scope. Unknown ownership withholds the overall and affected chain/category totals
+and differences, with partial availability and explicit unavailable vaults.
+Complete scopes remain comparable; raw gross observations remain available.
