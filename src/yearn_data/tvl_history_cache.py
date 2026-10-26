@@ -9,6 +9,7 @@ from collections import defaultdict
 from decimal import Decimal,localcontext
 
 from .storage import connect, table_exists
+from .tvl import decimal
 
 VERSION = 'dated-accounting-1'
 FIELDS = ('chain_id','vault','name','category','version','asset_units','tvl_usd','external_tvl_usd')
@@ -43,6 +44,19 @@ def totals_ready(dataset):
         return table_exists(conn,'tvl_chart_publications') and conn.execute(
             'SELECT 1 FROM tvl_chart_publications WHERE dataset_id=? AND version=?',
             (dataset.id,VERSION+'+totals')).fetchone() is not None
+
+
+def populated_dates(dataset, timestamps):
+    """Keep dates with accounted rows, including rows with unavailable values."""
+    if not timestamps:
+        return ()
+    values = ','.join('(?)' for _ in timestamps)
+    statement = f"""SELECT requested.timestamp FROM (VALUES {values}) AS requested(timestamp)
+        WHERE EXISTS (SELECT 1 FROM tvl_chart_rows r
+            WHERE r.dataset_id=? AND r.timestamp=requested.timestamp)
+        ORDER BY requested.timestamp"""
+    with closing(connect(dataset.database, readonly=True)) as conn:
+        return tuple(row['timestamp'] for row in conn.execute(statement, (*timestamps, dataset.id)))
 
 
 def totals(dataset,timestamps,group,mode,chain_id=None):
@@ -171,9 +185,10 @@ def prepare_price_repair(dataset, previous):
         quotes={}
         for row in manifest.get('priceRejections',[]):
             coordinate=(row['chainId'],row['asset'].lower(),row['timestamp'])
-            if coordinate in quotes and quotes[coordinate]!=row['priceUsd']:
+            price = decimal(row['priceUsd'])
+            if coordinate in quotes and quotes[coordinate]!=price:
                 raise ValueError('price repair cannot use conflicting quotes at one rejection coordinate')
-            quotes[coordinate]=row['priceUsd']
+            quotes[coordinate]=price
         return {(*coordinate,price) for coordinate,price in quotes.items()}
     old=rejection_set(previous.manifest)
     new=rejection_set(dataset.manifest)

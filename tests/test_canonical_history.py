@@ -201,3 +201,74 @@ def test_postgres_canonical_history_preserves_dates_values_and_api(pg,tmp_path,m
     select_pairing('neon',*add_repairs('neon'),financial)
     tvl=publish_without_consolidating('neon',financial,history,monkeypatch)
     assert_consolidated('neon',tvl)
+
+
+@pytest.mark.parametrize('cached', [False, True])
+@pytest.mark.parametrize('route', ['/api/tvl', '/api/tvl/history/runs/latest',
+                                  '/api/tvl/history/runs/latest/constant-price'])
+def test_file_pin_fails_explicitly_after_observations_are_retired(legacy, cached, route):
+    from yearn_data.tvl_api import tvl_response
+    database, _, history, current, _ = legacy
+    old = next(path.stem for path in (history/'datasets').glob('*.json')
+               if path.stem != current.id)
+    store = TvlStore(database, history, auto_publish=False)
+    url = route+'?datasetId='+old
+    assert tvl_response(store, url)[0] == 200
+    consolidate(database, apply=True)
+    if not cached:
+        store = TvlStore(database, history, auto_publish=False)
+    status, body = tvl_response(store, url)
+    assert status == 410
+    assert 'retired' in body['error']
+    assert tvl_response(store, route+'?datasetId='+current.id)[0] == 200
+
+
+def test_file_pin_rechecks_consolidation_before_returning_success(legacy, monkeypatch):
+    from yearn_data.tvl_api import tvl_response
+    database, _, history, current, _ = legacy
+    old = next(path.stem for path in (history/'datasets').glob('*.json')
+               if path.stem != current.id)
+    store = TvlStore(database, history, auto_publish=False)
+    dataset = store.get(old)
+    original = dataset.summary
+    def consolidate_during_response(*args):
+        consolidate(database, apply=True)
+        return original(*args)
+    monkeypatch.setattr(dataset, 'summary', consolidate_during_response)
+    assert tvl_response(store, '/api/tvl?datasetId='+old)[0] == 410
+
+
+@pytest.mark.parametrize('keep_manifest', [False, True])
+def test_file_pin_handles_legacy_consolidation_receipts(legacy, keep_manifest):
+    from yearn_data.tvl_api import tvl_response
+    database, _, history, current, _ = legacy
+    old = next(path.stem for path in (history/'datasets').glob('*.json')
+               if path.stem != current.id)
+    consolidate(database, apply=True)
+    with closing(connect(database)) as conn:
+        row = conn.execute('SELECT id,receipt_json FROM canonical_history_receipts ORDER BY id DESC LIMIT 1').fetchone()
+        receipt = json.loads(row['receipt_json']); receipt.pop('tvlRunIds')
+        conn.execute('UPDATE canonical_history_receipts SET receipt_json=? WHERE id=?', (json.dumps(receipt), row['id']))
+        if not keep_manifest:
+            conn.execute("DELETE FROM api_manifests WHERE kind='tvl'")
+        conn.commit()
+    store = TvlStore(database, history, auto_publish=False)
+    assert tvl_response(store, '/api/tvl?datasetId='+old)[0] == 410
+    assert tvl_response(store, '/api/tvl?datasetId='+current.id)[0] == 200
+
+
+@pytest.mark.parametrize('hosted', [False, True])
+def test_receipt_is_checked_once_only_for_file_backed_responses(published, monkeypatch, hosted):
+    from yearn_data.tvl_api import tvl_response
+    database, _, history, _ = published
+    calls=[]; original=TvlDataset.assert_available
+    def check(dataset):
+        calls.append(dataset.id)
+        return original(dataset)
+    monkeypatch.setattr(TvlDataset, 'assert_available', check)
+    if hosted:
+        response = HostedAPI(database).response('/api/tvl/history/runs/latest')
+    else:
+        response = tvl_response(TvlStore(database, history, auto_publish=False), '/api/tvl/history/runs/latest')
+    assert response[0] == 200
+    assert len(calls) == (0 if hosted else 1)

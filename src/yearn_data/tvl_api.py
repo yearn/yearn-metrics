@@ -135,8 +135,8 @@ def publish_tvl(database, publication, *, current_bridge_policy='none'):
     (root/'datasets').mkdir(parents=True, exist_ok=True)
     manifest = context | {'datasetId': dataset_id, 'publishedAt': int(time.time())}
     target = root/'datasets'/f'{dataset_id}.json'
+    dataset = TvlDataset(manifest)
     if not target.exists():
-        dataset = TvlDataset(manifest)
         manifest['asOfTimestamp'] = dataset.as_of()
         _, rows, edges, diagnostics = dataset.frames((manifest['asOfTimestamp'],))[0]
         manifest['diagnostics'] = diagnostics | {
@@ -154,6 +154,10 @@ def publish_tvl(database, publication, *, current_bridge_policy='none'):
     return manifest
 
 
+class RetiredTvlDataset(ValueError):
+    """A publication no longer has all of its backing observations."""
+
+
 class TvlDataset:
     def __init__(self, manifest):
         self.manifest = manifest
@@ -164,7 +168,13 @@ class TvlDataset:
         self.allocators = {tuple(r) for r in manifest['allocatorKeys']}
         self.bridge_migrations = {(r['sourceChainId'],r['sourceVaultAddress'].lower()):r for r in manifest.get('bridgeMigrations',[])}
         self.base = max(self.run_ids)+1
-        self.price_rejections = {(r['chainId'],r['asset'].lower(),r['timestamp']): r for r in manifest.get('priceRejections',[])}
+        self.price_rejections = {}
+        for row in manifest.get('priceRejections', []):
+            coordinate = (row['chainId'], row['asset'].lower(), row['timestamp'])
+            previous = self.price_rejections.get(coordinate)
+            if previous is not None and decimal(previous['priceUsd']) != decimal(row['priceUsd']):
+                raise ValueError('TVL publication cannot use conflicting quotes at one rejection coordinate')
+            self.price_rejections[coordinate] = row
         self._lock = threading.RLock()
         self._pending = {}
         self._history_cache = OrderedDict()
@@ -177,6 +187,29 @@ class TvlDataset:
             from .tvl_history_cache import ready
             self._prepared=ready(self)
         return self._prepared
+
+    def assert_available(self):
+        # Check the durable receipt even for cached datasets. Consolidation keeps
+        # winners from this run union; a superset selects the same retained rows.
+        with closing(read_db(self.database)) as conn:
+            if not table_exists(conn, 'canonical_history_receipts'):
+                return
+            row = conn.execute('SELECT receipt_json FROM canonical_history_receipts ORDER BY id DESC LIMIT 1').fetchone()
+            if row is None:
+                return
+            receipt = json.loads(row[0])
+            canonical_id = receipt['selection']['tvlDatasetId']
+            if self.id == canonical_id:
+                return
+            required = receipt.get('tvlRunIds')
+            if required is None:
+                # Compatibility with receipts written before run provenance was
+                # included. The canonical manifest may already be retired too.
+                row = conn.execute("SELECT body_json FROM api_manifests WHERE kind='tvl' AND id=?", (canonical_id,)).fetchone()
+                if row is not None:
+                    required = [run['id'] for run in json.loads(row[0])['runs']]
+            if required is None or not set(required).issubset(self.run_ids):
+                raise RetiredTvlDataset('TVL dataset retired by canonical history consolidation; request the current dataset')
 
     @lru_cache(maxsize=1)
     def dates(self):
@@ -244,12 +277,17 @@ class TvlDataset:
         if chain_id is not None:
             where += ' AND chain_id=?'
             args += (chain_id,)
+        # Match the publication's accounting scope before selecting references.
+        for policy in self.manifest.get('vaultPolicies', []):
+            if policy.get('excludeFromTvl'):
+                where += ' AND NOT (chain_id=? AND lower(vault)=?)'
+                args += (policy['chainId'], policy['address'].lower())
         # Reject invalid quotes before ranking valid daily observations. Otherwise
         # seven rejected initial quotes can exhaust the reference window and hide
         # the later corrected canonical prices.
         rejected = []
         for (chain,asset,timestamp), quote in self.price_rejections.items():
-            rejected.append("(s.chain_id=? AND s.timestamp=? AND lower(json_extract(s.data_json,'$.asset'))=? AND CAST(json_extract(s.data_json,'$.price_usd') AS TEXT)=?)")
+            rejected.append("(s.chain_id=? AND s.timestamp=? AND lower(json_extract(s.data_json,'$.asset'))=? AND CAST(json_extract(s.data_json,'$.price_usd') AS NUMERIC)=CAST(? AS NUMERIC))")
             args += (chain,timestamp,asset,quote['priceUsd'])
         exclude = ' AND NOT ('+' OR '.join(rejected)+')' if rejected else ''
         sql = f'''WITH winners AS (
@@ -393,7 +431,8 @@ class TvlDataset:
         _, rows, _, diagnostics = self.frames((self.as_of(),), chain_id)[0]
         categories = {c: [r for r in rows if r.get('category', r['version']) == c] for c in CATEGORIES}
         active = [r for r in rows if self.catalog.get(key(r), {}).get('active', 1)]
-        retired = [r for r in rows if r not in active]
+        active_keys = {key(r) for r in active}
+        retired = [r for r in rows if key(r) not in active_keys]
         chain_rows = {CHAINS.get(c, f'Chain {c}'): [r for r in rows if r['chain_id'] == c] for c in sorted({r['chain_id'] for r in rows})}
         bridge = [r for r in rows if 'bridge_excluded_usd' in r]
         result = {'totalTvl': money(rows, 'external_tvl_usd'), 'activeVaultTvl': money(active, 'tvl_usd'),
@@ -402,8 +441,8 @@ class TvlDataset:
                   'tvlByChain': {c: money(rs, 'tvl_usd') for c, rs in chain_rows.items()},
                   'overlapByChain': {c: money(rs, 'overlap_usd') for c, rs in chain_rows.items()},
                   'crossChainOverlapByChain': {c: money([r for r in rs if 'bridge_excluded_usd' in r], 'bridge_excluded_usd') for c, rs in chain_rows.items()},
-                  'tvlByCategory': {c: money([r for r in rs if r in active], 'tvl_usd') for c, rs in categories.items()},
-                  'retiredTvlByCategory': {c: money([r for r in rs if r in retired], 'tvl_usd') for c, rs in categories.items()},
+                  'tvlByCategory': {c: money([r for r in rs if key(r) in active_keys], 'tvl_usd') for c, rs in categories.items()},
+                  'retiredTvlByCategory': {c: money([r for r in rs if key(r) not in active_keys], 'tvl_usd') for c, rs in categories.items()},
                   'crossChainOverlapByCategory': {c: money([r for r in rs if 'bridge_excluded_usd' in r], 'bridge_excluded_usd') for c, rs in categories.items()},
                   'vaultCount': {'total': len(rows), 'active': len(active), 'retired': len(retired), **{c:len(rs) for c,rs in categories.items()}},
                   'retiredVaults': [{'address':r['vault'],'chainId':r['chain_id'],'name':r.get('name'),
@@ -523,9 +562,9 @@ class TvlDataset:
     def _history(self, group, mode, interval, start, end, chain_id, constant, max_points=None):
         timestamps = self.sampled_dates(interval, start, end)
         if not constant and group in ('chain','category','type') and chain_id is None:
-            from .tvl_history_cache import totals_ready,totals
+            from .tvl_history_cache import totals_ready,totals,populated_dates
             if totals_ready(self):
-                chart={timestamp:{'timestamp':timestamp} for timestamp in timestamps}
+                chart={timestamp:{'timestamp':timestamp} for timestamp in populated_dates(self,timestamps)}
                 points=[]
                 for row in totals(self,timestamps,'category' if group=='type' else group,mode,chain_id):
                     value=float(Decimal(row['value']))
@@ -552,6 +591,8 @@ class TvlDataset:
         actual_chart, fixed_chart = [], []
         try:
             for timestamp, rows in frames:
+                if not rows:
+                    continue
                 actual, fixed = defaultdict(list), defaultdict(list)
                 for row in rows:
                     name = (CHAINS.get(row['chain_id'],f"Chain {row['chain_id']}") if group == 'chain' else
@@ -641,7 +682,7 @@ class TvlDataset:
         product_keys = {key(r) for r in selected}
         v2_keys = {key(r) for r in v2}
         pass_through = [e for e in positions if (e['chain_id'],e['parent'].lower()) in v2_keys
-                        and (e['chain_id'],e['child'].lower()) in product_keys]
+                        and (e.get('child_chain_id',e['chain_id']),e['child'].lower()) in product_keys]
         passed = money(pass_through, 'overlap_usd')
         gross_v2 = money(v2, 'tvl_usd')
         incremental = max(0, gross_v2-passed) if gross_v2 is not None and passed is not None else None
@@ -736,21 +777,29 @@ def tvl_response(store, url):
         if value('category') is not None and value('category') not in CATEGORIES:
             raise ValueError('unsupported TVL category')
         dataset = store.get(value('datasetId'))
-        if chain_id is not None and chain_id not in {c for c,_ in dataset.catalog}:
-            raise ValueError('unsupported TVL chain')
-        if request.path == '/api/tvl/graph':
-            result = dataset.graph(chain_id,value('category'),value('includeRetired','true')=='true')
-        elif request.path.startswith('/api/tvl/history'):
-            if group == 'vault' and len(dataset.sampled_dates(interval,start,end)) > PUBLIC_VAULT_HISTORY_MAX_DATES:
-                raise ValueError('vault history date limit exceeded; narrow the time range or use a coarser interval')
-            result = dataset.history(group,mode,interval,start,end,chain_id,request.path.endswith('/constant-price'),max_points=PUBLIC_HISTORY_MAX_POINTS)
-            if response_format=='chart':result=chart_response(result,top)
-        elif request.path.endswith('/curation-products'):
-            result = dataset.curation(chain_id)
-        elif request.path == '/api/audit/tree':
-            result = dataset.audit(chain_id)
-        else:
-            result = dataset.summary(chain_id)
+        try:
+            if chain_id is not None and chain_id not in {c for c,_ in dataset.catalog}:
+                raise ValueError('unsupported TVL chain')
+            if request.path == '/api/tvl/graph':
+                result = dataset.graph(chain_id,value('category'),value('includeRetired','true')=='true')
+            elif request.path.startswith('/api/tvl/history'):
+                if group == 'vault' and len(dataset.sampled_dates(interval,start,end)) > PUBLIC_VAULT_HISTORY_MAX_DATES:
+                    raise ValueError('vault history date limit exceeded; narrow the time range or use a coarser interval')
+                result = dataset.history(group,mode,interval,start,end,chain_id,request.path.endswith('/constant-price'),max_points=PUBLIC_HISTORY_MAX_POINTS)
+                if response_format=='chart':result=chart_response(result,top)
+            elif request.path.endswith('/curation-products'):
+                result = dataset.curation(chain_id)
+            elif request.path == '/api/audit/tree':
+                result = dataset.audit(chain_id)
+            else:
+                result = dataset.summary(chain_id)
+        finally:
+            # Check once after reads, including cached results and failed reads
+            # of retired rows. Hosted serving has its own release recheck.
+            if isinstance(store, TvlStore):
+                dataset.assert_available()
         return 200, result
+    except RetiredTvlDataset as error:
+        return 410, {'error':str(error)}
     except ValueError as error:
         return 400, {'error':str(error)}

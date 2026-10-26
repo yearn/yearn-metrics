@@ -373,7 +373,8 @@ def test_long_histories_keep_streaming_instead_of_filling_shared_cache(source, m
     assert [r['Ethereum'] for r in dataset.history(interval='daily')['chart']] == [100,200]
 
 
-def test_reference_skips_a_full_window_of_rejected_prices(source, monkeypatch):
+@pytest.mark.parametrize('rejected_price', ['72000000', '72000000.00', '7.2e7'])
+def test_reference_skips_a_full_window_of_rejected_prices(source, monkeypatch, rejected_price):
     import yearn_data.tvl_api as api
     conn,path,root = source
     asset='0x'+'aa'*20
@@ -382,7 +383,7 @@ def test_reference_skips_a_full_window_of_rejected_prices(source, monkeypatch):
         timestamp=DAY+index*86400
         run(conn,index+1,timestamp,[(PARENT,'720000000')])
         rejected.append({'chainId':1,'asset':asset,'timestamp':timestamp,
-                         'priceUsd':'72000000','reason':'verified_bad_quote'})
+                         'priceUsd':rejected_price,'reason':'verified_bad_quote'})
     run(conn,9,DAY+8*86400,[(PARENT,'10')])
     monkeypatch.setattr(api,'PRICE_REJECTIONS',rejected)
     store=TvlStore(path,root)
@@ -391,6 +392,11 @@ def test_reference_skips_a_full_window_of_rejected_prices(source, monkeypatch):
                                      'priceUsd':1,'source':'stored-tvl','depegCandidateSkipped':False}]
     assert result['constantPriceChart'][-1]['Ethereum'] == 10
     assert all(row == {'timestamp':DAY+index*86400} for index,row in enumerate(result['actualChart'][:-1]))
+    from yearn_data.tvl_history_cache import prepare
+    prepare(store.get())
+    prepared=api.TvlDataset(store.get().manifest).history(interval='daily',constant=True)
+    assert prepared['references']==result['references']
+    assert prepared['constantPriceChart']==result['constantPriceChart']
 
 
 def test_dated_bridge_cutoff_preserves_pre_migration_and_pinned_selection(source, monkeypatch):
@@ -584,6 +590,12 @@ def test_bridge_membership_survives_unavailable_valuation(source,bridge_value):
     for query in ('','?chainId=1'):
         status,summary=tvl_response(store,'/api/tvl'+query)
         assert status==200
+        assert summary['activeVaultTvl']==100
+        assert summary['retiredVaultTvl']==expected
+        assert summary['tvlByCategory']['v3']==100
+        assert summary['retiredTvlByCategory']['v3']==expected
+        assert summary['vaultCount']['active']==1
+        assert summary['vaultCount']['retired']==1
         assert summary['vaultBridgeExcluded']==expected
         assert summary['crossChainOverlapByChain']['Ethereum']==expected
         assert summary['crossChainOverlapByCategory']['v3']==expected
@@ -732,3 +744,119 @@ def test_katana_predeposits_excluded_before_and_after_migration(source, address)
     legacy['vaultPolicies'] = [p for p in legacy['vaultPolicies'] if p['address'].lower() != address]
     legacy['datasetId'] = 'legacy-predeposit-' + address
     assert [r['Ethereum'] for r in TvlDataset(legacy).history(interval='daily')['chart']] == [300, 200]
+
+
+@pytest.mark.parametrize('child_chain', [1, 10])
+@pytest.mark.parametrize('family', ['curation', 'allocator'])
+def test_curation_v2_pass_through_resolves_child_chain(source, child_chain, family):
+    conn, path, root = source
+    run(conn, 1, DAY, [(PARENT, '100'), (CHILD, '100')], [(CHILD, '50')])
+    for stored in conn.execute('SELECT vault,data_json FROM tvl_snapshots').fetchall():
+        row = json.loads(stored['data_json'])
+        if stored['vault'] == PARENT:
+            row.update(version='v2', category='v2')
+        else:
+            row.update(chain_id=child_chain, category='curation' if family == 'curation' else 'v3')
+        conn.execute('UPDATE tvl_snapshots SET chain_id=?,data_json=? WHERE vault=?',
+                     (row['chain_id'], json.dumps(row), stored['vault']))
+    edge = json.loads(conn.execute('SELECT data_json FROM tvl_positions').fetchone()[0])
+    if child_chain != 1:
+        edge.update(child_chain_id=child_chain, child_block_number=100+DAY)
+    conn.execute('UPDATE tvl_positions SET data_json=?', (json.dumps(edge),))
+    if family == 'allocator':
+        conn.execute("INSERT INTO strategy_reports (chain_id,vault_address,strategy_address,tx_hash,log_index,block_number,block_timestamp,version,gain_raw,loss_raw,net_raw,current_debt_raw) VALUES (?,?,?, ?,0,1,?,'v3','0','0','0','0')",
+                     (child_chain, CHILD, PARENT, '0x01', DAY))
+    conn.commit()
+    store = TvlStore(path, root)
+    status, products = tvl_response(store, '/api/tvl/curation-products')
+    assert status == 200
+    assert products['potentialV2'] == {
+        'grossTvlUsd': 100, 'knownPassThroughTvlUsd': 50,
+        'incrementalTvlUsd': 50, 'vaultCount': 1,
+        'note': 'Potential V2 product attribution remains separate from V3 and Morpho products',
+    }
+    assert products['vaults'][0]['chainId'] == child_chain
+
+
+@pytest.mark.parametrize('format', ['full', 'chart'])
+@pytest.mark.parametrize('chain_filter', ['', '&chainId=1'])
+def test_constant_history_excludes_policy_vault_references(source, monkeypatch, format, chain_filter):
+    from types import SimpleNamespace
+    from yearn_data import tvl_api as api
+    from yearn_data.tvl_history_cache import prepare
+    conn, path, root = source
+    run(conn, 1, DAY, [(PARENT, '100'), (CHILD, '200')])
+    monkeypatch.setattr(api, 'VAULT_POLICIES', [
+        {'chainId': 1, 'address': CHILD.upper(), 'version': 'v3',
+         'category': 'v3', 'excludeFromTvl': True},
+    ])
+    store = TvlStore(path, root)
+    dataset = store.get()
+    url = f'/api/tvl/history/runs/latest/constant-price?interval=daily&format={format}{chain_filter}'
+    status, unprepared = tvl_response(store, url)
+    assert status == 200
+    prepare(dataset)
+    prepared_store = SimpleNamespace(get=lambda _: api.TvlDataset(dataset.manifest))
+    status, prepared = tvl_response(prepared_store, url)
+    assert status == 200
+    assert unprepared == prepared
+    if format == 'full':
+        assert [r['vault'] for r in unprepared['references']] == ['1:' + PARENT]
+    else:
+        assert unprepared['meta']['referenceCount'] == 1
+
+
+@pytest.mark.parametrize('group', ['chain', 'category', 'type', 'vault'])
+def test_history_omits_empty_policy_dates_but_keeps_unvalued_dates(source, monkeypatch, group):
+    from types import SimpleNamespace
+    from yearn_data import tvl_api as api
+    from yearn_data.tvl_history_cache import prepare
+    conn, path, root = source
+    run(conn, 1, DAY, [(CHILD, '200')])
+    run(conn, 2, DAY+86400, [(PARENT, None)])
+    run(conn, 3, DAY+2*86400, [(PARENT, '100')])
+    monkeypatch.setattr(api, 'VAULT_POLICIES', [
+        {'chainId': 1, 'address': CHILD, 'version': 'v3', 'category': 'v3', 'excludeFromTvl': True},
+    ])
+    store = TvlStore(path, root)
+    dataset = store.get()
+    urls = [f'/api/tvl/history/runs/latest{suffix}?interval=daily&groupBy={group}&format={format}'
+            for suffix in ('', '/constant-price') for format in ('full', 'chart')]
+    before = [tvl_response(store, url) for url in urls]
+    prepare(dataset)
+    prepared_store = SimpleNamespace(get=lambda _: api.TvlDataset(dataset.manifest))
+    after = [tvl_response(prepared_store, url) for url in urls]
+    assert before == after
+    for status, result in after:
+        assert status == 200
+        for field in ('chart', 'actualChart', 'constantPriceChart'):
+            if field in result:
+                assert [row['timestamp'] for row in result[field]] == [DAY+86400, DAY+2*86400]
+                assert result[field][0] == {'timestamp': DAY+86400}
+    # Offline cached rows must obey the same empty-date rule as public streaming.
+    offline = api.TvlDataset(dataset.manifest)
+    monkeypatch.setattr(offline, 'history_prepared', lambda: False)
+    assert [row['timestamp'] for row in offline.history(group=group, interval='daily', constant=True)['chart']] == [DAY+86400, DAY+2*86400]
+
+
+def test_publish_rejects_conflicting_price_rejections(source, monkeypatch):
+    from yearn_data import tvl_api
+    conn, database, publication = source
+    run(conn, 1, DAY, [(PARENT, '100')])
+    quote = {'chainId':1, 'asset':'0x'+'aa'*20, 'timestamp':DAY, 'priceUsd':'10'}
+    monkeypatch.setattr(tvl_api, 'PRICE_REJECTIONS', [quote, quote | {'asset':quote['asset'].upper(), 'priceUsd':'20'}])
+    with pytest.raises(ValueError, match='conflicting quotes'):
+        tvl_api.publish_tvl(database, publication)
+    assert not (publication/'current.json').exists()
+
+
+@pytest.mark.parametrize('price', ['72000000.00', '7.2e7'])
+def test_publish_accepts_numerically_identical_rejections(source, monkeypatch, price):
+    from yearn_data import tvl_api
+    conn, database, publication = source
+    run(conn, 1, DAY, [(PARENT, '720000000')])
+    quote = {'chainId':1, 'asset':'0x'+'aa'*20, 'timestamp':DAY, 'priceUsd':'72000000', 'reason':'fixture'}
+    monkeypatch.setattr(tvl_api, 'PRICE_REJECTIONS', [quote, quote | {'priceUsd':price}])
+    manifest = tvl_api.publish_tvl(database, publication)
+    dataset = tvl_api.TvlDataset(manifest)
+    assert dataset.history(interval='daily')['chart'][0].get('Ethereum') is None

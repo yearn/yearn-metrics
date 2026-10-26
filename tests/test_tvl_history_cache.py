@@ -256,10 +256,10 @@ def test_repair_rejects_conflicting_quote_that_would_undo_prior_rejection(tmp_pa
     previous=TvlDataset(manifest);prepare(previous)
     updated=deepcopy(manifest);updated['datasetId']='e'*64
     updated['priceRejections'].append(rejected|{'priceUsd':'12'})
-    target=TvlDataset(updated)
     with pytest.raises(ValueError,match='conflicting quotes'):
-        prepare_price_repair(target,previous)
-    assert not ready(target)
+        prepare_price_repair(TvlDataset(updated),previous)
+    with closing(connect(path,readonly=True)) as conn:
+        assert conn.execute('SELECT 1 FROM tvl_chart_publications WHERE dataset_id=?', (updated['datasetId'],)).fetchone() is None
     assert previous.history(interval='daily')['chart'][0].get('Ethereum') is None
 
 
@@ -392,3 +392,34 @@ def test_price_repair_bounds_recalculation_and_copied_rows_to_publication(tmp_pa
     assert [point['Optimism'] for point in chart]==[100,100]
     assert chart[0].get('Ethereum')==(None if include_current else 100)
     assert chart[1]['Ethereum']==200
+
+
+@pytest.mark.parametrize('price', ['72000000.00', '7.2e7'])
+@pytest.mark.parametrize('add_rejection', [False, True])
+def test_price_repair_ignores_equivalent_quote_reformatting(tmp_path, monkeypatch, price, add_rejection):
+    from copy import deepcopy
+    from yearn_data.tvl_history_cache import prepare_price_repair
+    with closing(connect('staging')) as conn:
+        init_db(conn)
+        run(conn, 1, DAY, [(PARENT, '720000000')])
+        run(conn, 2, DAY+86400, [(PARENT, '720000000')])
+    manifest = deepcopy(TvlStore('staging', tmp_path/'tvl').get().manifest)
+    quote = {'chainId':1, 'asset':'0x'+'aa'*20, 'timestamp':DAY, 'priceUsd':'72000000', 'reason':'fixture'}
+    manifest.update(datasetId='d'*64, priceRejections=[quote])
+    previous = TvlDataset(manifest); prepare(previous)
+    updated = deepcopy(manifest); updated['datasetId']='e'*64
+    updated['priceRejections'][0]['priceUsd'] = price
+    if add_rejection:
+        updated['priceRejections'].append(quote | {'timestamp':DAY+86400})
+    target = TvlDataset(updated)
+    calls=[]; original=target.iter_frames
+    def frames(dates, *args, **kwargs):
+        calls.append(tuple(dates))
+        yield from original(dates, *args, **kwargs)
+    monkeypatch.setattr(target, 'iter_frames', frames)
+    expected = [DAY+86400] if add_rejection else []
+    assert prepare_price_repair(target, previous)['recomputedDates'] == expected
+    assert calls == [tuple(expected)]
+    chart = target.history(interval='daily')['chart']
+    assert chart[0].get('Ethereum') is None
+    assert chart[1].get('Ethereum') == (None if add_rejection else 720000000)
