@@ -1,9 +1,17 @@
 /** Opt-in real-browser comparison. URLs remain environment-only; outputs redact origins. */
 import fs from 'node:fs'
 import { createHash } from 'node:crypto'
-const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || '/home/dev/raaaws/yearn-powerglove/node_modules/playwright/index.mjs')
 const targets = { before: process.env.POWERGLOVE_BEFORE_URL, after: process.env.POWERGLOVE_AFTER_URL }
 if (!targets.before || !targets.after) throw Error('Set POWERGLOVE_BEFORE_URL and POWERGLOVE_AFTER_URL')
+let chromium
+try {
+ const playwright = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
+ chromium = playwright.chromium
+} catch (error) {
+ if (error.code !== 'ERR_MODULE_NOT_FOUND') throw error
+ console.error('Playwright is unavailable. Install playwright in a location Node can resolve from this script, or set PLAYWRIGHT_MODULE to an installed Playwright ESM entry point (absolute path or file URL).')
+ process.exit(1)
+}
 const hash = v => createHash('sha256').update(typeof v === 'string' ? v : JSON.stringify(v)).digest('hex')
 const safe = value => value.replace(/https?:\/\/[^/\s"']+/g, '<origin>')
 const output = process.env.POWERGLOVE_BENCHMARK_OUTPUT || '/tmp/cumulative-powerglove-browser.json'

@@ -158,7 +158,13 @@ that every financial policy is correct.
 Use `scripts/benchmark_powerglove_browser.mjs` with private before/after preview
 origins in `POWERGLOVE_BEFORE_URL` and `POWERGLOVE_AFTER_URL`. These origins are
 supplied only through the environment and never retained in this report or raw
-bundle. `PLAYWRIGHT_MODULE` can point to an installed Playwright ESM entry point.
+bundle. Playwright is an external prerequisite: install `playwright` where Node
+can resolve it from the script, or set `PLAYWRIGHT_MODULE` to an installed
+Playwright ESM entry point (absolute path or file URL). Install Chromium for that
+Playwright version before running browser measurements (`playwright install chromium`
+using that installation's CLI). The script defaults to the ordinary `playwright`
+package import. This module-resolution portability follow-up was made after the
+frozen run; the raw bundle retains the original measurement script's hash.
 `POWERGLOVE_REPEATS` sets pairs, `POWERGLOVE_PAIR_OFFSET` preserves alternating
 order across invocations, and `POWERGLOVE_BENCHMARK_OUTPUT` chooses the JSON file.
 Optional `POWERGLOVE_PAYLOAD_DIR` retains local response payloads for exact
