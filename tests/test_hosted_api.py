@@ -234,7 +234,7 @@ def test_compact_financial_rows_match_without_analysis_outputs(published, route)
     assert HostedAPI(database).response(route) == expected
 
 
-@pytest.mark.parametrize('encoding,compressed', [('gzip',True), ('gzip;q=0',False), ('identity',False)])
+@pytest.mark.parametrize('encoding,compressed', [('gzip',True), ('gzip;q=0',False), ('identity',False), ('gzip;Q=0',False), ('Gzip;Q=0.5',True)])
 def test_http_compression(monkeypatch, encoding, compressed):
     import gzip
     from urllib.request import Request

@@ -325,7 +325,7 @@ def test_yvusd_product_includes_both_lockers_and_preserves_underlying_earnings()
     assert fees[1]['vault_address'] != VAULT
 
 
-@pytest.mark.parametrize('encoding,compressed',[('GZIP',True),('Gzip',True),('gzip;q=0',False)])
+@pytest.mark.parametrize('encoding,compressed',[('GZIP',True),('Gzip',True),('gzip;q=0',False),('gzip;Q=0',False),('Gzip;Q=0.5',True)])
 def test_pairing_compression_encoding_case(monkeypatch,encoding,compressed):
     import gzip
     import threading
