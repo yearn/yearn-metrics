@@ -16,7 +16,7 @@ from .tvl_api import CHAINS, encoded, key, money
 
 DAY = 86400
 YEAR = 365 * DAY
-VERSION = 'powerglove-analytics-22'
+VERSION = 'powerglove-analytics-24'
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS analytics_inputs (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, observed_at INTEGER NOT NULL,
@@ -367,18 +367,25 @@ def owned_comparison(tvl, rows, snapshots):
     available=all(v is not None for v in totals)
     retained=any(r.get('retainedAfterUnavailableRetry') for r in refs.values())
     total=sum(totals) if available else None
-    ours=money(rows,'external_tvl_usd')
+    unavailable=[{'chainId':r['chain_id'],'vaultAddress':r['vault'],'reason':'counted TVL unavailable'}
+                 for r in rows if r.get('external_tvl_usd') is None]
+
+    def complete_total(scope):
+        # A known subtotal cannot be reconciled against a complete external total.
+        return None if any(r.get('external_tvl_usd') is None for r in scope) else money(scope,'external_tvl_usd')
+
+    ours=complete_total(rows)
     difference=ours-total if ours is not None and total is not None else None
     by_chain=[]
     local_chains={CHAINS.get(r['chain_id'],f"Chain {r['chain_id']}") for r in rows}
     for chain in sorted(set(CHAINS.values())|local_chains|{name for r in snapshots for name in r.get('byChain',{})}):
-        local=money([r for r in rows if CHAINS.get(r['chain_id'],f"Chain {r['chain_id']}")==chain],'external_tvl_usd')
+        local=complete_total([r for r in rows if CHAINS.get(r['chain_id'],f"Chain {r['chain_id']}")==chain])
         chain_values=[refs.get(protocol,{}).get('byChain',{}).get(chain) for protocol in ('yearn-finance','yearn-curating')]
         external=sum(chain_values) if available and all(value is not None for value in chain_values) else None
         by_chain.append({'chain':chain,'ours':local,'defillama':external,'difference':local-external if local is not None and external is not None else None})
     categories=[]
     for label,protocol,curation in [('V1 + V2 + V3','yearn-finance',False),('Curation','yearn-curating',True)]:
-        local=money([r for r in rows if (r.get('category')=='curation')==curation],'external_tvl_usd')
+        local=complete_total([r for r in rows if (r.get('category')=='curation')==curation])
         external=refs.get(protocol,{}).get('total')
         categories.append({'category':label,'defillamaProtocol':protocol,'ours':local,'defillama':external,'difference':local-external if local is not None and external is not None else None})
     summary=tvl.summary()
@@ -388,7 +395,8 @@ def owned_comparison(tvl, rows, snapshots):
         'retiredTvlByChain':{name:money([r for r in rows if CHAINS.get(r['chain_id'],f"Chain {r['chain_id']}")==name
                             and not getattr(tvl,'catalog',{}).get(key(r),{}).get('active',1)],'tvl_usd')
                            for name in summary.get('tvlByChain',{})},'notes':[], 'byChain':by_chain,'byCategory':categories,
-        'datasetId':tvl.id,'availability':{'state':'partial' if available and retained else 'available' if available else 'unavailable','references':snapshots}}
+        'datasetId':tvl.id,'availability':{'state':'partial' if available and (retained or unavailable) else 'available' if available else 'unavailable',
+                                        'unavailableTvlVaults':unavailable,'references':snapshots}}
 
 
 class AnalyticsStore:

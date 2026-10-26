@@ -157,14 +157,14 @@ def asset_units(raw, decimals):
         return Decimal(int(raw)) / Decimal(10) ** int(decimals)
 
 
-def account(snapshots, positions, *, include_curation=False, deduct_internal_curation=True,
-            vault_policies=VAULT_POLICIES, target_corrections=TARGET_CORRECTIONS):
+def account(snapshots, positions, *, include_curation=True, deduct_internal_curation=True,
+            require_complete_ownership=True, vault_policies=VAULT_POLICIES, target_corrections=TARGET_CORRECTIONS):
     """Deduct each actual holding once, capped by parent debt and child TVL.
 
     A shared holder's balance is split among its parents by recorded debt. Several
     child positions share that same debt budget. This prevents duplicate deductions.
-    Curation remains a separate product layer unless explicitly combined, but
-    holdings within curation are always netted in new publications.
+    Curated vaults share the same ownership ledger. Legacy publications can
+    retain their separate-product policy and known-subtotal row semantics.
     """
     excluded = {(p['chainId'],p['address'].lower()) for p in vault_policies if p.get('excludeFromTvl')}
     snapshots = [classify_vault(s,vault_policies) for s in snapshots
@@ -175,15 +175,16 @@ def account(snapshots, positions, *, include_curation=False, deduct_internal_cur
         ctx.prec = 78
         return _account(snapshots, positions, include_curation=include_curation,
                         deduct_internal_curation=deduct_internal_curation,
-                        target_corrections=target_corrections)
+                        target_corrections=target_corrections, require_complete_ownership=require_complete_ownership)
 
 
-def _account(snapshots, positions, *, include_curation, deduct_internal_curation, target_corrections):
+def _account(snapshots, positions, *, include_curation, deduct_internal_curation, target_corrections, require_complete_ownership):
     by_key = {(s['chain_id'], s['vault'].lower()): s for s in snapshots}
     adjustments = defaultdict(lambda: Decimal(0))
     edges = [dict(p, overlap_usd=None, accounting_unresolved=False) for p in positions]
     groups = defaultdict(list)
     issues = []
+    unavailable_children = set()
     corrections = {(r['chainId'],r['strategyAddress'].lower(),old.lower()):r['targetVaultAddress'].lower()
                    for r in target_corrections for old in r['supersededTargetVaultAddresses']}
 
@@ -215,6 +216,9 @@ def _account(snapshots, positions, *, include_curation, deduct_internal_curation
                     and (edge['chain_id'],edge['parent'].lower()) in by_key):
                 edge.update(status='unavailable',accounting_unresolved=True)
                 issues.append(edge['reason'])
+                # The corrected destination has unknown ownership until a dated
+                # replacement is observed; never relabel the stale balance.
+                unavailable_children.add((edge['chain_id'], replacement))
             continue
         if edge.get('method') == 'strategy-allocation':
             if (edge.get('reason') == 'unresolved_adapter_mapping'
@@ -248,6 +252,7 @@ def _account(snapshots, positions, *, include_curation, deduct_internal_curation
             edge['reason'] = edge.get('reason') or 'missing_position_valuation'
             issues.append(edge['reason'])
             edge['accounting_unresolved'] = True
+            unavailable_children.add((child_chain, edge['child'].lower()))
             continue
         kind = 'recorded-debt' if edge.get('method') == 'direct-strategy' else 'held-shares'
         groups[(edge['chain_id'], edge['strategy'].lower(), kind)].append(edge)
@@ -289,17 +294,22 @@ def _account(snapshots, positions, *, include_curation, deduct_internal_curation
         value = decimal(s.get('tvl_usd'))
         row['overlap_usd'] = str(adjustments[key]) if value is not None else None
         row['external_tvl_usd'] = str(max(Decimal(0), value - adjustments[key])) if value is not None else None
+        if require_complete_ownership and key in unavailable_children:
+            row['overlap_usd'] = None
+            row['external_tvl_usd'] = None
         rows.append(row)
     valued = [r for r in rows if r['tvl_usd'] is not None]
     complete = len(valued) == len(rows) and not issues
     gross = sum((decimal(r['tvl_usd']) for r in valued), Decimal(0))
     overlap = sum(adjustments.values(), Decimal(0))
+    known_external = sum((decimal(r['external_tvl_usd']) for r in rows
+                          if r['external_tvl_usd'] is not None), Decimal(0))
     summary = {'timestamp': snapshots[0]['timestamp'] if snapshots else None,
                'gross_tvl_usd': str(gross) if complete else None,
                'overlap_usd': str(overlap) if complete else None,
                'external_tvl_usd': str(max(Decimal(0), gross-overlap)) if complete else None,
                'known_gross_tvl_usd': str(gross), 'known_overlap_usd': str(overlap),
-               'known_external_tvl_usd': str(max(Decimal(0), gross-overlap)),
+               'known_external_tvl_usd': str(known_external),
                'vault_count': len(rows), 'valued_vault_count': len(valued),
                'position_count': len(edges), 'unresolved_positions': len(issues),
                'status': 'complete' if complete else 'incomplete',
@@ -307,7 +317,7 @@ def _account(snapshots, positions, *, include_curation, deduct_internal_curation
     return rows, edges, summary
 
 
-def export_tvl(conn, out, run_id=None, *, include_curation=False):
+def export_tvl(conn, out, run_id=None, *, include_curation=True):
     if run_id is None:
         row = conn.execute("SELECT id FROM tvl_runs WHERE status IN ('complete','incomplete') ORDER BY id DESC LIMIT 1").fetchone()
         if row is None:
@@ -324,9 +334,12 @@ def export_tvl(conn, out, run_id=None, *, include_curation=False):
     for row in conn.execute('SELECT data_json FROM tvl_positions WHERE run_id=? ORDER BY timestamp,chain_id,parent,strategy,child', (run_id,)):
         data = json.loads(row['data_json'])
         positions[data['timestamp']].append(data)
+    # The export opt-out retains both legacy layering and legacy availability.
+    require_complete_ownership = include_curation
     output = {'vaults': [], 'positions': [], 'history': []}
     for timestamp, points in snapshots.items():
-        rows, edges, summary = account(points, positions[timestamp], include_curation=include_curation)
+        rows, edges, summary = account(points, positions[timestamp], include_curation=include_curation,
+                                       require_complete_ownership=require_complete_ownership)
         output['vaults'].extend(rows)
         output['positions'].extend(edges)
         output['history'].append(summary)
@@ -341,6 +354,7 @@ def export_tvl(conn, out, run_id=None, *, include_curation=False):
     metadata = dict(run)
     metadata['params'] = json.loads(metadata.pop('params_json'))
     metadata['include_curation'] = include_curation
+    metadata['require_complete_ownership'] = require_complete_ownership
     metadata['mapping_scope'] = 'known candidates; positive share scans expand coverage, absence is not proof of no nesting'
     (out / 'tvl.json').write_text(json.dumps({'run': metadata, **output}, indent=2) + '\n')
     return out

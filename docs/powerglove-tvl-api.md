@@ -138,7 +138,8 @@ HTTP 400 with guidance to narrow the time range or grouping, regardless of full
 or chart format or `top`. These are serving limits; offline dataset preparation
 and analytics can still process complete history.
 
-Bridge exclusion membership is retained even when valuation is unavailable.
+For vaults within the publication reporting scope, dated bridge exclusion
+membership is retained even when valuation is unavailable.
 Summary, audit and graph bridge totals return null when exclusions exist but none
 can be valued, and zero when there are no exclusions. Mixed scopes sum known
 values, matching other TVL aggregates; audit and graph lists retain unvalued
@@ -148,8 +149,11 @@ Native accounting caps verified nested holdings by both parent and child TVL.
 The graph accepts `chainId`, `category`, `includeRetired`, and `datasetId`.
 See [TVL overlap conditions](tvl-overlaps.md) for its flow-versus-deduction fields,
 router and wrapper corrections, cross-chain verification, and review procedure.
-The headline retains the existing service's separate curation-layer convention;
-the curation-product view explicitly deducts verified curated child ownership.
+New publications include curated vaults in the same canonical ownership ledger:
+Yearn-owned deposits reduce the receiving vault's external TVL, including holdings
+routed through strategies. The manifest pins this as `ownershipAccounting:
+all-yearn-v1`; older publications retain their separate curation-layer convention.
+See [canonical ownership](canonical-tvl-ownership.md) for availability and rollout.
 Powerglove uses external TVL directly rather than scaling raw historical values to
 match today's headline. Constant-price history freezes each vault's asset-unit
 price at a reference inside the requested window, using the existing first-seven
@@ -157,11 +161,45 @@ observation outlier rule. It applies the dated external fraction to those values
 It measures asset-unit change at frozen prices, not independently reconstructed
 net deposit flows; share-token assets retain their stored share-unit definition.
 
-The four Ethereum Katana pre-deposit vaults are excluded from external TVL from
-June 30, 2025 at 13:06:47 UTC (09:06:47 Eastern), inclusive. Before that cutoff,
-their TVL remains included even though today's catalogue marks them inactive.
-Raw history retains the stored balances throughout. Both actual and constant-price
-history apply the same dated external fraction.
+The four Ethereum Katana pre-deposit vaults (USDC, WETH, USDT and WBTC) are
+excluded across all history in new publications, including before their June 30,
+2025 migration. This is an explicit reporting-scope decision, not a claim that
+pre-migration assets were already held on Katana. Katana vault balances remain
+included on their own dates; no balances are moved or backfilled onto Katana.
+
+The all-history rule is frozen in `vaultPolicies` and applies to actual and
+constant-price charts, chain/version/vault breakdowns, and reporting totals.
+Raw-mode API charts also respect this reporting scope; stored observations remain
+unchanged in the source database for audit. Older dataset IDs retain the original
+dated exclusion.
+
+All-history exclusions are removed before dated bridge accounting. These four
+vaults therefore contribute nothing to `vaultBridgeExcluded`,
+`crossChainOverlapByChain`, `crossChainOverlapByCategory`, or the graph
+`totalBridgeExcludedTvlUsd`. With no other bridge exclusions, those totals are
+zero, audit `crossChainVaults` and graph `bridgeExclusions` are empty, and frame
+diagnostics contain no bridge-excluded balance. These fields describe dated
+bridge deductions within reporting scope, not the balances removed by policy.
+
+There is no public API route for the policy-excluded balances, including raw-mode
+history. Auditors need authorized source database access: query `tvl_snapshots`
+by `chain_id = 1`, the vault address, and the publication manifest
+`runs[].id` values as `run_id`; `timestamp` and `data_json` retain the original
+dated valuations.
+The manifest `vaultPolicies` identifies the excluded addresses. Do not sum all
+matching observations: select one row per `(chain_id, vault, timestamp)`, preferring
+non-null `tvl_usd`, then non-null `asset_units`, then unavailable rows. Within each
+quality tier, the greatest `run_id` wins. Apply the manifest's frozen
+`priceRejections` to the selected row: an exact chain/asset/timestamp/price match
+makes its price and TVL unavailable, without falling back to an older quote.
+`TvlDataset.selected_rows(conn, 'tvl_snapshots', timestamps, chain_id=1)` implements
+both steps before the reporting-policy filter; filter its output to the excluded
+addresses. See [Publication and automatic selection](#publication-and-automatic-selection).
+These selected source valuations are not part of the reported TVL totals; reproducing
+an older publication's external or constant-price series also requires that
+publication's dated ownership fractions and reference-price rules.
+Deploying the inventory alone does not rewrite an existing publication: prepare
+and select a new publication to make the change visible to Powerglove.
 
 The registry stores the migration timestamp, Ethereum block 22817424, destination
 network ID 20 and transaction
@@ -170,7 +208,8 @@ This transaction set all four deposit limits to zero and bridged their USDC, USD
 WBTC and ETH positions to Katana. The publication freezes this evidence under
 `bridgeMigrations`; older dataset IDs retain their original accounting context
 while available, subject to the HTTP 410 retirement contract above.
-Excluded parent positions remain in diagnostics but no longer deduct child TVL.
+Dated bridge-excluded parent positions may remain in diagnostics but no longer
+deduct child TVL; this does not preserve policy-excluded vault balances in the API.
 
 Undated bridge registry entries retain the optional latest-close retirement
 fallback. It is never projected backward into history. Verified migration dates

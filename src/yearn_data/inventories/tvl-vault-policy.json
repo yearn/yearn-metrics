@@ -34,5 +34,41 @@
     "excludeFromTvl": true,
     "scope": "all-history",
     "reason": "Turtle Club Katana predeposit excluded by reporting policy; not a separate curation product"
+  },
+  {
+    "chainId": 1,
+    "address": "0x7B5A0182E400b241b317e781a4e9dEdFc1429822",
+    "version": "v3",
+    "category": "v3",
+    "excludeFromTvl": true,
+    "scope": "all-history",
+    "reason": "Ethereum Katana pre-deposit vault excluded across all history by reporting policy; Katana vault TVL remains included"
+  },
+  {
+    "chainId": 1,
+    "address": "0xcc6a16Be713f6a714f68b0E1f4914fD3db15fBeF",
+    "version": "v3",
+    "category": "v3",
+    "excludeFromTvl": true,
+    "scope": "all-history",
+    "reason": "Ethereum Katana pre-deposit vault excluded across all history by reporting policy; Katana vault TVL remains included"
+  },
+  {
+    "chainId": 1,
+    "address": "0x48c03B6FfD0008460F8657Db1037C7e09dEedfcb",
+    "version": "v3",
+    "category": "v3",
+    "excludeFromTvl": true,
+    "scope": "all-history",
+    "reason": "Ethereum Katana pre-deposit vault excluded across all history by reporting policy; Katana vault TVL remains included"
+  },
+  {
+    "chainId": 1,
+    "address": "0x92C82f5F771F6A44CfA09357DD0575B81BF5F728",
+    "version": "v3",
+    "category": "v3",
+    "excludeFromTvl": true,
+    "scope": "all-history",
+    "reason": "Ethereum Katana pre-deposit vault excluded across all history by reporting policy; Katana vault TVL remains included"
   }
 ]

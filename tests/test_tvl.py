@@ -6,7 +6,7 @@ import pytest
 from yearn_data.storage import connect, init_db
 from yearn_data.tvl import account, asset_units, export_tvl
 from yearn_data.tvl_sources import ArchiveReader, collect_tvl, scan_holders, candidate_edges
-from yearn_data.cli import main
+from yearn_data.cli import build_parser, main
 
 
 def address(n):
@@ -47,7 +47,8 @@ def edge(parent,strategy,child,debt,owned,chain=1):
 
 @pytest.mark.parametrize('replacement', ['missing', 'verified', 'wrong-block', 'wrong-parent',
                                        'wrong-date', 'no-getter', 'failed', 'missing-value', 'zero'])
-def test_superseded_registry_position_needs_dated_replacement(replacement):
+@pytest.mark.parametrize('require_complete_ownership', [True, False])
+def test_superseded_registry_position_needs_dated_replacement(replacement, require_complete_ownership):
     correction = {'chainId':1,'strategyAddress':address(9),'targetVaultAddress':address(3),
                   'supersededTargetVaultAddresses':[address(2)]}
     stale = dict(edge(1,9,2,'50','80'), method='service-registry', block_number=123)
@@ -62,7 +63,8 @@ def test_superseded_registry_position_needs_dated_replacement(replacement):
     if replacement == 'zero': repaired.update(debt_usd='0', owned_usd=None)
     positions = [stale] + ([] if replacement == 'missing' else [repaired])
     rows, positions, total = account([snapshot(i,'100') for i in (1,2,3)], positions,
-                                    target_corrections=[correction])
+                                    target_corrections=[correction],
+                                    require_complete_ownership=require_complete_ownership)
     assert rows[1]['external_tvl_usd'] == '100'
     assert positions[0]['overlap_usd'] == '0'
     assert positions[0]['accounting_excluded'] is True
@@ -75,6 +77,10 @@ def test_superseded_registry_position_needs_dated_replacement(replacement):
         assert total['status'] == 'incomplete'
         assert total['external_tvl_usd'] is None
         assert 'superseded_registry_target' in total['issues']
+        if require_complete_ownership:
+            assert rows[2]['overlap_usd'] is None
+            assert rows[2]['external_tvl_usd'] is None
+            assert total['known_external_tvl_usd'] == '200'
     # No rewriting or relabelling of raw historical ownership.
     assert stale['owned_usd'] == '80' and stale['child'] == address(2)
 
@@ -122,7 +128,7 @@ def test_incoming_and_parent_tvl_caps(child_tvl,deductions,external):
 
 def test_curation_is_an_explicit_accounting_choice():
     points=[snapshot(1,'100'),snapshot(2,'100','curation')]
-    assert account(points,[edge(1,9,2,'100','100')])[2]['external_tvl_usd']=='200'
+    assert account(points,[edge(1,9,2,'100','100')],include_curation=False)[2]['external_tvl_usd']=='200'
     assert account(points,[edge(1,9,2,'100','100')],include_curation=True)[2]['external_tvl_usd']=='100'
 
 
@@ -130,13 +136,13 @@ def test_curation_nesting_is_deducted_without_merging_product_layers():
     points=[snapshot(1,'100'),snapshot(2,'100','morpho-v2') | {'category':'curation'},
             snapshot(3,'110','morpho-v1') | {'category':'curation'}]
     positions=[edge(1,8,2,'100','100'),edge(2,9,3,'100','105')]
-    rows,edges,total=account(points,positions)
+    rows,edges,total=account(points,positions,include_curation=False)
     assert [r['external_tvl_usd'] for r in rows]==['100','100','10']
     assert total['external_tvl_usd']=='210'
     assert edges[0]['reason']=='curation_separate_product'
     assert edges[1]['overlap_usd']=='100'
     assert account(points,positions,include_curation=True)[2]['external_tvl_usd']=='110'
-    assert account(points,positions,deduct_internal_curation=False)[2]['external_tvl_usd']=='310'
+    assert account(points,positions,include_curation=False,deduct_internal_curation=False)[2]['external_tvl_usd']=='310'
 
 
 def test_internal_curation_missing_price_is_unavailable_not_zero_overlap():
@@ -323,7 +329,7 @@ def test_curated_product_can_have_v3_contract_semantics():
     child=snapshot(2,'100','v3')
     child['category']='curation'
     positions=[edge(1,2,2,'60','100')]
-    assert Decimal(account([snapshot(1,'100'),child],positions)[2]['external_tvl_usd'])==200
+    assert Decimal(account([snapshot(1,'100'),child],positions,include_curation=False)[2]['external_tvl_usd'])==200
     assert Decimal(account([snapshot(1,'100'),child],positions,include_curation=True)[2]['external_tvl_usd'])==140
 
 
@@ -444,3 +450,17 @@ def test_nested_valuation_without_a_known_leaf_stays_unavailable(tmp_path,monkey
     assert data['history'][0]['status']=='incomplete'
     assert data['history'][0]['external_tvl_usd'] is None
     conn.close()
+
+
+@pytest.mark.parametrize('flags,expected', [([], True), (['--include-curation'], True), (['--no-include-curation'], False)])
+def test_tvl_export_curation_option(flags, expected, db, tmp_path, monkeypatch):
+    from yearn_data import tvl
+    argv = ['--db', 'staging', 'tvl', 'export', '--out', str(tmp_path / 'out'), *flags]
+    assert build_parser().parse_args(argv).include_curation is expected
+    calls = []
+    def capture(conn, out, run_id, *, include_curation):
+        calls.append(include_curation)
+        return out
+    monkeypatch.setattr(tvl, 'export_tvl', capture)
+    assert main(argv) == 0
+    assert calls == [expected]

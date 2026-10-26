@@ -126,6 +126,7 @@ def publish_tvl(database, publication, *, current_bridge_policy='none'):
                 "SELECT DISTINCT chain_id,lower(vault_address) FROM strategy_reports WHERE version='v3'")]
     context = {'runs': runs, 'catalog': catalog, 'allocatorKeys': sorted(allocator_keys),
                'deductInternalCuration': True,
+               'ownershipAccounting': 'all-yearn-v1',
                'vaultPolicies': VAULT_POLICIES, 'targetCorrections': TARGET_CORRECTIONS,
                'currentBridgePolicy': current_bridge_policy, 'selectionPolicy': 'known-value-then-newest-finished-common-close-8', 'bridgeMigrations': BRIDGE_MIGRATIONS, 'priceRejections': PRICE_REJECTIONS,
                'historicalBridgePolicy': 'dated-evidence-only', 'database': database_reference(database)}
@@ -305,7 +306,7 @@ class TvlDataset:
         for row in conn.execute(sql,args):
             yield self.validate_price(json.loads(row['data_json']))
 
-    def frames(self, timestamps, chain_id=None, include_curation=False, include_retired=True):
+    def frames(self, timestamps, chain_id=None, include_curation=None, include_retired=True):
         # Normalize positional/keyword calls and share accounting across chains.
         frames = self._network_frames(tuple(timestamps), include_curation, include_retired)
         if chain_id is None:
@@ -319,9 +320,12 @@ class TvlDataset:
     def _network_frames(self, timestamps, include_curation, include_retired):
         return tuple(self.iter_frames(timestamps, None, include_curation, include_retired))
 
-    def iter_frames(self, timestamps, chain_id=None, include_curation=False, include_retired=True):
+    def iter_frames(self, timestamps, chain_id=None, include_curation=None, include_retired=True):
         if not timestamps:
             return
+        canonical_ownership = self.manifest.get('ownershipAccounting') == 'all-yearn-v1'
+        if include_curation is None:
+            include_curation = canonical_ownership
         if chain_id is not None:
             # Cross-chain ownership must be accounted with both endpoints, then
             # attributed to the receiving chain. Filtering first loses the edge.
@@ -348,16 +352,20 @@ class TvlDataset:
                 rows = [r for r in rows if include_retired or self.catalog.get(key(r),{}).get('active',1)]
                 yield timestamp, rows, positions, diagnostics
 
-    def account_frame(self, timestamp, points, positions, *, include_curation=False):
+    def account_frame(self, timestamp, points, positions, *, include_curation=None):
         """Account one captured close without accessing storage."""
+        canonical_ownership = self.manifest.get('ownershipAccounting') == 'all-yearn-v1'
+        if include_curation is None:
+            include_curation = canonical_ownership
         by_key = {key(row): row for row in points}
         for edge in positions:
             parent = by_key.get((edge['chain_id'], edge['parent'].lower()))
             if parent and edge.get('block_number') != parent.get('block_number'):
                 edge.update(status='unavailable', reason='selected_block_mismatch')
-            if edge.get('child_chain_id') is not None and decimal(edge.get('debt_usd')) != 0:
-                child = by_key.get((edge['child_chain_id'],edge['child'].lower()))
-                if child and edge.get('child_block_number') != child.get('block_number'):
+            if (canonical_ownership or edge.get('child_chain_id') is not None) and decimal(edge.get('debt_usd')) != 0:
+                child = by_key.get((edge.get('child_chain_id',edge['chain_id']),edge['child'].lower()))
+                child_block = edge.get('child_block_number') if edge.get('child_chain_id') is not None else edge.get('block_number')
+                if child and child_block != child.get('block_number'):
                     edge.update(status='unavailable', reason='selected_child_block_mismatch')
         excluded = set()
         for point in points:
@@ -379,6 +387,7 @@ class TvlDataset:
         rows, positions, diagnostics = account(account_points, included_positions,
             include_curation=include_curation,
             deduct_internal_curation=self.manifest.get('deductInternalCuration',False),
+            require_complete_ownership=canonical_ownership,
             vault_policies=self.manifest.get('vaultPolicies',[]),
             target_corrections=self.manifest.get('targetCorrections',[]))
         positions.extend(dict(edge,overlap_usd='0',accounting_excluded=True,reason='bridge_parent_excluded') for edge in excluded_positions)
@@ -661,6 +670,7 @@ class TvlDataset:
         selected = [r for r in all_rows if self.catalog.get(key(r),{}).get('active',1) and
                     (r.get('category')=='curation' or key(r) in self.allocators)]
         rows, edges, _ = account(selected, positions, include_curation=True,
+                                 require_complete_ownership=self.manifest.get('ownershipAccounting') == 'all-yearn-v1',
                                  vault_policies=self.manifest.get('vaultPolicies', []),
                                  target_corrections=self.manifest.get('targetCorrections', []))
         def family(row):

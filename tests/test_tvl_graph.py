@@ -91,7 +91,7 @@ def test_shared_holder_does_not_duplicate_parent_debt_or_child_holdings(source):
     assert g['totalRawTvlUsd']==900 and g['totalTvlUsd']==700
 
 
-def test_curation_flow_is_visible_without_changing_headline_policy(source):
+def test_curation_flow_is_deducted_in_canonical_headline(source):
     conn,path,root=source
     run(conn,1,DAY,[(PARENT,'100'),(CHILD,'100')])
     row=json.loads(conn.execute('SELECT data_json FROM tvl_snapshots WHERE vault=?',(CHILD,)).fetchone()[0])
@@ -100,8 +100,8 @@ def test_curation_flow_is_visible_without_changing_headline_policy(source):
     router(conn)
     g=TvlStore(path,root).get().graph()
     flow=next(e for e in g['edges'] if e['kind']=='registry')
-    assert flow['tvlUsd']==80 and flow['deductedTvlUsd']==0
-    assert g['totalTvlUsd']==200 and g['totalOverlapTvlUsd']==0
+    assert flow['tvlUsd']==80 and flow['deductedTvlUsd']==80
+    assert g['totalTvlUsd']==120 and g['totalOverlapTvlUsd']==80
 
 
 @pytest.mark.parametrize('curation', [False, True])
@@ -197,7 +197,9 @@ def test_cross_chain_graph_and_chain_summary_account_before_filtering(source, mo
     revised=TvlStore(path,root).get()
     _,_,positions,diagnostics=revised.frames((DAY,))[0]
     assert positions[0]['reason']=='selected_child_block_mismatch'
-    assert diagnostics['status']=='incomplete' and revised.summary(10)['overlapExcluded']==0
+    assert diagnostics['status']=='incomplete' and revised.summary(10)['overlapExcluded'] is None
+    assert revised.summary(10)['totalTvl'] is None
+    assert revised.graph(10)['totalOverlapTvlUsd'] is None
     assert revised.graph(1)['diagnostics']['unresolvedPositions'] == 1
     assert revised.graph(10)['diagnostics']['unresolvedPositions'] == 1
     assert revised.graph(137)['diagnostics']['unresolvedPositions'] == 0
