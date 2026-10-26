@@ -121,3 +121,29 @@ def test_same_chain_child_valuation_must_match_holdings_block(source):
     assert positions[0]['reason'] == 'selected_child_block_mismatch'
     assert next(r for r in rows if r['vault'] == CHILD)['external_tvl_usd'] is None
     assert dataset.graph()['totalOverlapTvlUsd'] == 0  # Unavailable is not a $200 deduction.
+
+
+def test_incomplete_ownership_keeps_gross_and_partial_evidence_distinct(source):
+    conn, path, root = source
+    other_parent = '0x' + '66' * 20
+    run(conn, 1, DAY, [(PARENT, '100'), (CHILD, '200'), (other_parent, '100')], [(CHILD, '30')])
+    stored = conn.execute('SELECT data_json FROM tvl_positions').fetchone()[0]
+    missing = json.loads(stored)
+    missing.update(parent=other_parent, strategy=other_parent, owned_usd=None, debt_usd='50')
+    conn.execute('INSERT INTO tvl_positions VALUES (?,?,?,?,?,?,?)',
+                 (1, 1, other_parent, other_parent, CHILD, DAY, json.dumps(missing)))
+    conn.commit()
+    dataset = TvlStore(path, root).get()
+    _, rows, positions, diagnostics = dataset.frames((DAY,))[0]
+    child = next(row for row in rows if row['vault'] == CHILD)
+    assert child['tvl_usd'] == '200'
+    assert child['overlap_usd'] is child['external_tvl_usd'] is None
+    assert diagnostics['known_gross_tvl_usd'] == '400'
+    assert Decimal(diagnostics['known_overlap_usd']) == 30
+    assert diagnostics['known_external_tvl_usd'] == '200'
+    assert diagnostics['external_tvl_usd'] is None
+    assert sum(Decimal(p['overlap_usd']) for p in positions if p['overlap_usd'] is not None) == 30
+    summary = dataset.summary()
+    assert summary['tvlByChain']['Ethereum'] == 400
+    assert summary['totalTvl'] == 200
+    assert summary['overlapExcluded'] == 0  # No complete child-level deduction is available.

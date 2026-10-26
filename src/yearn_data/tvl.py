@@ -216,6 +216,9 @@ def _account(snapshots, positions, *, include_curation, deduct_internal_curation
                     and (edge['chain_id'],edge['parent'].lower()) in by_key):
                 edge.update(status='unavailable',accounting_unresolved=True)
                 issues.append(edge['reason'])
+                # The corrected destination has unknown ownership until a dated
+                # replacement is observed; never relabel the stale balance.
+                unavailable_children.add((edge['chain_id'], replacement))
             continue
         if edge.get('method') == 'strategy-allocation':
             if (edge.get('reason') == 'unresolved_adapter_mapping'

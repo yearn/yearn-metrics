@@ -129,7 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
     tvl_export = tvl_sub.add_parser("export", help="Export vaults, positions, and aggregate history")
     tvl_export.add_argument("--out", required=True)
     tvl_export.add_argument("--run-id", type=int)
-    tvl_export.add_argument("--include-curation", action="store_true", default=True, help="Deduct curated child ownership (now always enabled)")
+    tvl_export.add_argument("--include-curation", action=argparse.BooleanOptionalAction, default=True, help="Deduct curated child ownership (default: enabled; --no-include-curation uses the separate-product convention)")
 
     pairing_p = sub.add_parser("select-pairing", help="Select completed earnings/fees for Powerglove without changing source data")
     pairing_p.add_argument("--earnings-run-id", type=int, required=True)

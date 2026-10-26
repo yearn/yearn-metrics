@@ -27,6 +27,21 @@ vault values rather than inserting zero. Prepared history and constant-price
 history preserve those distinctions. Graph deductions sum available accounting
 evidence, rather than treating a missing adjusted value as a deduction.
 
+Diagnostic `known_gross_tvl_usd` sums observed gross values, including vaults whose
+ownership is incomplete. `known_overlap_usd` sums verified position deductions,
+including partial evidence for such vaults. `known_external_tvl_usd` sums only
+available vault-level external values. These are independently known subtotals,
+not a reconciled equation when ownership is incomplete. For example, two $100
+parents and a $200 child with one verified $30 holding and one unknown holding
+produce known gross $400, known overlap $30 and known external $200. The child's
+full external value and overlap remain null; its missing value is not a $200
+deduction. Public `overlapExcluded` sums only available vault-level overlap values
+($0 in this example), while the position evidence retains the verified $30.
+
+`tvl export` uses unified curation deductions by default. `--include-curation`
+keeps that default; `--no-include-curation` explicitly selects the separate-product
+export convention. This export switch does not change a publication's policy.
+
 Powerglove's existing contract consumes these values directly:
 
 | Surface | Canonical field |

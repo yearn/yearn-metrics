@@ -140,8 +140,15 @@ def test_registry_correction_applies_to_history_and_is_pinned(source, monkeypatc
          'supersededTargetVaultAddresses':[old_child]}])
     corrected = TvlStore(path,root).get()
     assert corrected.id != old.id
+    assert corrected.summary()['totalTvl'] == 200
+    assert [r['Ethereum'] for r in corrected.history(interval='daily')['chart']] == [200, 200]
+    legacy = dict(corrected.manifest, datasetId='legacy-corrected')
+    legacy.pop('ownershipAccounting')
+    assert tvl_api.TvlDataset(legacy).summary()['totalTvl'] == 300
     for _, rows, edges, diagnostics in corrected.frames(corrected.dates()):
         assert next(r for r in rows if r['vault']==old_child)['external_tvl_usd'] == '100'
+        target = next(r for r in rows if r['vault']==CHILD)
+        assert target['external_tvl_usd'] is target['overlap_usd'] is None
         assert edges[0]['overlap_usd'] == '0'
         assert diagnostics['status'] == 'incomplete'
         assert diagnostics['external_tvl_usd'] is None
