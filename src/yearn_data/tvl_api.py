@@ -631,7 +631,7 @@ class TvlDataset:
         product_keys = {key(r) for r in selected}
         v2_keys = {key(r) for r in v2}
         pass_through = [e for e in positions if (e['chain_id'],e['parent'].lower()) in v2_keys
-                        and (e['chain_id'],e['child'].lower()) in product_keys]
+                        and (e.get('child_chain_id',e['chain_id']),e['child'].lower()) in product_keys]
         passed = money(pass_through, 'overlap_usd')
         gross_v2 = money(v2, 'tvl_usd')
         incremental = max(0, gross_v2-passed) if gross_v2 is not None and passed is not None else None

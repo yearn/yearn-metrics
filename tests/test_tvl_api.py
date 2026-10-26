@@ -661,3 +661,35 @@ def test_public_chain_history_matches_prepared_dates(source,monkeypatch,suffix,f
     assert streamed==prepared
     for field in ('chart','actualChart','constantPriceChart'):
         if field in streamed:assert [r['timestamp'] for r in streamed[field]]==[DAY+86400]
+
+
+@pytest.mark.parametrize('child_chain', [1, 10])
+@pytest.mark.parametrize('family', ['curation', 'allocator'])
+def test_curation_v2_pass_through_resolves_child_chain(source, child_chain, family):
+    conn, path, root = source
+    run(conn, 1, DAY, [(PARENT, '100'), (CHILD, '100')], [(CHILD, '50')])
+    for stored in conn.execute('SELECT vault,data_json FROM tvl_snapshots').fetchall():
+        row = json.loads(stored['data_json'])
+        if stored['vault'] == PARENT:
+            row.update(version='v2', category='v2')
+        else:
+            row.update(chain_id=child_chain, category='curation' if family == 'curation' else 'v3')
+        conn.execute('UPDATE tvl_snapshots SET chain_id=?,data_json=? WHERE vault=?',
+                     (row['chain_id'], json.dumps(row), stored['vault']))
+    edge = json.loads(conn.execute('SELECT data_json FROM tvl_positions').fetchone()[0])
+    if child_chain != 1:
+        edge.update(child_chain_id=child_chain, child_block_number=100+DAY)
+    conn.execute('UPDATE tvl_positions SET data_json=?', (json.dumps(edge),))
+    if family == 'allocator':
+        conn.execute("INSERT INTO strategy_reports (chain_id,vault_address,strategy_address,tx_hash,log_index,block_number,block_timestamp,version,gain_raw,loss_raw,net_raw,current_debt_raw) VALUES (?,?,?, ?,0,1,?,'v3','0','0','0','0')",
+                     (child_chain, CHILD, PARENT, '0x01', DAY))
+    conn.commit()
+    store = TvlStore(path, root)
+    status, products = tvl_response(store, '/api/tvl/curation-products')
+    assert status == 200
+    assert products['potentialV2'] == {
+        'grossTvlUsd': 100, 'knownPassThroughTvlUsd': 50,
+        'incrementalTvlUsd': 50, 'vaultCount': 1,
+        'note': 'Potential V2 product attribution remains separate from V3 and Morpho products',
+    }
+    assert products['vaults'][0]['chainId'] == child_chain
