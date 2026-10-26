@@ -564,3 +564,74 @@ def test_pairing_comparison_is_served_only_by_prepared_analytics(source,monkeypa
         return server
     monkeypatch.setattr(pairing,'ThreadingHTTPServer',create_server)
     pairing.serve_pairing('unused',tvl_publication=publication,analytics=analytics_enabled)
+
+
+@pytest.mark.parametrize('bridge_value', [None,'0','50'])
+def test_bridge_membership_survives_unavailable_valuation(source,bridge_value):
+    conn,path,root=source
+    run(conn,1,DAY,[(PARENT,'100'),(BRIDGE,bridge_value)])
+    store=TvlStore(path,root,current_bridge_policy='retired-registry')
+    expected=None if bridge_value is None else float(bridge_value)
+    for query in ('','?chainId=1'):
+        status,summary=tvl_response(store,'/api/tvl'+query)
+        assert status==200
+        assert summary['vaultBridgeExcluded']==expected
+        assert summary['crossChainOverlapByChain']['Ethereum']==expected
+        assert summary['crossChainOverlapByCategory']['v3']==expected
+        assert summary['crossChainOverlapByCategory']['v2']==0
+        _,audit=tvl_response(store,'/api/audit/tree'+query)
+        assert audit['crossChainOverlap']==expected
+        assert [(r['address'],r['tvlUsd']) for r in audit['crossChainVaults']]==[(BRIDGE,expected)]
+        _,graph=tvl_response(store,'/api/tvl/graph'+query)
+        assert graph['totalBridgeExcludedTvlUsd']==expected
+        assert [(r['address'],r['tvlUsd']) for r in graph['bridgeExclusions']]==[(BRIDGE,expected)]
+    assert store.get().graph(chain_id=10)['totalBridgeExcludedTvlUsd']==0
+
+
+@pytest.mark.parametrize('suffix', ['', '/constant-price'])
+@pytest.mark.parametrize('format', ['full','chart'])
+def test_public_vault_history_rejects_oversized_window_before_work(source,monkeypatch,suffix,format):
+    conn,path,root=source;run(conn,1,DAY,[(PARENT,'100')])
+    store=TvlStore(path,root);dataset=store.get()
+    monkeypatch.setattr(dataset,'sampled_dates',lambda *args:tuple(range(367)))
+    monkeypatch.setattr(dataset,'history',lambda *args,**kwargs:pytest.fail('oversized history was computed'))
+    status,result=tvl_response(store,f'/api/tvl/history/runs/latest{suffix}?groupBy=vault&interval=daily&format={format}')
+    assert status==400 and 'limit' in result['error']
+
+
+@pytest.mark.parametrize('prepared', [False,True])
+@pytest.mark.parametrize('chain', [None,1])
+def test_public_history_point_limit_and_cache_budget(source,monkeypatch,prepared,chain):
+    from yearn_data import tvl_api as api
+    conn,path,root=source
+    for i in range(3):run(conn,i+1,DAY+i*86400,[(PARENT,'100'),(CHILD,'200')])
+    store=TvlStore(path,root);dataset=store.get()
+    if prepared:
+        from yearn_data.tvl_history_cache import prepare
+        prepare(dataset)
+    opened=[]
+    original=api.read_db
+    def track(database):
+        connection=original(database);opened.append(connection);return connection
+    monkeypatch.setattr(api,'read_db',track)
+    monkeypatch.setattr(api,'PUBLIC_HISTORY_MAX_POINTS',2)
+    url='/api/tvl/history/runs/latest?groupBy=vault&interval=daily'+('&chainId=1' if chain else '')
+    status,result=tvl_response(store,url)
+    assert status==400 and 'limit' in result['error']
+    assert all(connection.raw.closed for connection in opened)
+    assert tvl_response(store,url+f'&from={DAY+2*86400}')[0]==200
+    # Ordinary offline history is not constrained by the public response budget.
+    assert len(dataset.history(group='vault',interval='daily')['points'])==6
+    monkeypatch.setattr(api,'HISTORY_RESPONSE_CACHE_BYTES',1000)
+    for start in (DAY,DAY+1,DAY+86401):dataset.history(start=start)
+    assert dataset._history_cache_bytes<=1000
+
+
+def test_public_history_bounds_reference_metadata(source,monkeypatch):
+    from yearn_data import tvl_api as api
+    conn,path,root=source;run(conn,1,DAY,[(PARENT,'100')])
+    store=TvlStore(path,root)
+    monkeypatch.setattr(api,'PUBLIC_HISTORY_MAX_BYTES',100)
+    status,result=tvl_response(store,'/api/tvl/history/runs/latest/constant-price?groupBy=vault')
+    assert status==400 and 'size limit' in result['error']
+    assert not store.get()._history_cache

@@ -124,6 +124,19 @@ it does not sum daily TVL. Empty dates and artificial zero baselines are not add
 The legacy `includeCurrent` parameter is accepted; current means the latest stored
 close, never a live RPC snapshot.
 
+Public history requests are limited to 50,000 series/date points and 8 MiB of
+serialized JSON, including reference metadata. Vault-grouped
+requests are also limited to 366 sampled dates. Exceeding either limit returns
+HTTP 400 with guidance to narrow the time range or grouping, regardless of full
+or chart format or `top`. These are serving limits; offline dataset preparation
+and analytics can still process complete history.
+
+Bridge exclusion membership is retained even when valuation is unavailable.
+Summary, audit and graph bridge totals return null when exclusions exist but none
+can be valued, and zero when there are no exclusions. Mixed scopes sum known
+values, matching other TVL aggregates; audit and graph lists retain unvalued
+excluded vaults with null `tvlUsd`.
+
 Native accounting caps verified nested holdings by both parent and child TVL.
 The graph accepts `chainId`, `category`, `includeRetired`, and `datasetId`.
 See [TVL overlap conditions](tvl-overlaps.md) for its flow-versus-deduction fields,
@@ -177,6 +190,9 @@ database. The shared row cache is bounded to four windows of at most 400
 observed dates; longer histories keep streaming. Reference prices are cached
 separately for eight daily windows, independent of chart grouping. Explicit
 all-time first/last bounds share the same response cache as omitted bounds.
+Response caching is limited to 8 MiB of serialized JSON and 32 entries per dataset;
+oversized results are not retained. Public requests stream source rows rather than
+filling the shared row cache with attacker-selected date windows.
 Concurrent requests for identical source work join that calculation, while
 current summaries and unrelated reads remain available. The reference-price SQL
 sorts observation identities rather than full snapshot payloads.

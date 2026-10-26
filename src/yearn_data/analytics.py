@@ -16,7 +16,7 @@ from .tvl_api import CHAINS, encoded, key, money
 
 DAY = 86400
 YEAR = 365 * DAY
-VERSION = 'powerglove-analytics-21'
+VERSION = 'powerglove-analytics-22'
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS analytics_inputs (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, observed_at INTEGER NOT NULL,
@@ -373,7 +373,8 @@ def owned_comparison(tvl, rows, snapshots):
     local_chains={CHAINS.get(r['chain_id'],f"Chain {r['chain_id']}") for r in rows}
     for chain in sorted(set(CHAINS.values())|local_chains|{name for r in snapshots for name in r.get('byChain',{})}):
         local=money([r for r in rows if CHAINS.get(r['chain_id'],f"Chain {r['chain_id']}")==chain],'external_tvl_usd')
-        external=sum(r.get('byChain',{}).get(chain,0) for r in snapshots) if available else None
+        chain_values=[refs.get(protocol,{}).get('byChain',{}).get(chain) for protocol in ('yearn-finance','yearn-curating')]
+        external=sum(chain_values) if available and all(value is not None for value in chain_values) else None
         by_chain.append({'chain':chain,'ours':local,'defillama':external,'difference':local-external if local is not None and external is not None else None})
     categories=[]
     for label,protocol,curation in [('V1 + V2 + V3','yearn-finance',False),('Curation','yearn-curating',True)]:

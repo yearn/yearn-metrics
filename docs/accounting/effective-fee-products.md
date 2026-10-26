@@ -93,7 +93,7 @@ yvUSD external TVL. The previous TVL release
 `b04af26bf93ac8065d439063d2c788abb9274f3728b80d2ba0b6faba8c32c113` was retained at that rollout.
 
 That rollout used `powerglove-analytics-5`. Current publication jobs use
-`powerglove-analytics-21`, matching `analytics.VERSION`. Reprepare analytics to
+`powerglove-analytics-22`, matching `analytics.VERSION`. Reprepare analytics to
 serve retained-fee provenance and current comparison-evidence validation.
 
 

@@ -37,7 +37,7 @@ def _build_graph(dataset, rows, positions, diagnostics, *, chain_id, category, i
         meta = dataset.catalog.get((row['chain_id'],row['vault'].lower()),{})
         if identity in hidden_ids:
             continue
-        if row.get('bridge_excluded_usd') is not None:
+        if 'bridge_excluded_usd' in row:
             bridges.append({'sourceNodeId':identity,'chainId':row['chain_id'],'address':row['vault'],
                             'name':row.get('name'),'category':row.get('category',row['version']),
                             'targetChainId':row['bridge_target_chain'],'tvlUsd':amount(row['bridge_excluded_usd']),
@@ -169,12 +169,13 @@ def _build_graph(dataset, rows, positions, diagnostics, *, chain_id, category, i
                           if (p['chain_id'], p['parent'].lower()) in scope_keys
                           or (p.get('child_chain_id', p['chain_id']), p['child'].lower()) in scope_keys)
 
+    from .tvl_api import money
+    bridge_rows = [r for r in scope_rows if 'bridge_excluded_usd' in r]
     raw, external = total('tvl_usd'), total('external_tvl_usd')
     return {'datasetId':dataset.id,'asOfTimestamp':dataset.as_of(),'snapshotAt':dataset.as_of(),
             'totalTvlUsd':external,'totalRawTvlUsd':raw,
             'totalOverlapTvlUsd':total('overlap_usd'),
-            'totalBridgeExcludedTvlUsd':float(sum((decimal(r['bridge_excluded_usd']) for r in scope_rows
-                                                 if r.get('bridge_excluded_usd') is not None),Decimal(0))),
+            'totalBridgeExcludedTvlUsd':money(bridge_rows,'bridge_excluded_usd'),
             'nodes':sorted(selected,key=lambda n:(-n['rawTvlUsd'],n['id'])),
             'edges':sorted(edges,key=lambda e:(-e['tvlUsd'],e['id'])),
             'bridgeExclusions':sorted(bridges,key=lambda b:b['sourceNodeId']),

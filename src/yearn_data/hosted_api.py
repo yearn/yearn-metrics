@@ -112,7 +112,7 @@ class Handler(BaseHTTPRequestHandler):
         gzip_allowed = False
         for encoding in self.headers.get('Accept-Encoding', '').split(','):
             parts = encoding.strip().split(';')
-            if parts[0].lower() == 'gzip':
+            if parts[0].strip().lower() == 'gzip':
                 quality = next((p.strip()[2:] for p in parts[1:] if p.strip().lower().startswith('q=')), '1')
                 try:
                     gzip_allowed = 0 < float(quality) <= 1

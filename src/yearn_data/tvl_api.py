@@ -1,7 +1,7 @@
 """Read-only TVL publications assembled from accumulated finished collection runs."""
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from concurrent.futures import Future
 from contextlib import closing
 from datetime import datetime, timezone
@@ -25,6 +25,10 @@ CHAINS = {1: 'Ethereum', 10: 'Optimism', 100: 'Gnosis', 137: 'Polygon', 250: 'Fa
           999: 'HyperEVM', 4663: 'Yeer', 8453: 'Base', 42161: 'Arbitrum', 747474: 'Katana'}
 CATEGORIES = ('v1', 'v2', 'v3', 'curation')
 HISTORY_CACHE_MAX_DATES = 400
+PUBLIC_VAULT_HISTORY_MAX_DATES = 366
+PUBLIC_HISTORY_MAX_POINTS = 50_000
+PUBLIC_HISTORY_MAX_BYTES = 8 * 1024 * 1024
+HISTORY_RESPONSE_CACHE_BYTES = 8 * 1024 * 1024
 BRIDGE_MIGRATIONS = [r for r in json.loads((Path(__file__).parent/'inventories'/'tvl-overlaps.json').read_text())['bridges'] if r.get('migrationTimestamp') is not None]
 PRICE_REJECTIONS = json.loads((Path(__file__).parent/'inventories'/'tvl-price-rejections.json').read_text())
 
@@ -162,6 +166,8 @@ class TvlDataset:
         self.price_rejections = {(r['chainId'],r['asset'].lower(),r['timestamp']): r for r in manifest.get('priceRejections',[])}
         self._lock = threading.RLock()
         self._pending = {}
+        self._history_cache = OrderedDict()
+        self._history_cache_bytes = 0
         self._prepared = None
 
     def history_prepared(self):
@@ -281,10 +287,11 @@ class TvlDataset:
         if chain_id is not None:
             # Cross-chain ownership must be accounted with both endpoints, then
             # attributed to the receiving chain. Filtering first loses the edge.
-            for timestamp,rows,positions,diagnostics in self.iter_frames(timestamps,None,include_curation,include_retired):
-                selected = [r for r in rows if r['chain_id']==chain_id]
-                related = [p for p in positions if p['chain_id']==chain_id or p.get('child_chain_id',p['chain_id'])==chain_id]
-                yield timestamp,selected,related,diagnostics
+            with closing(self.iter_frames(timestamps,None,include_curation,include_retired)) as frames:
+                for timestamp,rows,positions,diagnostics in frames:
+                    selected = [r for r in rows if r['chain_id']==chain_id]
+                    related = [p for p in positions if p['chain_id']==chain_id or p.get('child_chain_id',p['chain_id'])==chain_id]
+                    yield timestamp,selected,related,diagnostics
             return
         with closing(read_db(self.database)) as conn, conn:
             snapshots = groupby(self.selected_rows(conn, 'tvl_snapshots', timestamps, chain_id), lambda r: r['timestamp'])
@@ -379,16 +386,16 @@ class TvlDataset:
         active = [r for r in rows if self.catalog.get(key(r), {}).get('active', 1)]
         retired = [r for r in rows if r not in active]
         chain_rows = {CHAINS.get(c, f'Chain {c}'): [r for r in rows if r['chain_id'] == c] for c in sorted({r['chain_id'] for r in rows})}
-        bridge = [r for r in rows if r.get('bridge_excluded_usd') is not None]
+        bridge = [r for r in rows if 'bridge_excluded_usd' in r]
         result = {'totalTvl': money(rows, 'external_tvl_usd'), 'activeVaultTvl': money(active, 'tvl_usd'),
                   'retiredVaultTvl': money(retired, 'tvl_usd'), 'overlapExcluded': money(rows, 'overlap_usd'),
                   'vaultBridgeExcluded': money(bridge, 'bridge_excluded_usd') if bridge else 0,
                   'tvlByChain': {c: money(rs, 'tvl_usd') for c, rs in chain_rows.items()},
                   'overlapByChain': {c: money(rs, 'overlap_usd') for c, rs in chain_rows.items()},
-                  'crossChainOverlapByChain': {c: money([r for r in rs if 'bridge_excluded_usd' in r], 'bridge_excluded_usd') or 0 for c, rs in chain_rows.items()},
+                  'crossChainOverlapByChain': {c: money([r for r in rs if 'bridge_excluded_usd' in r], 'bridge_excluded_usd') for c, rs in chain_rows.items()},
                   'tvlByCategory': {c: money([r for r in rs if r in active], 'tvl_usd') for c, rs in categories.items()},
                   'retiredTvlByCategory': {c: money([r for r in rs if r in retired], 'tvl_usd') for c, rs in categories.items()},
-                  'crossChainOverlapByCategory': {c: money([r for r in rs if 'bridge_excluded_usd' in r], 'bridge_excluded_usd') or 0 for c, rs in categories.items()},
+                  'crossChainOverlapByCategory': {c: money([r for r in rs if 'bridge_excluded_usd' in r], 'bridge_excluded_usd') for c, rs in categories.items()},
                   'vaultCount': {'total': len(rows), 'active': len(active), 'retired': len(retired), **{c:len(rs) for c,rs in categories.items()}},
                   'retiredVaults': [{'address':r['vault'],'chainId':r['chain_id'],'name':r.get('name'),
                                     'category':r.get('category',r['version']),'tvlUsd':float(decimal(r['tvl_usd'])) if r['tvl_usd'] is not None else None,
@@ -469,7 +476,7 @@ class TvlDataset:
             reference_prices[identity] = chosen[1]
         return references, reference_prices
 
-    def history(self, group='chain', mode='external', interval='weekly', start=None, end=None, chain_id=None, constant=False):
+    def history(self, group='chain', mode='external', interval='weekly', start=None, end=None, chain_id=None, constant=False, *, max_points=None):
         # Canonicalize all-time bounds before caching: explicit first/last closes
         # and omitted bounds select the same observations and reference window.
         dates = self.dates()
@@ -477,10 +484,33 @@ class TvlDataset:
             start = None
         if end is not None and end >= self.as_of():
             end = None
-        return self._history(group,mode,interval,start,end,chain_id,constant)
+        identity = (group,mode,interval,start,end,chain_id,constant,max_points)
+        with self._lock:
+            cached = self._history_cache.get(identity)
+            if cached is not None:
+                self._history_cache.move_to_end(identity)
+                return cached[1]
+        result = self.compute_once(('history',*identity), lambda:self._history(*identity))
+        # Bound retained response bytes, not just the number of date-range keys.
+        if result['pointCount'] <= PUBLIC_HISTORY_MAX_POINTS:
+            size = len(encoded(result).encode())
+            if max_points is not None and size > PUBLIC_HISTORY_MAX_BYTES:
+                raise ValueError('history response size limit exceeded; narrow the time range or grouping')
+            with self._lock:
+                if identity not in self._history_cache and size <= HISTORY_RESPONSE_CACHE_BYTES:
+                    while self._history_cache and (self._history_cache_bytes + size > HISTORY_RESPONSE_CACHE_BYTES or len(self._history_cache) >= 32):
+                        _, (old_size, _) = self._history_cache.popitem(last=False)
+                        self._history_cache_bytes -= old_size
+                    self._history_cache[identity] = (size,result)
+                    self._history_cache_bytes += size
+        return result
 
-    @lru_cache(maxsize=32)
-    def _history(self, group, mode, interval, start, end, chain_id, constant):
+    def streamed_history_rows(self, timestamps, chain_id):
+        with closing(self.iter_frames(timestamps,chain_id)) as frames:
+            for timestamp,rows,_,_ in frames:
+                yield timestamp,rows
+
+    def _history(self, group, mode, interval, start, end, chain_id, constant, max_points=None):
         timestamps = self.sampled_dates(interval, start, end)
         if not constant and group in ('chain','category','type') and chain_id is None:
             from .tvl_history_cache import totals_ready,totals
@@ -490,6 +520,8 @@ class TvlDataset:
                 for row in totals(self,timestamps,'category' if group=='type' else group,mode,chain_id):
                     value=float(Decimal(row['value']))
                     chart[row['timestamp']][row['series']]=value
+                    if max_points is not None and len(points) >= max_points:
+                        raise ValueError('history point limit exceeded; narrow the time range or grouping')
                     points.append({'timestamp':row['timestamp'],'series':row['series'],'tvlUsd':value})
                 return self.history_result(group,mode,interval,start,end,timestamps,points,list(chart.values()))
         # Long daily histories remain streamed instead of retaining millions of
@@ -498,8 +530,8 @@ class TvlDataset:
             from .tvl_history_cache import rows
             frames=rows(self,timestamps,chain_id)
         else:
-            frames = (self.history_rows(timestamps, chain_id) if len(timestamps) <= HISTORY_CACHE_MAX_DATES
-                      else ((timestamp,rows) for timestamp,rows,_,_ in self.iter_frames(timestamps,chain_id)))
+            frames = (self.history_rows(timestamps, chain_id) if max_points is None and len(timestamps) <= HISTORY_CACHE_MAX_DATES
+                      else self.streamed_history_rows(timestamps,chain_id))
         references = {}
         reference_prices = {}
         if constant:
@@ -508,35 +540,41 @@ class TvlDataset:
             references, reference_prices = self.price_references(window, chain_id)
         points = []
         actual_chart, fixed_chart = [], []
-        for timestamp, rows in frames:
-            actual, fixed = defaultdict(list), defaultdict(list)
-            for row in rows:
-                name = (CHAINS.get(row['chain_id'],f"Chain {row['chain_id']}") if group == 'chain' else
-                        row.get('category',row['version']) if group in ('category','type') else
-                        f"{row.get('name') or row['vault']} ({row['chain_id']}:{row['vault'][:8]})")
-                field = 'external_tvl_usd' if mode == 'external' else 'tvl_usd'
-                value = decimal(row.get(field))
-                if value is not None:
-                    actual[name].append(value)
-                reference = references.get(key(row))
-                units, raw = decimal(row.get('asset_units')), decimal(row.get('tvl_usd'))
-                if reference and units is not None and value is not None and raw is not None:
+        try:
+            for timestamp, rows in frames:
+                actual, fixed = defaultdict(list), defaultdict(list)
+                for row in rows:
+                    name = (CHAINS.get(row['chain_id'],f"Chain {row['chain_id']}") if group == 'chain' else
+                            row.get('category',row['version']) if group in ('category','type') else
+                            f"{row.get('name') or row['vault']} ({row['chain_id']}:{row['vault'][:8]})")
+                    field = 'external_tvl_usd' if mode == 'external' else 'tvl_usd'
+                    value = decimal(row.get(field))
+                    if value is not None:
+                        actual[name].append(value)
+                    reference = references.get(key(row))
+                    units, raw = decimal(row.get('asset_units')), decimal(row.get('tvl_usd'))
+                    if reference and units is not None and value is not None and raw is not None:
+                        with localcontext() as ctx:
+                            ctx.prec = 78
+                            fraction = value/raw if mode == 'external' and raw else Decimal(1)
+                            fixed[name].append(units*reference_prices[key(row)]*fraction)
+                chart = {'timestamp':timestamp}
+                neutral = {'timestamp':timestamp}
+                for name, values in sorted(actual.items()):
                     with localcontext() as ctx:
                         ctx.prec = 78
-                        fraction = value/raw if mode == 'external' and raw else Decimal(1)
-                        fixed[name].append(units*reference_prices[key(row)]*fraction)
-            chart = {'timestamp':timestamp}
-            neutral = {'timestamp':timestamp}
-            for name, values in sorted(actual.items()):
-                with localcontext() as ctx:
-                    ctx.prec = 78
-                    value = float(sum(values,Decimal(0)))
-                    chart[name] = value
-                    points.append({'timestamp':timestamp,'series':name,'tvlUsd':value})
-                    if name in fixed:
-                        neutral[name] = float(sum(fixed[name],Decimal(0)))
-            actual_chart.append(chart)
-            fixed_chart.append(neutral)
+                        value = float(sum(values,Decimal(0)))
+                        chart[name] = value
+                        if max_points is not None and len(points) >= max_points:
+                            raise ValueError('history point limit exceeded; narrow the time range or grouping')
+                        points.append({'timestamp':timestamp,'series':name,'tvlUsd':value})
+                        if name in fixed:
+                            neutral[name] = float(sum(fixed[name],Decimal(0)))
+                actual_chart.append(chart)
+                fixed_chart.append(neutral)
+        finally:
+            if hasattr(frames,'close'):
+                frames.close()
         result = self.history_result(group,mode,interval,start,end,timestamps,points,actual_chart)
         if constant:
             fixed_by_timestamp = {row['timestamp']:row for row in fixed_chart}
@@ -573,8 +611,8 @@ class TvlDataset:
                            'strategies':by_parent[key(r)]} for r in rows],
                 'crossChainVaults':[{'address':r['vault'],'chainId':r['chain_id'],'targetChainId':r['bridge_target_chain'],
                                     'name':r.get('name'),'category':r.get('category',r['version']),
-                                    'tvlUsd':float(decimal(r['bridge_excluded_usd'])),'label':'Dated pre-deposit migration' if r.get('bridge_migration_timestamp') is not None else 'Retired bridge registry'}
-                                   for r in rows if r.get('bridge_excluded_usd') is not None], 'datasetId':self.id}
+                                    'tvlUsd':float(decimal(r['bridge_excluded_usd'])) if r['bridge_excluded_usd'] is not None else None,'label':'Dated pre-deposit migration' if r.get('bridge_migration_timestamp') is not None else 'Retired bridge registry'}
+                                   for r in rows if 'bridge_excluded_usd' in r], 'datasetId':self.id}
 
     def curation(self, chain_id=None):
         timestamp, all_rows, positions, _ = self.frames((self.as_of(),), chain_id, True)[0]
@@ -692,7 +730,9 @@ def tvl_response(store, url):
         if request.path == '/api/tvl/graph':
             result = dataset.graph(chain_id,value('category'),value('includeRetired','true')=='true')
         elif request.path.startswith('/api/tvl/history'):
-            result = dataset.history(group,mode,interval,start,end,chain_id,request.path.endswith('/constant-price'))
+            if group == 'vault' and len(dataset.sampled_dates(interval,start,end)) > PUBLIC_VAULT_HISTORY_MAX_DATES:
+                raise ValueError('vault history date limit exceeded; narrow the time range or use a coarser interval')
+            result = dataset.history(group,mode,interval,start,end,chain_id,request.path.endswith('/constant-price'),max_points=PUBLIC_HISTORY_MAX_POINTS)
             if response_format=='chart':result=chart_response(result,top)
         elif request.path.endswith('/curation-products'):
             result = dataset.curation(chain_id)

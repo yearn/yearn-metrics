@@ -219,3 +219,12 @@ to the monthly average. A publication prepared before those eight rejections mus
 be repaired and its analytics prepared again before using that denominator. No
 verified June aggregate is quoted here; the three historical monthly figures above
 do not establish June coverage or justify retaining a pre-repair June denominator.
+
+
+## Missing external chain breakdowns
+
+Methodology `powerglove-analytics-22` preserves an absent DefiLlama chain entry
+as unavailable. A by-chain comparison requires explicit values from both finance
+and curation snapshots, including explicit zero where appropriate. Without them,
+`defillama` and `difference` are null; protocol-level totals remain separate.
+Reprepare analytics to replace previously prepared chain comparisons.

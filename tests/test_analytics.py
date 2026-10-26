@@ -313,3 +313,15 @@ def test_current_curator_registry_is_scoped_to_yearn():
     assert policy['explicit'][747474]==set()
     with pytest.raises(ValueError,match='missing yearn-curating'):
         rules(finance,registry.replace('yearn-curating','unrelated'))
+
+
+@pytest.mark.parametrize('finance,curation,expected', [({}, {}, None), ({'Ethereum':10},{},None), ({'Ethereum':10},{'Ethereum':0},10), ({'Ethereum':0},{'Ethereum':0},0)])
+def test_missing_external_chain_is_not_zero(finance,curation,expected):
+    from types import SimpleNamespace
+    from yearn_data.analytics import owned_comparison
+    tvl=SimpleNamespace(id='test',catalog={},summary=lambda:{'retiredVaultTvl':0,'overlapExcluded':0,'vaultBridgeExcluded':0,'tvlByChain':{'Ethereum':100}})
+    rows=[{'chain_id':1,'vault':'0x1','external_tvl_usd':'100','tvl_usd':'100'}]
+    result=owned_comparison(tvl,rows,[{'protocol':'yearn-finance','total':10,'byChain':finance},{'protocol':'yearn-curating','total':0,'byChain':curation}])
+    chain=next(r for r in result['byChain'] if r['chain']=='Ethereum')
+    assert chain['defillama']==expected
+    assert chain['difference']==(None if expected is None else 100-expected)
