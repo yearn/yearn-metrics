@@ -705,3 +705,31 @@ def test_curation_v2_pass_through_resolves_child_chain(source, child_chain, fami
         'note': 'Potential V2 product attribution remains separate from V3 and Morpho products',
     }
     assert products['vaults'][0]['chainId'] == child_chain
+
+
+@pytest.mark.parametrize('format', ['full', 'chart'])
+@pytest.mark.parametrize('chain_filter', ['', '&chainId=1'])
+def test_constant_history_excludes_policy_vault_references(source, monkeypatch, format, chain_filter):
+    from types import SimpleNamespace
+    from yearn_data import tvl_api as api
+    from yearn_data.tvl_history_cache import prepare
+    conn, path, root = source
+    run(conn, 1, DAY, [(PARENT, '100'), (CHILD, '200')])
+    monkeypatch.setattr(api, 'VAULT_POLICIES', [
+        {'chainId': 1, 'address': CHILD.upper(), 'version': 'v3',
+         'category': 'v3', 'excludeFromTvl': True},
+    ])
+    store = TvlStore(path, root)
+    dataset = store.get()
+    url = f'/api/tvl/history/runs/latest/constant-price?interval=daily&format={format}{chain_filter}'
+    status, unprepared = tvl_response(store, url)
+    assert status == 200
+    prepare(dataset)
+    prepared_store = SimpleNamespace(get=lambda _: api.TvlDataset(dataset.manifest))
+    status, prepared = tvl_response(prepared_store, url)
+    assert status == 200
+    assert unprepared == prepared
+    if format == 'full':
+        assert [r['vault'] for r in unprepared['references']] == ['1:' + PARENT]
+    else:
+        assert unprepared['meta']['referenceCount'] == 1

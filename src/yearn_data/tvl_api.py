@@ -243,6 +243,11 @@ class TvlDataset:
         if chain_id is not None:
             where += ' AND chain_id=?'
             args += (chain_id,)
+        # Match the publication's accounting scope before selecting references.
+        for policy in self.manifest.get('vaultPolicies', []):
+            if policy.get('excludeFromTvl'):
+                where += ' AND NOT (chain_id=? AND lower(vault)=?)'
+                args += (policy['chainId'], policy['address'].lower())
         # Reject invalid quotes before ranking valid daily observations. Otherwise
         # seven rejected initial quotes can exhaust the reference window and hide
         # the later corrected canonical prices.
