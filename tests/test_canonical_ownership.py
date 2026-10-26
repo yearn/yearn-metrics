@@ -9,7 +9,7 @@ from yearn_data.tvl import account
 from yearn_data.tvl_api import TvlDataset, TvlStore
 from yearn_data.tvl_history_cache import prepare
 from test_tvl import edge, snapshot
-from test_tvl_api import source, run, DAY, PARENT, CHILD
+from test_tvl_api import source as source, run, DAY, PARENT, CHILD
 
 
 def curate(conn):
