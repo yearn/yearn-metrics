@@ -575,6 +575,12 @@ def test_bridge_membership_survives_unavailable_valuation(source,bridge_value):
     for query in ('','?chainId=1'):
         status,summary=tvl_response(store,'/api/tvl'+query)
         assert status==200
+        assert summary['activeVaultTvl']==100
+        assert summary['retiredVaultTvl']==expected
+        assert summary['tvlByCategory']['v3']==100
+        assert summary['retiredTvlByCategory']['v3']==expected
+        assert summary['vaultCount']['active']==1
+        assert summary['vaultCount']['retired']==1
         assert summary['vaultBridgeExcluded']==expected
         assert summary['crossChainOverlapByChain']['Ethereum']==expected
         assert summary['crossChainOverlapByCategory']['v3']==expected

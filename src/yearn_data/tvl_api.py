@@ -384,7 +384,8 @@ class TvlDataset:
         _, rows, _, diagnostics = self.frames((self.as_of(),), chain_id)[0]
         categories = {c: [r for r in rows if r.get('category', r['version']) == c] for c in CATEGORIES}
         active = [r for r in rows if self.catalog.get(key(r), {}).get('active', 1)]
-        retired = [r for r in rows if r not in active]
+        active_keys = {key(r) for r in active}
+        retired = [r for r in rows if key(r) not in active_keys]
         chain_rows = {CHAINS.get(c, f'Chain {c}'): [r for r in rows if r['chain_id'] == c] for c in sorted({r['chain_id'] for r in rows})}
         bridge = [r for r in rows if 'bridge_excluded_usd' in r]
         result = {'totalTvl': money(rows, 'external_tvl_usd'), 'activeVaultTvl': money(active, 'tvl_usd'),
@@ -393,8 +394,8 @@ class TvlDataset:
                   'tvlByChain': {c: money(rs, 'tvl_usd') for c, rs in chain_rows.items()},
                   'overlapByChain': {c: money(rs, 'overlap_usd') for c, rs in chain_rows.items()},
                   'crossChainOverlapByChain': {c: money([r for r in rs if 'bridge_excluded_usd' in r], 'bridge_excluded_usd') for c, rs in chain_rows.items()},
-                  'tvlByCategory': {c: money([r for r in rs if r in active], 'tvl_usd') for c, rs in categories.items()},
-                  'retiredTvlByCategory': {c: money([r for r in rs if r in retired], 'tvl_usd') for c, rs in categories.items()},
+                  'tvlByCategory': {c: money([r for r in rs if key(r) in active_keys], 'tvl_usd') for c, rs in categories.items()},
+                  'retiredTvlByCategory': {c: money([r for r in rs if key(r) not in active_keys], 'tvl_usd') for c, rs in categories.items()},
                   'crossChainOverlapByCategory': {c: money([r for r in rs if 'bridge_excluded_usd' in r], 'bridge_excluded_usd') for c, rs in categories.items()},
                   'vaultCount': {'total': len(rows), 'active': len(active), 'retired': len(retired), **{c:len(rs) for c,rs in categories.items()}},
                   'retiredVaults': [{'address':r['vault'],'chainId':r['chain_id'],'name':r.get('name'),
