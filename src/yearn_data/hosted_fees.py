@@ -60,7 +60,14 @@ class PublishedFees(PairingDataset):
             clauses.append('vault=?'); params.append(vault_address)
         fees, earnings = [], []
         with closing(connect(self.database, readonly=True)) as conn:
-            for row in conn.execute('SELECT kind,row_json FROM api_fee_rows WHERE '+
-                                    ' AND '.join(clauses)+' ORDER BY kind,ordinal', params):
-                (fees if row[0]=='fees' else earnings).append(json.loads(row[1]))
+            # Validate each stored JSON value before packing it, retaining its
+            # text representation and leaving financial arithmetic in Python.
+            # Ordinal buckets bound each decode to at most 2,000 source rows;
+            # both ordering levels preserve the published accumulation order.
+            for row in conn.execute(
+                "SELECT kind, '[' || string_agg(row_json::json::text, ',' ORDER BY ordinal) || ']' "
+                'FROM api_fee_rows WHERE ' + ' AND '.join(clauses) +
+                ' GROUP BY kind,ordinal / 2000 ORDER BY kind,ordinal / 2000', params
+            ):
+                (fees if row[0] == 'fees' else earnings).extend(json.loads(row[1]))
         return fees, earnings

@@ -557,3 +557,56 @@ def test_grouped_fee_history_discards_response_if_publication_changes(selected_a
     monkeypatch.setattr(api.registry, 'fees', lambda _: SimpleNamespace(view=view))
     status, body = api.response('/api/fees/vaults/history?datasetId=' + selection['feesDatasetId'])
     assert status == 410 and body['releaseId'] == 'b'*64
+
+
+def test_legacy_fee_rows_keep_order_and_filters_across_json_batches(postgres_database):
+    from yearn_data.hosted_fees import PublishedFees, SCHEMA
+
+    # Sparse legacy ordinals and reversed inserts exercise ordering within and
+    # between batches without rebuilding the immutable publication.
+    vault = '0x' + 'ab' * 20
+    metadata = {'cutoff': 1000, 'chains': [1, 10], 'vaults': [[1, vault]], 'vaultNames': {}}
+    fee_values = [
+        {'ordinal': 0, 'amount': '123456789012345678901234567890.0000000001'},
+        {'ordinal': 1999, 'amount': None},
+        {'ordinal': 2000, 'amount': '0'},
+        {'ordinal': 4001, 'amount': '-0.0000000000000000000000000001'},
+    ]
+    earnings_values = [{'ordinal': 2000, 'amount': '0'}, {'ordinal': 2001, 'amount': None}]
+    with closing(connect('staging')) as conn, conn:
+        conn.executescript(SCHEMA)
+        conn.execute('INSERT INTO api_fee_datasets VALUES (?,?)', ('legacy', json.dumps(metadata)))
+        for kind, rows in (('fees', fee_values), ('earnings', earnings_values)):
+            for row in reversed(rows):
+                conn.execute('INSERT INTO api_fee_rows VALUES (?,?,?,?,?,?,?)',
+                             ('legacy', kind, row['ordinal'], 100, 1, vault,
+                              ' \n' + json.dumps(row) + '\t '))
+        for identity, ordinal, timestamp, chain, address in (
+            ('other', 0, 100, 1, vault),
+            ('legacy', 5000, 99, 1, vault),
+            ('legacy', 5001, 200, 1, vault),
+            ('legacy', 5002, 100, 10, vault),
+            ('legacy', 5003, 100, 1, '0x' + 'cd' * 20),
+        ):
+            conn.execute('INSERT INTO api_fee_rows VALUES (?,?,?,?,?,?,?)',
+                         (identity, 'fees', ordinal, timestamp, chain, address, '{"excluded":true}'))
+    reader = PublishedFees('staging', 'legacy')
+    assert reader.view_rows(100, 200, (1,), vault) == (fee_values, earnings_values)
+    assert reader.view_rows(200, 200, (1,), vault) == ([], [])
+
+
+@pytest.mark.parametrize('raw', ['', '{} , {}'])
+def test_published_fee_rows_reject_corrupt_individual_json(postgres_database, raw):
+    from yearn_data.hosted_fees import PublishedFees, SCHEMA
+    from yearn_data.storage import DATABASE_ERRORS
+
+    with closing(connect('staging')) as conn, conn:
+        conn.executescript(SCHEMA)
+        conn.execute('INSERT INTO api_fee_datasets VALUES (?,?)',
+                     ('legacy', json.dumps({'cutoff': 200, 'chains': [1],
+                                            'vaults': [], 'vaultNames': {}})))
+        conn.execute('INSERT INTO api_fee_rows VALUES (?,?,?,?,?,?,?)',
+                     ('legacy', 'fees', 0, 100, 1, 'vault', raw))
+    # Joining these corrupt values directly could silently remove or add rows.
+    with pytest.raises((json.JSONDecodeError, *DATABASE_ERRORS)):
+        PublishedFees('staging', 'legacy').view_rows(None, 200, (), None)
