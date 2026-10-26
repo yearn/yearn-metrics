@@ -69,12 +69,22 @@ def test_cross_chain_exposure_uses_smaller_dated_debt_and_remote_holding(debt,sh
 
 
 @pytest.mark.parametrize('failure',['mismatch','failure'])
-def test_cross_chain_unverified_remote_state_remains_unknown(failure):
+@pytest.mark.parametrize('require_complete_ownership', [True, False])
+def test_cross_chain_unverified_remote_state_remains_unknown(failure, require_complete_ownership):
     p,c,e=remote_position(**{failure:True})
     assert e['status']=='unavailable'
-    _,positions,totals=account([p,c],[e])
+    rows,positions,totals=account([p,c],[e],require_complete_ownership=require_complete_ownership)
     assert positions[0]['overlap_usd'] is None
-    assert totals['external_tvl_usd'] is None and totals['known_external_tvl_usd']=='200'
+    by={(r['chain_id'],r['vault']):r for r in rows}
+    assert by[(1,address(1))]['external_tvl_usd']=='100'
+    child=by[(747474,address(2))]
+    assert child['tvl_usd']=='100'  # Gross valuation is still observed.
+    assert child['external_tvl_usd']==(None if require_complete_ownership else '100')
+    assert child['overlap_usd']==(None if require_complete_ownership else '0')
+    assert totals['status']=='incomplete' and totals['external_tvl_usd'] is None
+    # Current publications omit unknown child ownership from the known subtotal;
+    # legacy publications retain their original row and subtotal semantics.
+    assert totals['known_external_tvl_usd']==('100' if require_complete_ownership else '200')
 
 
 def test_cross_chain_registry_replaces_unresolved_allocation_candidate(db,monkeypatch):
