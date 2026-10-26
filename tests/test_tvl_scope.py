@@ -13,7 +13,7 @@ def address(n):return Web3.to_checksum_address('0x'+f'{n:040x}')
 
 
 @pytest.fixture
-def db(tmp_path):
+def db(postgres_database, tmp_path):
     c=connect('staging');init_db(c)
     yield c
     c.close()
@@ -56,7 +56,7 @@ def test_collection_skips_retained_excluded_catalog_rows(db,monkeypatch):
     assert db.execute('SELECT count(*) FROM tvl_vaults').fetchone()[0]==3
 
 
-def test_backfill_does_not_report_excluded_rows_as_pending(tmp_path,monkeypatch):
+def test_backfill_does_not_report_excluded_rows_as_pending(postgres_database, tmp_path,monkeypatch):
     spec=importlib.util.spec_from_file_location('scope_backfill','scripts/backfill_tvl.py')
     b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
     dbpath='staging';c=connect(dbpath);init_db(c)

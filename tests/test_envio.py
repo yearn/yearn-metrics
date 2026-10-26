@@ -135,7 +135,7 @@ def test_pull_window_paginates_a_stable_block_log_cursor(monkeypatch):
     assert calls == [{"lb": 9, "li": -1, "n": 2}, {"lb": 10, "li": 2, "n": 2}]
 
 
-def test_import_reports_sets_a_source_cursor_and_is_idempotent(tmp_path, monkeypatch):
+def test_import_reports_sets_a_source_cursor_and_is_idempotent(postgres_database, tmp_path, monkeypatch):
     conn = _db(tmp_path)
     _seed_vault(conn)
     v3 = _v3_report_node()
@@ -156,7 +156,7 @@ def test_import_reports_sets_a_source_cursor_and_is_idempotent(tmp_path, monkeyp
 
 
 
-def test_cli_index_fees_keeps_rpc_implementation_when_envio_is_selected(tmp_path, monkeypatch):
+def test_cli_index_fees_keeps_rpc_implementation_when_envio_is_selected(postgres_database, tmp_path, monkeypatch):
     from yearn_data import cli
 
     conn = _db(tmp_path)
@@ -174,7 +174,7 @@ def test_cli_index_fees_keeps_rpc_implementation_when_envio_is_selected(tmp_path
     ) == 0
     assert len(calls) == 1
 
-def test_report_import_stops_before_advancing_for_an_unclassified_vault(tmp_path, monkeypatch):
+def test_report_import_stops_before_advancing_for_an_unclassified_vault(postgres_database, tmp_path, monkeypatch):
     conn = _db(tmp_path)
     _seed_vault(conn)
     conn.execute("UPDATE vaults SET address=?", ("0x" + "9" * 40,))
@@ -223,7 +223,7 @@ def _seed_inventory(
     conn.commit()
 
 
-def test_envio_discovery_reuses_cached_metadata_and_preserves_rpc_facts(tmp_path, monkeypatch):
+def test_envio_discovery_reuses_cached_metadata_and_preserves_rpc_facts(postgres_database, tmp_path, monkeypatch):
     conn = _db(tmp_path)
     _seed_vault(conn)
     _seed_inventory(conn)
@@ -235,7 +235,7 @@ def test_envio_discovery_reuses_cached_metadata_and_preserves_rpc_facts(tmp_path
     assert tuple(row) == ("0xsource", 42, ASSET, "yearn")
 
 
-def test_envio_discovery_resolves_missing_asset_decimals_from_kong(tmp_path, monkeypatch):
+def test_envio_discovery_resolves_missing_asset_decimals_from_kong(postgres_database, tmp_path, monkeypatch):
     conn = _db(tmp_path)
     _seed_inventory(conn)
     monkeypatch.setattr(envio, "_import_v3_vault_inventory", lambda *args: 0)
@@ -258,7 +258,7 @@ def test_envio_discovery_resolves_missing_asset_decimals_from_kong(tmp_path, mon
     assert tuple(row) == (ASSET, "USDC", 6)
 
 
-def test_v3_inventory_keeps_each_classification_source(tmp_path, monkeypatch):
+def test_v3_inventory_keeps_each_classification_source(postgres_database, tmp_path, monkeypatch):
     conn = _db(tmp_path)
     nodes_by_entity = {
         "V3RegistryNewEndorsedVault": [{
@@ -322,7 +322,7 @@ def test_v3_inventory_keeps_each_classification_source(tmp_path, monkeypatch):
     ]
 
 
-def test_v3_membership_replays_add_remove_and_readd_at_selected_block(tmp_path):
+def test_v3_membership_replays_add_remove_and_readd_at_selected_block(postgres_database, tmp_path):
     conn = _db(tmp_path)
     removed_vault = "0x" + "4" * 40
     later_vault = "0x" + "5" * 40
@@ -354,7 +354,7 @@ def test_v3_membership_replays_add_remove_and_readd_at_selected_block(tmp_path):
     ) == {VAULT}
 
 
-def test_envio_discovery_marks_removed_v3_vaults_inactive(tmp_path, monkeypatch):
+def test_envio_discovery_marks_removed_v3_vaults_inactive(postgres_database, tmp_path, monkeypatch):
     conn = _db(tmp_path)
     removed_vault = "0x" + "4" * 40
     _seed_vault(conn)
@@ -400,7 +400,7 @@ def test_envio_discovery_marks_removed_v3_vaults_inactive(tmp_path, monkeypatch)
     }
 
 
-def test_envio_discovery_excludes_experimental_v2_by_default(tmp_path, monkeypatch):
+def test_envio_discovery_excludes_experimental_v2_by_default(postgres_database, tmp_path, monkeypatch):
     conn = _db(tmp_path)
     registry_vault = "0x" + "4" * 40
     registry2_vault = "0x" + "5" * 40
@@ -464,7 +464,7 @@ def test_envio_discovery_excludes_experimental_v2_by_default(tmp_path, monkeypat
     assert conn.execute("SELECT COUNT(*) FROM vaults WHERE version='v2' AND active=1").fetchone()[0] == 3
 
 
-def test_cli_routes_experimental_v2_option_to_envio_discovery(tmp_path, monkeypatch):
+def test_cli_routes_experimental_v2_option_to_envio_discovery(postgres_database, tmp_path, monkeypatch):
     from yearn_data import cli
 
     conn = _db(tmp_path)
@@ -491,7 +491,7 @@ def test_cli_routes_experimental_v2_option_to_envio_discovery(tmp_path, monkeypa
 
 
 
-def test_cli_combined_lifetime_yield_uses_envio(tmp_path, monkeypatch):
+def test_cli_combined_lifetime_yield_uses_envio(postgres_database, tmp_path, monkeypatch):
     monkeypatch.setenv("YEARN_PRICE_PROD_KEY", "test-only")
     from yearn_data import cli
 
@@ -555,7 +555,7 @@ def test_cli_combined_lifetime_yield_uses_envio(tmp_path, monkeypatch):
     assert calls[2][1]["fallback"] == "defillama"
 
 
-def test_cli_combined_volume_keeps_rpc_path_when_envio_is_selected(tmp_path, monkeypatch):
+def test_cli_combined_volume_keeps_rpc_path_when_envio_is_selected(postgres_database, tmp_path, monkeypatch):
     from yearn_data import cli
 
     conn = _db(tmp_path)
@@ -588,7 +588,7 @@ def test_cli_combined_volume_keeps_rpc_path_when_envio_is_selected(tmp_path, mon
     assert calls == ["discover_rpc", "volume_rpc", "price_volume", "analyze"]
 
 
-def test_historical_import_recovers_inactive_pre_registration_report_without_cursor_reset(tmp_path, monkeypatch):
+def test_historical_import_recovers_inactive_pre_registration_report_without_cursor_reset(postgres_database, tmp_path, monkeypatch):
     conn = _db(tmp_path)
     _seed_vault(conn)
     conn.execute("UPDATE vaults SET active=0, deployment_block=200")
@@ -608,7 +608,7 @@ def test_historical_import_recovers_inactive_pre_registration_report_without_cur
     assert conn.execute('SELECT COUNT(*) FROM strategy_reports').fetchone()[0] == 1
 
 
-def test_historical_import_requires_bounds_and_cannot_advance_global_cursor_for_subset(tmp_path):
+def test_historical_import_requires_bounds_and_cannot_advance_global_cursor_for_subset(postgres_database, tmp_path):
     conn = _db(tmp_path)
     with pytest.raises(ValueError, match='explicit to_block'):
         envio.import_reports_from_envio(conn, ['eth'], from_block=0)
@@ -616,7 +616,7 @@ def test_historical_import_requires_bounds_and_cannot_advance_global_cursor_for_
         envio.import_reports_from_envio(conn, ['eth'], vault_addresses=[VAULT], to_block=100)
 
 
-def test_historical_discovery_retains_removed_vault_without_reactivating(tmp_path, monkeypatch):
+def test_historical_discovery_retains_removed_vault_without_reactivating(postgres_database, tmp_path, monkeypatch):
     conn = _db(tmp_path)
     _seed_vault(conn)
     _seed_inventory(conn, block=40)
@@ -628,7 +628,7 @@ def test_historical_discovery_retains_removed_vault_without_reactivating(tmp_pat
     assert VAULT.lower() in envio._vault_asset_map(conn, 1, include_inactive=True)
 
 
-def test_v2_only_chain_uses_own_registry_and_does_not_require_role_manager(tmp_path, monkeypatch):
+def test_v2_only_chain_uses_own_registry_and_does_not_require_role_manager(postgres_database, tmp_path, monkeypatch):
     from yearn_data.config import V2_REGISTRIES_BY_CHAIN
     conn = _db(tmp_path)
     _seed_v2_vault(conn)
@@ -642,7 +642,7 @@ def test_v2_only_chain_uses_own_registry_and_does_not_require_role_manager(tmp_p
     assert conn.execute('SELECT active FROM vaults').fetchone()[0] == 1
 
 
-def test_inventory_distinguishes_creation_from_registration(tmp_path):
+def test_inventory_distinguishes_creation_from_registration(postgres_database, tmp_path):
     conn = _db(tmp_path)
     _seed_inventory(conn, source_kind='registry', block=80)
     facts = envio._inventory_facts(conn, 1, 'v3')
@@ -659,7 +659,7 @@ def test_rpc_only_historical_chains_are_explicitly_selectable_not_default():
     assert CHAINS['ftm'].rpc_env == 'FANTOM_RPC_URL'
 
 
-def test_cli_historical_discovery_keeps_retired_members_inactive(tmp_path, monkeypatch):
+def test_cli_historical_discovery_keeps_retired_members_inactive(postgres_database, tmp_path, monkeypatch):
     from yearn_data import cli
 
     conn = _db(tmp_path)
@@ -679,7 +679,7 @@ def test_cli_historical_discovery_keeps_retired_members_inactive(tmp_path, monke
     assert VAULT.lower() in envio._vault_asset_map(conn, 1, include_inactive=True)
 
 
-def test_cli_historical_import_persists_reports_without_moving_forward_cursor(tmp_path, monkeypatch):
+def test_cli_historical_import_persists_reports_without_moving_forward_cursor(postgres_database, tmp_path, monkeypatch):
     from yearn_data import cli
 
     conn = _db(tmp_path)
@@ -706,7 +706,7 @@ def test_cli_historical_import_persists_reports_without_moving_forward_cursor(tm
     ["index-events", "--from-block", "0", "--to-block", "100"],
     ["index-events", "--vaults", VAULT],
 ])
-def test_cli_rejects_envio_history_flags_before_rpc_work(tmp_path, monkeypatch, arguments):
+def test_cli_rejects_envio_history_flags_before_rpc_work(postgres_database, tmp_path, monkeypatch, arguments):
     from yearn_data import cli
 
     def unexpected_rpc(*args, **kwargs):
@@ -720,7 +720,7 @@ def test_cli_rejects_envio_history_flags_before_rpc_work(tmp_path, monkeypatch, 
 
 
 @pytest.mark.parametrize(("from_block", "to_block"), [(-1, 100), (101, 100)])
-def test_invalid_historical_bounds_stop_before_acquisition(tmp_path, monkeypatch, from_block, to_block):
+def test_invalid_historical_bounds_stop_before_acquisition(postgres_database, tmp_path, monkeypatch, from_block, to_block):
     def unexpected_query(*args, **kwargs):
         pytest.fail("invalid bounds must not query Envio")
 
@@ -730,7 +730,7 @@ def test_invalid_historical_bounds_stop_before_acquisition(tmp_path, monkeypatch
         envio.import_reports_from_envio(conn, ["eth"], from_block=from_block, to_block=to_block)
 
 
-def test_unknown_historical_vault_stops_before_report_query(tmp_path, monkeypatch):
+def test_unknown_historical_vault_stops_before_report_query(postgres_database, tmp_path, monkeypatch):
     conn = _db(tmp_path)
     _seed_vault(conn)
     envio._set_envio_cursor(conn, 1, "StrategyReported", 500)
@@ -747,7 +747,7 @@ def test_unknown_historical_vault_stops_before_report_query(tmp_path, monkeypatc
     assert envio._get_envio_cursor(conn, 1, "StrategyReported") == 500
 
 
-def test_failed_historical_window_can_be_replayed_after_reopening_database(tmp_path, monkeypatch):
+def test_failed_historical_window_can_be_replayed_after_reopening_database(postgres_database, tmp_path, monkeypatch):
     conn = _db(tmp_path)
     _seed_vault(conn)
     conn.execute("UPDATE vaults SET active=0")
@@ -795,7 +795,7 @@ def test_pull_window_matches_both_address_forms(monkeypatch, stored_case):
 
 
 @pytest.mark.parametrize("response", [{}, {"StrategyReported": None}, {"StrategyReported": {}}])
-def test_missing_entity_cannot_advance_cursor(tmp_path, monkeypatch, response):
+def test_missing_entity_cannot_advance_cursor(postgres_database, tmp_path, monkeypatch, response):
     conn = _db(tmp_path)
     _seed_vault(conn)
     monkeypatch.setattr(envio, "_gql", lambda *args: response)
@@ -814,7 +814,7 @@ def test_pull_window_rejects_wrong_scope(monkeypatch, change):
 
 
 @pytest.mark.parametrize("version", ["v2", "v3"])
-def test_past_discovery_preserves_later_membership_for_forward_import(tmp_path, monkeypatch, version):
+def test_past_discovery_preserves_later_membership_for_forward_import(postgres_database, tmp_path, monkeypatch, version):
     conn = _db(tmp_path)
     (_seed_v2_vault if version == "v2" else _seed_vault)(conn)
     later = "0x" + "5" * 40
@@ -842,7 +842,7 @@ def test_past_discovery_preserves_later_membership_for_forward_import(tmp_path, 
 
 
 @pytest.mark.parametrize("include_retired", [False, True])
-def test_past_discovery_does_not_reactivate_later_removed_vault(tmp_path, monkeypatch, include_retired):
+def test_past_discovery_does_not_reactivate_later_removed_vault(postgres_database, tmp_path, monkeypatch, include_retired):
     conn = _db(tmp_path)
     _seed_vault(conn)
     _seed_inventory(conn, block=40)
@@ -855,7 +855,7 @@ def test_past_discovery_does_not_reactivate_later_removed_vault(tmp_path, monkey
     assert envio._vault_asset_map(conn, 1) == {}
 
 
-def test_unrelated_future_inventory_does_not_override_trusted_membership(tmp_path, monkeypatch):
+def test_unrelated_future_inventory_does_not_override_trusted_membership(postgres_database, tmp_path, monkeypatch):
     conn = _db(tmp_path)
     _seed_vault(conn)
     _seed_inventory(conn, block=40)
@@ -867,7 +867,7 @@ def test_unrelated_future_inventory_does_not_override_trusted_membership(tmp_pat
 
 
 @pytest.mark.parametrize("chain", ["polygon", "kat"])
-def test_unconfigured_v2_discovery_preserves_existing_membership(tmp_path, monkeypatch, chain):
+def test_unconfigured_v2_discovery_preserves_existing_membership(postgres_database, tmp_path, monkeypatch, chain):
     conn = _db(tmp_path)
     _seed_v2_vault(conn)
     chain_id = CHAINS[chain].chain_id
@@ -885,7 +885,7 @@ def test_unconfigured_v2_discovery_preserves_existing_membership(tmp_path, monke
 
 
 @pytest.mark.parametrize("operation", ["discover", "forward", "bounded"])
-def test_unprocessed_bound_rejected_before_acquisition_or_cursor_changes(tmp_path, monkeypatch, operation):
+def test_unprocessed_bound_rejected_before_acquisition_or_cursor_changes(postgres_database, tmp_path, monkeypatch, operation):
     conn = _db(tmp_path)
     _seed_vault(conn)
     envio._set_envio_cursor(conn, 1, "StrategyReported", 50)
@@ -917,7 +917,7 @@ def test_upper_bound_uses_processed_frontier_and_accepts_exact_boundary(monkeypa
 
 
 @pytest.mark.parametrize("asset", [ASSET, None])
-def test_retired_vault_missing_from_kong_is_retained_with_unknown_metadata(tmp_path, monkeypatch, asset):
+def test_retired_vault_missing_from_kong_is_retained_with_unknown_metadata(postgres_database, tmp_path, monkeypatch, asset):
     conn = _db(tmp_path)
     _seed_inventory(conn, asset=asset, block=40)
     _seed_inventory(conn, asset=None, action="removed", block=50, log_index=2)
@@ -941,7 +941,7 @@ def test_retired_vault_missing_from_kong_is_retained_with_unknown_metadata(tmp_p
     ("envio", ["--include-non-yearn"]),
     ("rpc", ["--to-block", "100"]),
 ])
-def test_discovery_rejects_unsupported_source_flags_before_acquisition(tmp_path, monkeypatch, source, arguments):
+def test_discovery_rejects_unsupported_source_flags_before_acquisition(postgres_database, tmp_path, monkeypatch, source, arguments):
     from yearn_data import cli
 
     monkeypatch.setenv("YEARN_DATA_EVENT_SOURCE", source)
@@ -952,7 +952,7 @@ def test_discovery_rejects_unsupported_source_flags_before_acquisition(tmp_path,
         cli.main(["--db", 'staging', "discover", "--chains", "eth", *arguments])
 
 
-def test_explicit_rpc_path_retains_non_yearn_report_ingestion(tmp_path, monkeypatch):
+def test_explicit_rpc_path_retains_non_yearn_report_ingestion(postgres_database, tmp_path, monkeypatch):
     from yearn_data import cli, indexing
 
     conn = _db(tmp_path)
@@ -982,7 +982,7 @@ def test_explicit_rpc_path_retains_non_yearn_report_ingestion(tmp_path, monkeypa
 
 @pytest.mark.parametrize("version", ["v2", "v3"])
 @pytest.mark.parametrize("page_size", [100, 1000, 5000])
-def test_forward_import_follows_server_capped_pages(tmp_path, monkeypatch, version, page_size):
+def test_forward_import_follows_server_capped_pages(postgres_database, tmp_path, monkeypatch, version, page_size):
     conn = _db(tmp_path)
     (_seed_v2_vault if version == "v2" else _seed_vault)(conn)
     entity = "V2StrategyReported" if version == "v2" else "StrategyReported"
@@ -1007,7 +1007,7 @@ def test_forward_import_follows_server_capped_pages(tmp_path, monkeypatch, versi
     assert envio._get_envio_cursor(conn, 1, entity) == 110
 
 
-def test_invalid_response_after_short_page_keeps_forward_cursor(tmp_path, monkeypatch):
+def test_invalid_response_after_short_page_keeps_forward_cursor(postgres_database, tmp_path, monkeypatch):
     conn = _db(tmp_path)
     _seed_vault(conn)
     envio._set_envio_cursor(conn, 1, "StrategyReported", 90)
@@ -1021,7 +1021,7 @@ def test_invalid_response_after_short_page_keeps_forward_cursor(tmp_path, monkey
 
 
 @pytest.mark.parametrize("previous_run", [False, True])
-def test_lifetime_run_keeps_retired_vault_reports(tmp_path, monkeypatch, previous_run):
+def test_lifetime_run_keeps_retired_vault_reports(postgres_database, tmp_path, monkeypatch, previous_run):
     from yearn_data import cli
 
     conn = _db(tmp_path)
@@ -1059,7 +1059,7 @@ def test_lifetime_run_keeps_retired_vault_reports(tmp_path, monkeypatch, previou
 
 
 @pytest.mark.parametrize("cached", [False, True])
-def test_factory_creation_fills_missing_deployment(tmp_path, monkeypatch, cached):
+def test_factory_creation_fills_missing_deployment(postgres_database, tmp_path, monkeypatch, cached):
     conn = _db(tmp_path)
     if cached:
         _seed_vault(conn)
@@ -1074,7 +1074,7 @@ def test_factory_creation_fills_missing_deployment(tmp_path, monkeypatch, cached
 
 
 @pytest.mark.parametrize("cached", [False, True])
-def test_endorsed_v2_uses_experimental_creation_not_registration(tmp_path, monkeypatch, cached):
+def test_endorsed_v2_uses_experimental_creation_not_registration(postgres_database, tmp_path, monkeypatch, cached):
     conn = _db(tmp_path)
     if cached:
         _seed_v2_vault(conn)
@@ -1102,7 +1102,7 @@ def test_endorsed_v2_uses_experimental_creation_not_registration(tmp_path, monke
     assert conn.execute("SELECT deployment_block FROM vaults").fetchone()[0] is None
 
 
-def test_known_deployment_is_preserved_on_metadata_refresh(tmp_path):
+def test_known_deployment_is_preserved_on_metadata_refresh(postgres_database, tmp_path):
     from dataclasses import replace
 
     conn = _db(tmp_path)

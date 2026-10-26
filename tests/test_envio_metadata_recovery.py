@@ -35,7 +35,7 @@ def kong_response(monkeypatch, *, asset=helpers.ASSET, **optional):
      ("Updated", "USDC.e", "3.0.4")),
     ({"name": "Updated"}, ("Updated", "USDC", "3.0.0")),
 ])
-def test_partial_kong_refresh_preserves_each_cached_field(tmp_path, monkeypatch, refresh, expected):
+def test_partial_kong_refresh_preserves_each_cached_field(postgres_database, tmp_path, monkeypatch, refresh, expected):
     conn = helpers._db(tmp_path)
     helpers._seed_vault(conn)
     conn.execute("UPDATE vaults SET asset_decimals=NULL,name='yvUSDC-A'")
@@ -48,7 +48,7 @@ def test_partial_kong_refresh_preserves_each_cached_field(tmp_path, monkeypatch,
     assert tuple(row) == (*expected, 6, 42)
 
 
-def test_symbol_is_not_copied_to_a_different_asset(tmp_path, monkeypatch):
+def test_symbol_is_not_copied_to_a_different_asset(postgres_database, tmp_path, monkeypatch):
     conn = helpers._db(tmp_path)
     helpers._seed_vault(conn)
     conn.execute("UPDATE vaults SET asset_decimals=NULL")
@@ -62,7 +62,7 @@ def test_symbol_is_not_copied_to_a_different_asset(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("version", ["v2", "v3"])
-def test_resolved_metadata_names_reports_requiring_explicit_catchup(tmp_path, monkeypatch, version):
+def test_resolved_metadata_names_reports_requiring_explicit_catchup(postgres_database, tmp_path, monkeypatch, version):
     conn = helpers._db(tmp_path)
     (helpers._seed_vault if version == "v3" else helpers._seed_v2_vault)(conn)
     conn.execute("UPDATE vaults SET asset_decimals=NULL")

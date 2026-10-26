@@ -23,7 +23,7 @@ def evidence():
 
 
 @pytest.fixture
-def db(tmp_path):
+def db(postgres_database, tmp_path):
     c=connect('staging');init_db(c)
     yield c
     c.close()

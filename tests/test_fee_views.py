@@ -279,7 +279,7 @@ def test_standalone_entries_keep_existing_tvl_eligibility(tvl):
 
 
 @pytest.mark.parametrize('failure', ['code_timeout', 'call_timeout', 'rpc_value_error', 'code_mismatch', 'recipient_mismatch', 'recipient_unavailable'])
-def test_observed_product_config_records_failure_kind(monkeypatch, failure):
+def test_observed_product_config_records_failure_kind(postgres_database, monkeypatch, failure):
     from yearn_data import analytics_collect
     from yearn_data.analytics import SCHEMA, put_input, selected_input
     r=reader(monkeypatch, ACCOUNTANT, CODE_HASH, [(STAKER,)])
@@ -312,7 +312,7 @@ def test_observed_product_config_records_failure_kind(monkeypatch, failure):
 
 
 @pytest.mark.parametrize('failed_address', [YVUSD, LOCKED, LOAN])
-def test_product_discloses_retained_fee_observations(failed_address):
+def test_product_discloses_retained_fee_observations(postgres_database, failed_address):
     from yearn_data.analytics import SCHEMA, put_input, selected_input
     with connect('staging') as conn:
         conn.executescript(SCHEMA)

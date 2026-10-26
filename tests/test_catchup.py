@@ -26,7 +26,7 @@ def seed(conn, address=VAULT, management='yearn'):
 
 
 @pytest.fixture
-def db(tmp_path):
+def db(postgres_database, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed(conn)
@@ -159,7 +159,7 @@ def test_invalid_scope_fails_before_client_creation(db, monkeypatch, options):
         catchup.catch_up(db, 'op', **options)
 
 
-def test_cli_catchup_only_calls_acquisition(tmp_path, monkeypatch, capsys):
+def test_cli_catchup_only_calls_acquisition(postgres_database, tmp_path, monkeypatch, capsys):
     captured = {}
     def acquire(conn, chain, first, last, **kwargs):
         captured.update(chain=chain, first=first, last=last, **kwargs)

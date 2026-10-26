@@ -33,6 +33,9 @@ yearn_data = ["inventories/*.json"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "postgres: requires the isolated Postgres fixture (assigned from fixture dependencies)",
+]
 
 [tool.ruff]
 target-version = "py310"

@@ -35,9 +35,13 @@ not work with this Postgres-only runtime. Republish from the existing Postgres d
 
 ## Tests
 
-All database regressions run against Postgres. Each test creates random schemas
+All database regressions run against Postgres. Tests request `postgres_database`
+directly or through a shared fixture; each database test creates random schemas
 and drops only those schemas after closing its connections. There is no SQLite
-fallback and a missing test URL fails explicitly.
+fallback and a missing test URL fails explicitly for database tests. Pure and
+offline boundary tests run without Postgres using
+`python -m pytest -q -m 'not postgres'`. See the [testing policy](testing.md) for
+fixture and retention rules.
 
 ```bash
 docker compose -p yearn-metrics-tests -f ops/test-postgres.compose.yml up -d --wait

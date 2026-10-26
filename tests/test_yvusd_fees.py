@@ -50,7 +50,7 @@ def test_rejects_unbound_or_unreconciled_splits(mutation):
 def test_target_cannot_silently_fall_back_to_raw_deductions():
     with pytest.raises(ValueError): normalize_allocator_fees(CASES[0]['report'])
 
-def test_index_and_offline_recompute_preserve_split(tmp_path, monkeypatch):
+def test_index_and_offline_recompute_preserve_split(postgres_database, tmp_path, monkeypatch):
     from types import SimpleNamespace
     from yearn_data.storage import init_db
     from yearn_data.fees import index_canonical_fees
@@ -99,7 +99,7 @@ def test_multiple_reports_each_consume_their_own_fee_event():
     assert accounting(r,e)['locker_bonus_raw']=='25035988'
 
 
-def test_explicit_refresh_reacquires_rejected_accountant(tmp_path, monkeypatch):
+def test_explicit_refresh_reacquires_rejected_accountant(postgres_database, tmp_path, monkeypatch):
     from types import SimpleNamespace
     from yearn_data.storage import init_db
     from yearn_data import fees

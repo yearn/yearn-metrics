@@ -50,7 +50,7 @@ def finish_run(monkeypatch):
     monkeypatch.setattr(cli, "export_analysis", lambda *args, **kwargs: [])
 
 
-def test_default_index_events_then_lifetime_run_keeps_retired_history(tmp_path, monkeypatch):
+def test_default_index_events_then_lifetime_run_keeps_retired_history(postgres_database, tmp_path, monkeypatch):
     conn, retired, nodes = retained_vaults(tmp_path)
     helpers._seed_inventory(conn, block=40)
     helpers._seed_inventory(conn, vault=retired, block=40, log_index=2)
@@ -72,7 +72,7 @@ def test_default_index_events_then_lifetime_run_keeps_retired_history(tmp_path, 
 
 
 @pytest.mark.parametrize("version", ["v2", "v3"])
-def test_active_only_import_requires_bounds_and_preserves_forward_cursor(tmp_path, monkeypatch, version):
+def test_active_only_import_requires_bounds_and_preserves_forward_cursor(postgres_database, tmp_path, monkeypatch, version):
     conn, retired, nodes = retained_vaults(tmp_path, version)
     calls = report_endpoint(monkeypatch, nodes, version)
     entity = "StrategyReported" if version == "v3" else "V2StrategyReported"
@@ -95,7 +95,7 @@ def test_active_only_import_requires_bounds_and_preserves_forward_cursor(tmp_pat
 
 @pytest.mark.parametrize("version", ["v2", "v3"])
 @pytest.mark.parametrize("cached_asset", [None, helpers.VAULT])
-def test_cached_asset_uses_known_evidence_without_guessing_decimals(tmp_path, monkeypatch, version, cached_asset):
+def test_cached_asset_uses_known_evidence_without_guessing_decimals(postgres_database, tmp_path, monkeypatch, version, cached_asset):
     conn = helpers._db(tmp_path)
     (helpers._seed_vault if version == "v3" else helpers._seed_v2_vault)(conn)
     conn.execute("UPDATE vaults SET asset=?,asset_decimals=NULL,deployment_block=NULL", (cached_asset,))
@@ -111,7 +111,7 @@ def test_cached_asset_uses_known_evidence_without_guessing_decimals(tmp_path, mo
     assert row["deployment_block"] == (40 if version == "v3" else None)
 
 
-def test_envio_run_rejects_deployment_lookup_before_acquisition(tmp_path, monkeypatch):
+def test_envio_run_rejects_deployment_lookup_before_acquisition(postgres_database, tmp_path, monkeypatch):
     conn = helpers._db(tmp_path)
     monkeypatch.setattr(cli, "open_db", lambda *args: conn)
     monkeypatch.setenv("YEARN_DATA_EVENT_SOURCE", "envio")
@@ -121,7 +121,7 @@ def test_envio_run_rejects_deployment_lookup_before_acquisition(tmp_path, monkey
 
 
 @pytest.mark.parametrize("source,job", [("rpc", "lifetime-yield"), ("envio", "vault-volume")])
-def test_rpc_backed_runs_still_find_deployment(tmp_path, monkeypatch, source, job):
+def test_rpc_backed_runs_still_find_deployment(postgres_database, tmp_path, monkeypatch, source, job):
     conn = helpers._db(tmp_path)
     calls = []
     monkeypatch.setattr(cli, "open_db", lambda *args: conn)

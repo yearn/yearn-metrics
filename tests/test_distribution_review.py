@@ -15,7 +15,7 @@ from yearn_data.storage import connect, init_db
 
 
 @pytest.fixture(params=[('ybold',ybold_fees,'staker_distribution_raw'),('yeth',yeth_fees,'recovery_distribution_raw')])
-def product(request,tmp_path,monkeypatch):
+def product(postgres_database, request,tmp_path,monkeypatch):
     name,module,field=request.param
     case=copy.deepcopy(json.loads((Path(__file__).parent/f'fixtures/fees/{name}.json').read_text())[-1])
     case['report'].setdefault('api_version',None)
@@ -55,13 +55,13 @@ def test_product_distribution_csv_is_independent_of_first_row(product,tmp_path):
     assert normal[field]=='' and corrected[field]==case['report']['total_fees_raw']
 
 
-@pytest.mark.parametrize('length',[0,191,193,224])
 @pytest.mark.parametrize('offline',[False,True])
-def test_malformed_product_receipt_is_unresolved(product,length,offline):
+def test_malformed_product_receipt_is_unresolved(product,offline):
     conn,case,_,name=product
     if offline: assert index(conn,case)==1
     log=next(l for l in case['evidence']['receipt']['logs'] if l['logIndex']==case['report']['log_index'])
-    original=log['data'][2:];log['data']='0x'+(original[:length*2] if length<192 else original+'00'*(length-192))
+    # Pure tests cover every length; retain ingestion and replay for each product.
+    log['data'] += '00'
     if offline:
         evidence=json.loads(conn.execute('SELECT evidence_json FROM canonical_fee_reports').fetchone()[0]);evidence[name]=case['evidence']
         conn.execute('UPDATE canonical_fee_reports SET evidence_json=?',(json.dumps(evidence),));conn.commit()

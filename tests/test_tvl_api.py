@@ -34,7 +34,7 @@ def run(conn, number, timestamp, rows, edges=(), status='complete'):
 
 
 @pytest.fixture
-def source(tmp_path):
+def source(postgres_database, tmp_path):
     path = 'staging'
     conn = connect(path); init_db(conn); conn.executescript(SCHEMA)
     for address, active in ((PARENT,1),(CHILD,1),(BRIDGE,0)):

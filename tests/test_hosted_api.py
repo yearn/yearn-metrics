@@ -20,7 +20,7 @@ from yearn_data.hosted_api import HostedAPI, Handler, cache_headers
 
 
 @pytest.fixture
-def published(tmp_path):
+def published(postgres_database, tmp_path):
     database = 'staging'
     financial = tmp_path/'fees'
     history = tmp_path/'tvl'
@@ -45,6 +45,48 @@ def published(tmp_path):
     return database, financial, history, release
 
 
+@pytest.fixture
+def selected_api(monkeypatch):
+    """Exercise request validation without loading publication data."""
+    api = HostedAPI('staging')
+    selection = {'releaseId': '1'*64, 'feesDatasetId': '2'*64,
+                 'tvlDatasetId': '3'*64, 'analyticsPublicationId': '4'*64}
+    monkeypatch.setattr(api.registry, 'selection', lambda: dict(selection))
+    # Unexpected dispatch must fail, not manufacture a successful response.
+    def unexpected(*args, **kwargs):
+        pytest.fail('Rejected requests must not load publication data')
+    monkeypatch.setattr(api.registry, 'fees', unexpected)
+    monkeypatch.setattr(api.registry, 'tvl', unexpected)
+    monkeypatch.setattr(api.analytics, 'get', unexpected)
+    return api, selection
+
+
+@pytest.fixture
+def registered(pg):
+    """Real registry transactions, without generating financial/TVL histories."""
+    conn, _ = pg
+    fees = {'datasetId': '1'*64, 'database': 'staging'}
+    tvl = {'datasetId': '2'*64, 'database': 'staging',
+           'publishedAt': DAY, 'diagnostics': {}, 'currentBridgePolicy': 'original'}
+    release = save_release(conn, fees, tvl, 'a'*64)
+    return 'staging', release
+
+
+@pytest.fixture
+def financial_publication(pg, tmp_path):
+    """Prepare actual compact fee rows and selection; no unrelated TVL/analytics."""
+    from yearn_data.hosted_fees import prepare as prepare_fees
+    conn, _ = pg
+    init_db(conn)
+    runs = snapshots(conn)
+    financial = tmp_path/'fees'
+    manifest = select_pairing('staging', *runs, financial)
+    source = PairingStore(financial).get()
+    prepare_fees(conn, source)
+    save_release(conn, manifest, {'datasetId': '2'*64, 'database': 'staging'}, 'a'*64)
+    return 'staging', financial
+
+
 def test_fileless_routes_match_existing_contracts(published):
     database, financial, history, _ = published
     expected_fees = pairing_response(PairingStore(financial), '/api/fees/history?interval=weekly')
@@ -63,8 +105,8 @@ def test_fileless_routes_match_existing_contracts(published):
     assert api.response('/unknown')[0] == 404
 
 
-def test_atomic_selection_and_immutable_old_manifests(published):
-    database, _, _, release = published
+def test_atomic_selection_and_immutable_old_manifests(registered):
+    database, release = registered
     registry = Registry(database)
     old = registry.selection()
     fees = registry.manifest('fees', old['feesDatasetId'])
@@ -225,8 +267,8 @@ def test_prepared_history_survives_removal_of_old_ingestion_rows(published):
     '/api/fees/history?chainId=1&vaultAddress=0x'+'33'*20+'&interval=weekly',
     '/api/fees?chainId=999', '/api/fees?since=9999999999',
 ])
-def test_compact_financial_rows_match_without_analysis_outputs(published, route):
-    database, financial, _, _ = published
+def test_compact_financial_rows_match_without_analysis_outputs(financial_publication, route):
+    database, financial = financial_publication
     expected = pairing_response(PairingStore(financial), route)
     with closing(connect(database)) as conn:
         conn.execute('DELETE FROM analysis_outputs')
@@ -353,11 +395,11 @@ def test_hosted_date_index_does_not_scan_vault_rows(published):
 
 
 @pytest.mark.parametrize('pin', ['datasetId', 'publicationId'])
-def test_comparison_superseded_pin_identifies_current_release(published, pin):
-    database, _, _, release = published
-    status, body = HostedAPI(database).response('/api/comparison?' + pin + '=' + 'f'*64)
+def test_comparison_superseded_pin_identifies_current_release(selected_api, pin):
+    api, selection = selected_api
+    status, body = api.response('/api/comparison?' + pin + '=' + 'f'*64)
     assert status == 410
-    assert body['releaseId'] == release
+    assert body['releaseId'] == selection['releaseId']
 
 
 @pytest.mark.parametrize('query', [
@@ -367,8 +409,9 @@ def test_comparison_superseded_pin_identifies_current_release(published, pin):
     'datasetId=' + 'f'*64 + '&publicationId=bad',
     'publicationId=' + 'f'*64 + '&datasetId=bad',
 ])
-def test_comparison_rejects_invalid_filters_before_pin_expiry(published, query):
-    assert HostedAPI(published[0]).response('/api/comparison?' + query)[0] == 400
+def test_comparison_rejects_invalid_filters_before_pin_expiry(selected_api, query):
+    api, _ = selected_api
+    assert api.response('/api/comparison?' + query)[0] == 400
 
 
 def test_republish_regenerated_tvl_manifest_preserves_first_metadata(published, monkeypatch):
@@ -389,8 +432,8 @@ def test_republish_regenerated_tvl_manifest_preserves_first_metadata(published, 
 
 
 @pytest.mark.parametrize('field,value', [('publishedAt', 1), ('diagnostics', {'changed': True})])
-def test_existing_tvl_manifest_ignores_only_identity_excluded_metadata(published, field, value):
-    database, _, _, release = published
+def test_existing_tvl_manifest_ignores_only_identity_excluded_metadata(registered, field, value):
+    database, release = registered
     registry = Registry(database); selection = registry.selection()
     fees = registry.manifest('fees', selection['feesDatasetId'])
     original = registry.manifest('tvl', selection['tvlDatasetId'])

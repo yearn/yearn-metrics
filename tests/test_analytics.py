@@ -181,7 +181,7 @@ def test_profitability_period_chain_retired_and_no_nested_yield_sum():
     assert profitability(financial,rows(),history,configs(),cutoff,10)['vaults']==[]
 
 
-def test_publications_pinned_filters_and_atomic_selection(tmp_path):
+def test_publications_pinned_filters_and_atomic_selection(postgres_database, tmp_path):
     database='staging';conn=connect(database);conn.executescript(SCHEMA)
     identity='a'*64
     meta={'publicationId':identity,'tvlDatasetId':'b'*64}
@@ -200,14 +200,14 @@ def test_publications_pinned_filters_and_atomic_selection(tmp_path):
     assert analytics_response(store,'/api/fees/stack?publicationId='+identity)[0]==200
 
 
-def test_input_zero_stored_and_bad_adapter_fails(tmp_path):
+def test_input_zero_stored_and_bad_adapter_fails(postgres_database, tmp_path):
     conn=connect('staging');conn.executescript(SCHEMA)
     identity=put_input(conn,'fee-config',configs(),observed_at=1)
     assert identity==put_input(conn,'fee-config',configs(),observed_at=1)
     with pytest.raises(ValueError,match='unsupported finance adapter'):rules('garbage','garbage')
 
 
-def test_failed_retry_preserves_known_zero_and_membership(tmp_path):
+def test_failed_retry_preserves_known_zero_and_membership(postgres_database, tmp_path):
     from yearn_data.analytics import selected_input
     conn=connect('staging');conn.executescript(SCHEMA)
     put_input(conn,'fee-config',{'vaults':[{'chainId':1,'address':A,'performanceFee':0,'managementFee':0,'observedAt':1}]},observed_at=1)
@@ -226,7 +226,7 @@ def test_stack_unsupported_configuration_is_not_fixed_rate():
     assert result['chains'][0]['effectivePerfFee'] is None
 
 
-def test_prepare_freezes_inputs_and_retains_old_selection(tmp_path):
+def test_prepare_freezes_inputs_and_retains_old_selection(postgres_database, tmp_path):
     from yearn_data.analytics import prepare
     db='staging';conn=connect(db);conn.executescript(SCHEMA)
     put_input(conn,'fee-config',configs(),observed_at=1)

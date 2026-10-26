@@ -43,7 +43,7 @@ def _db_with_lifetime_yield(tmp_path, value="125.123456789"):
     return conn, run_id
 
 
-def test_latest_lifetime_yield_anchor_reads_completed_summary(tmp_path):
+def test_latest_lifetime_yield_anchor_reads_completed_summary(postgres_database, tmp_path):
     conn, run_id = _db_with_lifetime_yield(tmp_path)
 
     value, default_run_id = latest_lifetime_yield_anchor(conn)
@@ -83,7 +83,7 @@ def test_lifetime_yield_headline_json_keeps_decimal_values_numeric():
     assert json.loads(payload_json)["net_yield_usd"] == 125.123456789
 
 
-def test_publish_lifetime_yield_headline_sets_atomic_json_with_ttl(tmp_path):
+def test_publish_lifetime_yield_headline_sets_atomic_json_with_ttl(postgres_database, tmp_path):
     conn, _ = _db_with_lifetime_yield(tmp_path)
     redis = FakeRedis(raw=b'{"net_yield_usd":"100","as_of_ms":1000}')
 

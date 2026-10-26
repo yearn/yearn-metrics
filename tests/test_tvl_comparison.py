@@ -82,14 +82,14 @@ def test_incomplete_factory_scan_does_not_establish_absence():
     assert len(r['unresolvedVaults'])==1
 
 
-def test_comparison_inputs_replace_instead_of_retaining_stale_vaults():
+def test_comparison_inputs_replace_instead_of_retaining_stale_vaults(postgres_database):
     conn=connect('staging');conn.executescript(SCHEMA)
     put_input(conn,'comparison-evidence',evidence([external('removed')]),observed_at=1)
     put_input(conn,'comparison-evidence',evidence([]),observed_at=2)
     assert selected_input(conn,'comparison-evidence')['body']['vaults']==[]
 
 
-def test_prepared_publication_pins_evidence_without_rewriting_previous_result(tmp_path):
+def test_prepared_publication_pins_evidence_without_rewriting_previous_result(postgres_database, tmp_path):
     from types import SimpleNamespace
     from yearn_data.analytics import prepare, AnalyticsStore
     from yearn_data.storage import connect
@@ -115,7 +115,7 @@ def test_prepared_publication_pins_evidence_without_rewriting_previous_result(tm
     'vault.protocol', 'vault.chainId', 'vault.address', 'check.protocol', 'check.status', 'check.ourDeductionUsd']
     + [(field, value) for field in ('units', 'replayTvlUsd') for value in ('n/a', 'NaN', 'Infinity', 123, [], {}, True)]
     + [('address', None), ('chainId', []), ('protocol', {}), ('quote', [])])
-def test_incomplete_evidence_does_not_abort_preparation(missing):
+def test_incomplete_evidence_does_not_abort_preparation(postgres_database, missing):
     from types import SimpleNamespace
     from yearn_data.analytics import prepare, AnalyticsStore
     body = evidence([external('ours')], [dict(protocol='yearn-finance', status='missed', ourDeductionUsd='10')])

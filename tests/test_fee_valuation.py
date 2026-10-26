@@ -14,7 +14,7 @@ FAMILY = 'yearn-v3-allocator'
 
 
 @pytest.fixture
-def db(tmp_path):
+def db(postgres_database, tmp_path):
     conn = connect('staging');init_db(conn)
     yield conn
     conn.close()

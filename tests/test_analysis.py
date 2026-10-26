@@ -8,8 +8,11 @@ from yearn_data.incident_adjustments import adjustment_for_tx
 from yearn_data.storage import connect, from_json, init_db, seed_chains
 
 
-def test_lifetime_yield_uses_net_gain_minus_loss(tmp_path):
-    conn = connect('staging')
+def test_lifetime_yield_uses_net_gain_minus_loss(postgres_database, tmp_path):
+    assert_lifetime_yield_amounts(connect('staging'))
+
+
+def assert_lifetime_yield_amounts(conn):
     init_db(conn)
     seed_chains(conn, CHAINS)
     conn.execute(
@@ -56,7 +59,7 @@ def test_lifetime_yield_uses_net_gain_minus_loss(tmp_path):
     assert output["priced_reports"] == 1
 
 
-def test_lifetime_yield_includes_active_and_retired_vault_reports(tmp_path):
+def test_lifetime_yield_includes_active_and_retired_vault_reports(postgres_database, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -122,7 +125,7 @@ def test_lifetime_yield_includes_active_and_retired_vault_reports(tmp_path):
     assert {row["vault_address"] for row in vaults} == set(reports)
 
 
-def test_lifetime_yield_selects_and_records_requested_price_source(tmp_path):
+def test_lifetime_yield_selects_and_records_requested_price_source(postgres_database, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -202,7 +205,7 @@ def test_lifetime_yield_selects_and_records_requested_price_source(tmp_path):
     assert report["price_adapter"] == "batchHistorical"
 
 
-def test_lifetime_yield_falls_back_to_defillama_when_yearn_prices_is_missing(tmp_path):
+def test_lifetime_yield_falls_back_to_defillama_when_yearn_prices_is_missing(postgres_database, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -261,7 +264,7 @@ def test_lifetime_yield_falls_back_to_defillama_when_yearn_prices_is_missing(tmp
             assert "price_source" not in output
 
 
-def test_lifetime_yield_excludes_known_incident_adjustments(tmp_path):
+def test_lifetime_yield_excludes_known_incident_adjustments(postgres_database, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -338,7 +341,7 @@ def test_lifetime_yield_excludes_known_incident_adjustments(tmp_path):
     assert all(row["is_adjusted"] for row in outputs)
 
 
-def test_vault_volume_sums_user_and_strategy_gross_flows(tmp_path):
+def test_vault_volume_sums_user_and_strategy_gross_flows(postgres_database, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -414,7 +417,7 @@ def test_vault_volume_sums_user_and_strategy_gross_flows(tmp_path):
 @pytest.mark.parametrize('protocol_raw,total_raw,refunds_raw', [
     (1000000,2500000,500000), (10**18,0,0), (0,10**18,0), (0,0,10**18),
 ])
-def test_vault_fees_uses_v3_report_fee_fields(tmp_path,protocol_raw,total_raw,refunds_raw):
+def test_vault_fees_uses_v3_report_fee_fields(postgres_database, tmp_path,protocol_raw,total_raw,refunds_raw):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -465,7 +468,7 @@ def test_vault_fees_uses_v3_report_fee_fields(tmp_path,protocol_raw,total_raw,re
 
 
 @pytest.mark.parametrize('fee_raw',['3000000000000000000',str(2**255)])
-def test_vault_fees_infers_v2_same_tx_share_mints(tmp_path,fee_raw):
+def test_vault_fees_infers_v2_same_tx_share_mints(postgres_database, tmp_path,fee_raw):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -536,7 +539,7 @@ def test_vault_fees_infers_v2_same_tx_share_mints(tmp_path,fee_raw):
     assert event["recipient"] == "0x0000000000000000000000000000000000000004"
 
 
-def test_zero_amount_report_does_not_require_a_price(tmp_path):
+def test_zero_amount_report_does_not_require_a_price(postgres_database, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -602,6 +605,7 @@ def test_yrecover_loss_is_an_incident_adjustment():
     ],
 )
 def test_lifetime_yield_counts_complete_valuations_without_vault_metadata(
+    postgres_database,
     tmp_path, tx_hash, gain, loss, net, decimals, price, expected_status, expected_priced
 ):
     conn = connect('staging')
@@ -647,6 +651,7 @@ def test_lifetime_yield_counts_complete_valuations_without_vault_metadata(
 @pytest.mark.parametrize("price", [None, 2.0])
 @pytest.mark.parametrize("protocol_fees,refunds", [("0", "1000000"), ("1000000", "0")])
 def test_vault_fees_counts_refund_and_protocol_only_events_by_all_components(
+    postgres_database,
     tmp_path, price, protocol_fees, refunds
 ):
     conn = connect('staging')
@@ -684,7 +689,7 @@ def test_vault_fees_counts_refund_and_protocol_only_events_by_all_components(
 
 @pytest.mark.parametrize("version", ["v2", "v3"])
 @pytest.mark.parametrize("defillama_price", [None, 2.0])
-def test_vault_fees_never_silently_uses_yearn_prices(tmp_path, version, defillama_price):
+def test_vault_fees_never_silently_uses_yearn_prices(postgres_database, tmp_path, version, defillama_price):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)

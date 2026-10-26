@@ -44,7 +44,7 @@ def comparison_store():
                         'tvlByChain':{'Ethereum':10,'Optimism':20}})
 
 
-def test_retained_external_snapshot_preserves_age_and_marks_partial(tmp_path):
+def test_retained_external_snapshot_preserves_age_and_marks_partial(postgres_database, tmp_path):
     conn=connect('staging');conn.executescript(SCHEMA)
     refs=[{'protocol':p,'timestamp':1,'total':10,'byChain':{}} for p in ('yearn-finance','yearn-curating')]
     put_input(conn,'defillama',{'snapshots':refs},observed_at=1)
@@ -72,7 +72,7 @@ def test_unpriced_current_vault_remains_in_comparable_scope():
     assert result['availability']['unavailableTvlVaults'][0]['countedTvlUsd'] is None
 
 
-def test_retry_retains_coherent_fee_support_but_rejects_changed_accountant(tmp_path):
+def test_retry_retains_coherent_fee_support_but_rejects_changed_accountant(postgres_database, tmp_path):
     conn=connect('staging');conn.executescript(SCHEMA)
     good={'chainId':1,'address':A,'performanceFee':1000,'managementFee':0,
           'fixedRateSupported':True,'availability':'available','observedAt':1,
@@ -162,7 +162,7 @@ def test_membership_multicall_offsets_keep_zero_and_unavailable(monkeypatch):
     assert [r['included'] for r in result]==[True,False,None]
 
 
-def test_analytics_requires_prepared_selection_before_http_start(tmp_path, monkeypatch):
+def test_analytics_requires_prepared_selection_before_http_start(postgres_database, tmp_path, monkeypatch):
     from yearn_data import pairing
     database='staging';connect(database).close()
     monkeypatch.setattr(pairing,'PairingStore',lambda path:SimpleNamespace(get=lambda:SimpleNamespace(database=database)))
@@ -265,7 +265,7 @@ def test_membership_scope_unknown_is_distinct_from_verified_absence(monkeypatch)
     assert curated[0]['included'] is False
 
 
-def test_kong_chain_failure_retains_fee_retry_evidence(tmp_path,monkeypatch):
+def test_kong_chain_failure_retains_fee_retry_evidence(postgres_database, tmp_path,monkeypatch):
     from yearn_data import analytics_collect as collect
     from yearn_data.storage import init_db
     import requests
@@ -336,7 +336,7 @@ def test_profitability_groups_explain_partial_subtotals():
     assert result['vaults'][0]['availability']['fees']=={'state':'partial','known':1,'expected':2}
 
 
-def test_collected_chain_totals_and_timestamps_use_same_names(monkeypatch):
+def test_collected_chain_totals_and_timestamps_use_same_names(postgres_database, monkeypatch):
     from yearn_data import analytics_collect as collect
     from yearn_data.storage import init_db
     with connect('staging') as conn:
