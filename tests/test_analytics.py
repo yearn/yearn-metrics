@@ -325,3 +325,40 @@ def test_missing_external_chain_is_not_zero(finance,curation,expected):
     chain=next(r for r in result['byChain'] if r['chain']=='Ethereum')
     assert chain['defillama']==expected
     assert chain['difference']==(None if expected is None else 100-expected)
+
+
+@pytest.mark.parametrize('counted,gross,reference_available,retained,state', [
+    (None, '200', True, False, 'partial'),
+    (None, None, True, False, 'partial'),
+    (None, '200', False, False, 'unavailable'),
+    ('0', '200', True, False, 'available'),
+    ('200', '200', True, True, 'partial'),
+])
+def test_comparison_withholds_incomplete_local_scopes(counted, gross, reference_available, retained, state):
+    from yearn_data.analytics import owned_comparison
+    tvl=SimpleNamespace(id='test',catalog={},summary=lambda:{'retiredVaultTvl':0,'overlapExcluded':0,
+        'vaultBridgeExcluded':0,'tvlByChain':{'Ethereum':200,'Base':100}})
+    points=[{'chain_id':8453,'vault':A,'category':'v3','tvl_usd':'100','external_tvl_usd':'100'},
+            {'chain_id':1,'vault':B,'category':'curation','tvl_usd':gross,'external_tvl_usd':counted}]
+    snapshots=[{'protocol':'yearn-finance','total':100,'byChain':{'Base':100,'Ethereum':0},
+                'retainedAfterUnavailableRetry':retained},
+               {'protocol':'yearn-curating','total':200 if reference_available else None,
+                'byChain':{'Base':0,'Ethereum':200}}]
+    result=owned_comparison(tvl,points,snapshots)
+    assert result['availability']['state']==state
+    assert result['availability']['references']==snapshots
+    assert result['grossTvl']==(300 if gross is not None else 100)
+    assert result['ourTotal']==(None if counted is None else 100+float(counted))
+    expected=None if counted is None or not reference_available else float(counted)-200
+    assert result['difference']==expected
+    assert result['differencePercent']==(None if expected is None else expected/300*100)
+    assert result['availability']['unavailableTvlVaults']==(
+        [{'chainId':1,'vaultAddress':B,'reason':'counted TVL unavailable'}] if counted is None else [])
+    chains={r['chain']:r for r in result['byChain']}
+    categories={r['category']:r for r in result['byCategory']}
+    assert chains['Base']['ours']==100
+    assert chains['Base']['difference']==(0 if reference_available else None)
+    assert categories['V1 + V2 + V3']['difference']==0
+    for scope in [chains['Ethereum'],categories['Curation']]:
+        assert scope['ours']==(None if counted is None else float(counted))
+        assert scope['difference']==expected

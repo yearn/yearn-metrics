@@ -49,6 +49,10 @@ def _build_graph(dataset, rows, positions, diagnostics, *, chain_id, category, i
                     and (category is None or row.get('category',row['version'])==category)):
                 unavailable.append({'nodeId':identity,'reason':row.get('reason','missing_valuation')})
             continue
+        if (row.get('external_tvl_usd') is None or row.get('overlap_usd') is None):
+            if ((chain_id is None or row['chain_id']==chain_id)
+                    and (category is None or row.get('category',row['version'])==category)):
+                unavailable.append({'nodeId':identity,'reason':'incomplete_ownership'})
         nodes[identity] = {'id':identity,'chainId':row['chain_id'],'address':row['vault'],
                            'name':row.get('name') or row['vault'],'nodeType':'vault',
                            'category':row.get('category',row['version']),

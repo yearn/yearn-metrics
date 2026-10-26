@@ -5,7 +5,8 @@ import pytest
 
 from yearn_data.storage import connect, init_db
 from yearn_data.tvl import SCHEMA
-from yearn_data.tvl_api import TvlStore, tvl_response
+from yearn_data.tvl_api import BRIDGE_MIGRATIONS, TvlStore, tvl_response
+from yearn_data.tvl_policy import VAULT_POLICIES
 
 DAY = 1704067199  # Sunday UTC close, preceding Monday January 1.
 PARENT = '0x'+'11'*20
@@ -139,8 +140,15 @@ def test_registry_correction_applies_to_history_and_is_pinned(source, monkeypatc
          'supersededTargetVaultAddresses':[old_child]}])
     corrected = TvlStore(path,root).get()
     assert corrected.id != old.id
+    assert corrected.summary()['totalTvl'] == 200
+    assert [r['Ethereum'] for r in corrected.history(interval='daily')['chart']] == [200, 200]
+    legacy = dict(corrected.manifest, datasetId='legacy-corrected')
+    legacy.pop('ownershipAccounting')
+    assert tvl_api.TvlDataset(legacy).summary()['totalTvl'] == 300
     for _, rows, edges, diagnostics in corrected.frames(corrected.dates()):
         assert next(r for r in rows if r['vault']==old_child)['external_tvl_usd'] == '100'
+        target = next(r for r in rows if r['vault']==CHILD)
+        assert target['external_tvl_usd'] is target['overlap_usd'] is None
         assert edges[0]['overlap_usd'] == '0'
         assert diagnostics['status'] == 'incomplete'
         assert diagnostics['external_tvl_usd'] is None
@@ -183,7 +191,8 @@ def test_complete_position_from_different_block_is_not_applied(source):
     conn.execute('UPDATE tvl_snapshots SET data_json=? WHERE run_id=2',(json.dumps(row),))
     conn.commit()
     dataset = TvlStore(path,root).get()
-    assert dataset.summary()['totalTvl'] == 200
+    assert dataset.summary()['totalTvl'] == 100
+    assert next(r for r in dataset.frames((DAY,))[0][1] if r['vault']==CHILD)['external_tvl_usd'] is None
     assert dataset.frames((DAY,))[0][2][0]['reason'] == 'selected_block_mismatch'
 
 
@@ -473,7 +482,7 @@ def test_internal_curation_policy_is_pinned_and_prepared_history_matches(source)
     history=dataset.history(interval='daily',group='category')
     prepare(dataset)
     assert dataset.history(interval='daily',group='category')['chart']==history['chart']
-    legacy=dict(dataset.manifest);legacy.pop('deductInternalCuration');legacy['datasetId']='legacy'
+    legacy=dict(dataset.manifest);legacy.pop('deductInternalCuration');legacy.pop('ownershipAccounting');legacy['datasetId']='legacy'
     assert TvlDataset(legacy).summary()['totalTvl']==210
 
 
@@ -661,3 +670,65 @@ def test_public_chain_history_matches_prepared_dates(source,monkeypatch,suffix,f
     assert streamed==prepared
     for field in ('chart','actualChart','constantPriceChart'):
         if field in streamed:assert [r['timestamp'] for r in streamed[field]]==[DAY+86400]
+
+
+KATANA_MIGRATION_SOURCES = {
+    row['sourceVaultAddress'].lower() for row in BRIDGE_MIGRATIONS
+    if row['sourceChainId'] == 1 and row['targetChainId'] == 747474
+}
+KATANA_PREDEPOSIT_POLICIES = [
+    policy for policy in VAULT_POLICIES
+    if policy['chainId'] == 1 and policy['address'].lower() in KATANA_MIGRATION_SOURCES
+]
+
+
+def test_katana_predeposit_policies_cover_registered_migration_sources():
+    assert len(KATANA_MIGRATION_SOURCES) == 4
+    assert len(KATANA_PREDEPOSIT_POLICIES) == 4
+    assert {policy['address'].lower() for policy in KATANA_PREDEPOSIT_POLICIES} == KATANA_MIGRATION_SOURCES
+    assert all(policy['excludeFromTvl'] and policy['scope'] == 'all-history' for policy in KATANA_PREDEPOSIT_POLICIES)
+
+
+@pytest.mark.parametrize('address', [policy['address'].lower() for policy in KATANA_PREDEPOSIT_POLICIES])
+def test_katana_predeposits_excluded_before_and_after_migration(source, address):
+    from yearn_data.tvl_api import TvlDataset
+    conn, path, root = source
+    conn.execute("INSERT INTO tvl_vaults(chain_id,address,version,tvl_category,updated_at) VALUES (1,?,'v3','v3',1)", (address,))
+    conn.execute("INSERT INTO tvl_vaults(chain_id,address,version,tvl_category,updated_at) VALUES (747474,?,'v3','v3',1)", (CHILD,))
+    dates = (1751241599, 1751327999)  # June 29 and 30 closes, across the migration.
+    for number, timestamp in enumerate(dates, 1):
+        run(conn, number, timestamp, [(address, '100'), (CHILD, '200')])
+        row = json.loads(conn.execute('SELECT data_json FROM tvl_snapshots WHERE run_id=? AND vault=?', (number, CHILD)).fetchone()[0])
+        row['chain_id'] = 747474
+        conn.execute('INSERT INTO tvl_snapshots VALUES (?,?,?,?,?,?)', (number, 747474, CHILD, timestamp, 100+timestamp, json.dumps(row)))
+    conn.commit()
+    dataset = TvlStore(path, root).get()
+    for mode in ('raw', 'external'):
+        history = dataset.history(mode=mode, interval='daily', constant=True)
+        for chart in ('actualChart', 'constantPriceChart'):
+            assert [r['Ethereum'] for r in history[chart]] == [200, 200]
+            assert [r['Katana'] for r in history[chart]] == [200, 200]
+    for grouping in ('vault', 'category'):
+        history = dataset.history(group=grouping, chain_id=1, interval='daily', constant=True)
+        for chart in ('actualChart', 'constantPriceChart'):
+            assert [sum(v for k,v in r.items() if k != 'timestamp') for r in history[chart]] == [200, 200]
+    summary = dataset.summary()
+    assert summary['totalTvl'] == 400
+    assert summary['vaultBridgeExcluded'] == 0
+    assert all(value == 0 for value in summary['crossChainOverlapByChain'].values())
+    assert all(value == 0 for value in summary['crossChainOverlapByCategory'].values())
+    assert dataset.audit()['crossChainVaults'] == []
+    graph = dataset.graph()
+    assert graph['totalBridgeExcludedTvlUsd'] == 0
+    assert graph['bridgeExclusions'] == []
+    for _, rows, _, diagnostics in dataset.frames(dates):
+        assert all(row['vault'] != address for row in rows)
+        assert diagnostics.get('known_bridge_excluded_usd', '0') == '0'
+    # Auditors can still retrieve the original dated valuations from storage.
+    stored = conn.execute('SELECT timestamp,data_json FROM tvl_snapshots WHERE chain_id=1 AND vault=? ORDER BY timestamp', (address,)).fetchall()
+    assert [(row[0], json.loads(row[1])['tvl_usd']) for row in stored] == [(timestamp, '100') for timestamp in dates]
+    assert conn.execute('SELECT COUNT(*) FROM tvl_snapshots WHERE vault=?', (address,)).fetchone()[0] == 2
+    legacy = dict(dataset.manifest)
+    legacy['vaultPolicies'] = [p for p in legacy['vaultPolicies'] if p['address'].lower() != address]
+    legacy['datasetId'] = 'legacy-predeposit-' + address
+    assert [r['Ethereum'] for r in TvlDataset(legacy).history(interval='daily')['chart']] == [300, 200]
