@@ -43,7 +43,7 @@ def test_accrued_uses_same_components_but_preserves_event_identity():
 
 
 @pytest.fixture
-def db(tmp_path):
+def db(postgres_database, tmp_path):
     c=connect('staging');init_db(c)
     yield c
     c.close()

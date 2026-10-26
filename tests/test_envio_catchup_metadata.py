@@ -12,7 +12,7 @@ from yearn_data.storage import connect, from_json, init_db
 
 @pytest.mark.parametrize("version", ["v2", "v3"])
 @pytest.mark.parametrize("conflicting_raw", [False, True])
-def test_explicit_catchup_repairs_resolved_envio_metadata(tmp_path, monkeypatch, version, conflicting_raw):
+def test_explicit_catchup_repairs_resolved_envio_metadata(postgres_database, tmp_path, monkeypatch, version, conflicting_raw):
     conn = connect('staging')
     init_db(conn)
     helpers.seed(conn, version=version)

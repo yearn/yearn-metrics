@@ -25,7 +25,7 @@ def insert(conn, report):
 
 
 @pytest.fixture
-def case_db(tmp_path, monkeypatch):
+def case_db(postgres_database, tmp_path, monkeypatch):
     case = copy.deepcopy(CASES[-1])
     monkeypatch.setattr(fees, 'web3_for', lambda chain: SimpleNamespace(eth=SimpleNamespace(
         call=lambda *args, **kwargs: bytes.fromhex('00'*12+case['evidence']['accountant'][2:]))))
@@ -78,14 +78,13 @@ def test_canonical_csv_keeps_distribution_columns_when_normal_report_is_first(ca
     assert corrected['total_fees_paid_raw'] == '0'
 
 
-@pytest.mark.parametrize('length', [0,191,193,224])
 @pytest.mark.parametrize('offline', [False,True])
-def test_malformed_report_data_stays_unresolved(case_db, length, offline):
+def test_malformed_report_data_stays_unresolved(case_db, offline):
     conn, case = case_db
     if offline: assert index(conn,case) == 1
     log=next(l for l in case['evidence']['receipt']['logs'] if l['logIndex']==case['report']['log_index'])
-    original=log['data'][2:]
-    log['data']='0x'+(original[:length*2] if length<192 else original+'00'*(length-192))
+    # Pure tests cover every length; trailing bytes exercise rejection through both pipelines.
+    log['data'] += '00'
     if offline:
         evidence=json.loads(conn.execute('SELECT evidence_json FROM canonical_fee_reports').fetchone()[0])
         evidence['yvusd']=case['evidence']

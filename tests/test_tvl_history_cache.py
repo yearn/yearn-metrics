@@ -9,7 +9,7 @@ from yearn_data.tvl_history_cache import prepare,ready
 from test_tvl_api import run,DAY,PARENT,CHILD,BRIDGE
 
 
-def test_prepared_history_preserves_repairs_unknowns_nested_caps_and_window_prices(tmp_path,monkeypatch):
+def test_prepared_history_preserves_repairs_unknowns_nested_caps_and_window_prices(postgres_database, tmp_path,monkeypatch):
     path='staging'
     with closing(connect(path)) as conn:
         init_db(conn)
@@ -41,7 +41,7 @@ def test_prepared_history_preserves_repairs_unknowns_nested_caps_and_window_pric
     assert newer.id!=dataset.id and not ready(newer)
 
 
-def test_interrupted_preparation_never_exposes_partial_rows(tmp_path):
+def test_interrupted_preparation_never_exposes_partial_rows(postgres_database, tmp_path):
     path='staging'
     with closing(connect(path)) as conn:
         init_db(conn)
@@ -71,7 +71,7 @@ def test_compact_top_series_preserves_all_capital_and_neutral_total():
     assert original['points'] and original['references']
 
 
-def test_prepared_histories_keep_chain_identity_and_window_reference_changes(tmp_path):
+def test_prepared_histories_keep_chain_identity_and_window_reference_changes(postgres_database, tmp_path):
     path='staging'
     with closing(connect(path)) as conn:
         init_db(conn)
@@ -89,7 +89,7 @@ def test_prepared_histories_keep_chain_identity_and_window_reference_changes(tmp
     assert all(r['vault']=='10:'+PARENT for r in old['references'])
 
 
-def test_published_only_reader_keeps_selection_until_updater_publishes(tmp_path):
+def test_published_only_reader_keeps_selection_until_updater_publishes(postgres_database, tmp_path):
     path='staging';publication=tmp_path/'publication'
     with closing(connect(path)) as conn:
         init_db(conn);run(conn,1,DAY,[(PARENT,'100')])
@@ -102,7 +102,7 @@ def test_published_only_reader_keeps_selection_until_updater_publishes(tmp_path)
     assert new.id!=previous and reader.get().id==new.id
 
 
-def test_price_only_repair_preserves_old_publication_and_recalculates_deductions(tmp_path):
+def test_price_only_repair_preserves_old_publication_and_recalculates_deductions(postgres_database, tmp_path):
     from yearn_data.tvl_history_cache import prepare_price_repair
     from copy import deepcopy
     path='staging'
@@ -126,7 +126,7 @@ def test_price_only_repair_preserves_old_publication_and_recalculates_deductions
     with pytest.raises(ValueError,match='preserve all other'):prepare_price_repair(TvlDataset(incompatible),old)
 
 
-def test_price_repair_rejects_source_with_interrupted_total_preparation(tmp_path, monkeypatch):
+def test_price_repair_rejects_source_with_interrupted_total_preparation(postgres_database, tmp_path, monkeypatch):
     from copy import deepcopy
     from yearn_data import tvl_history_cache as cache
     path = 'staging'
@@ -151,7 +151,7 @@ def test_price_repair_rejects_source_with_interrupted_total_preparation(tmp_path
     assert not ready(repaired)
 
 
-def test_price_repair_resumes_interrupted_destination_totals(tmp_path, monkeypatch):
+def test_price_repair_resumes_interrupted_destination_totals(postgres_database, tmp_path, monkeypatch):
     from copy import deepcopy
     from yearn_data import tvl_history_cache as cache
     path = 'staging'
@@ -183,7 +183,7 @@ def test_price_repair_resumes_interrupted_destination_totals(tmp_path, monkeypat
         assert [row[0] for row in conn.execute('SELECT value FROM tvl_chart_totals WHERE dataset_id=? ORDER BY timestamp,group_by,mode,series',(fresh.id,))]==['200']*4
 
 
-def test_price_repair_keeps_unknown_chain_series_across_multiple_dates(tmp_path):
+def test_price_repair_keeps_unknown_chain_series_across_multiple_dates(postgres_database, tmp_path):
     from copy import deepcopy
     from yearn_data.tvl_history_cache import prepare_price_repair
     path='staging'
@@ -214,7 +214,7 @@ def test_price_repair_keeps_unknown_chain_series_across_multiple_dates(tmp_path)
     assert [r['v2'] for r in categories]==[100,200,300]
 
 
-def test_prepare_history_cli_uses_incremental_repair(tmp_path,monkeypatch,capsys):
+def test_prepare_history_cli_uses_incremental_repair(postgres_database, tmp_path,monkeypatch,capsys):
     from yearn_data import cli,tvl_api
     path='staging';publication=tmp_path/'publication'
     with closing(connect(path)) as conn:
@@ -243,7 +243,7 @@ def test_prepare_history_cli_uses_incremental_repair(tmp_path,monkeypatch,capsys
     assert old.history(interval='daily')['chart'][0]['Ethereum']==100
 
 
-def test_repair_rejects_conflicting_quote_that_would_undo_prior_rejection(tmp_path):
+def test_repair_rejects_conflicting_quote_that_would_undo_prior_rejection(postgres_database, tmp_path):
     from copy import deepcopy
     from yearn_data.tvl_history_cache import prepare_price_repair
     path='staging'
@@ -269,7 +269,7 @@ def test_quote_rejection_inventory_has_unique_coordinates():
     assert len(coordinates)==len(set(coordinates))
 
 
-def test_price_repair_refuses_withdrawn_rejection_even_when_another_is_added(tmp_path):
+def test_price_repair_refuses_withdrawn_rejection_even_when_another_is_added(postgres_database, tmp_path):
     from copy import deepcopy
     from yearn_data.tvl_history_cache import prepare_price_repair
     path='staging'
@@ -290,7 +290,7 @@ def test_price_repair_refuses_withdrawn_rejection_even_when_another_is_added(tmp
     assert previous.history(interval='daily')['chart'][0].get('Ethereum') is None
 
 
-def test_price_repair_rejects_changed_close_that_moves_bridge_deduction(tmp_path):
+def test_price_repair_rejects_changed_close_that_moves_bridge_deduction(postgres_database, tmp_path):
     from copy import deepcopy
     from yearn_data.tvl_history_cache import prepare_price_repair
     path='staging'
@@ -313,7 +313,7 @@ def test_price_repair_rejects_changed_close_that_moves_bridge_deduction(tmp_path
     assert not ready(repaired)
 
 
-def test_price_repair_can_copy_metadata_only_inventory_update(tmp_path,monkeypatch):
+def test_price_repair_can_copy_metadata_only_inventory_update(postgres_database, tmp_path,monkeypatch):
     from copy import deepcopy
     from yearn_data.tvl_history_cache import prepare_price_repair
     path='staging'
@@ -347,7 +347,7 @@ def test_rejection_evidence_does_not_publish_empty_or_repr_values():
 
 
 @pytest.mark.parametrize('include_current', [False,True])
-def test_price_repair_bounds_recalculation_and_copied_rows_to_publication(tmp_path,include_current):
+def test_price_repair_bounds_recalculation_and_copied_rows_to_publication(postgres_database, tmp_path,include_current):
     from copy import deepcopy
     from yearn_data.tvl_history_cache import prepare_price_repair
     path='staging';future=DAY+2*86400
@@ -396,7 +396,7 @@ def test_price_repair_bounds_recalculation_and_copied_rows_to_publication(tmp_pa
 
 @pytest.mark.parametrize('price', ['72000000.00', '7.2e7'])
 @pytest.mark.parametrize('add_rejection', [False, True])
-def test_price_repair_ignores_equivalent_quote_reformatting(tmp_path, monkeypatch, price, add_rejection):
+def test_price_repair_ignores_equivalent_quote_reformatting(postgres_database, tmp_path, monkeypatch, price, add_rejection):
     from copy import deepcopy
     from yearn_data.tvl_history_cache import prepare_price_repair
     with closing(connect('staging')) as conn:

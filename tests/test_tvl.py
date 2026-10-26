@@ -14,7 +14,7 @@ def address(n):
 
 
 @pytest.mark.parametrize('failure', ['authentication', 'configuration'])
-def test_collection_stops_on_operator_price_errors(tmp_path, monkeypatch, failure):
+def test_collection_stops_on_operator_price_errors(postgres_database, tmp_path, monkeypatch, failure):
     from unittest.mock import Mock
     from yearn_data import pricing, tvl_sources
     conn = connect('staging'); init_db(conn)
@@ -188,7 +188,7 @@ def test_versioned_debt_layouts():
 
 
 @pytest.fixture
-def db(tmp_path):
+def db(postgres_database, tmp_path):
     conn=connect('staging')
     init_db(conn)
     for n,version in [(1,'v3'),(2,'v3'),(3,'v1'),(4,'curation')]:
@@ -249,7 +249,7 @@ def test_share_scan_discovers_nonregistry_intermediaries(db):
 
 
 
-def test_cli_export_empty_run_is_actionable(tmp_path):
+def test_cli_export_empty_run_is_actionable(postgres_database, tmp_path):
     with pytest.raises(ValueError,match='no collected TVL run'):
         main(['--db','staging','tvl','export','--out',str(tmp_path/'out')])
 
@@ -371,7 +371,7 @@ def test_empty_v1_does_not_require_undefined_share_price():
 
 @pytest.mark.parametrize('ids', [(1,2,3),(3,2,1)])
 @pytest.mark.parametrize('share_prices', [True,False])
-def test_multilevel_wrappers_use_leaf_value_in_any_order(tmp_path,monkeypatch,ids,share_prices):
+def test_multilevel_wrappers_use_leaf_value_in_any_order(postgres_database, tmp_path,monkeypatch,ids,share_prices):
     conn=connect('staging');init_db(conn)
     outer,middle,leaf=map(address,ids)
     for vault,asset,decimals in [(outer,middle,18),(middle,leaf,18),(leaf,address(90),6)]:
@@ -402,7 +402,7 @@ def test_multilevel_wrappers_use_leaf_value_in_any_order(tmp_path,monkeypatch,id
 
 
 @pytest.mark.parametrize('failure', ['membership','assets','positive-debt','zero-debt'])
-def test_unresolved_adapter_read_failure_cannot_export_complete(tmp_path,monkeypatch,failure):
+def test_unresolved_adapter_read_failure_cannot_export_complete(postgres_database, tmp_path,monkeypatch,failure):
     conn=connect('staging');init_db(conn)
     conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at) VALUES (1,'curation',?,?,18,1)",(address(1),address(90)))
     conn.execute('INSERT INTO tvl_strategies VALUES (1,?,?,?)',(address(1),address(9),'fixture'))
@@ -434,7 +434,7 @@ def test_unresolved_adapter_read_failure_cannot_export_complete(tmp_path,monkeyp
 
 
 @pytest.mark.parametrize('cycle', [False,True])
-def test_nested_valuation_without_a_known_leaf_stays_unavailable(tmp_path,monkeypatch,cycle):
+def test_nested_valuation_without_a_known_leaf_stays_unavailable(postgres_database, tmp_path,monkeypatch,cycle):
     conn=connect('staging');init_db(conn)
     for vault,asset in [(address(1),address(2)),(address(2),address(1) if cycle else address(90))]:
         conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at) VALUES (1,'v3',?,?,18,1)",(vault,asset))

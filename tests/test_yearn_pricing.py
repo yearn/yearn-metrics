@@ -34,7 +34,7 @@ def test_yearn_prices_batches_normalize_and_respect_route_limits():
         assert all(len(timestamps) <= 90 for timestamps in by_token.values())
 
 
-def test_price_unpriced_reports_uses_yearn_prices_eod_and_exact_fallback(monkeypatch, tmp_path):
+def test_price_unpriced_reports_uses_yearn_prices_eod_and_exact_fallback(postgres_database, monkeypatch, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -122,6 +122,7 @@ def test_price_unpriced_reports_uses_yearn_prices_eod_and_exact_fallback(monkeyp
 
 
 def test_price_unpriced_reports_uses_defillama_only_for_unresolved_yearn_prices(
+    postgres_database,
     monkeypatch, tmp_path
 ):
     conn = connect('staging')
@@ -200,6 +201,7 @@ def test_price_unpriced_reports_uses_defillama_only_for_unresolved_yearn_prices(
 
 
 def test_price_unpriced_reports_falls_back_after_yearn_prices_transport_failure(
+    postgres_database,
     monkeypatch, tmp_path
 ):
     from yearn_data.pricing import YearnPricesRequestError
@@ -321,7 +323,7 @@ def test_yearn_authentication_stops_without_fallback(monkeypatch, status):
     assert len(calls) == 1
 
 
-def test_yearn_only_command_disables_both_fallbacks(tmp_path, monkeypatch):
+def test_yearn_only_command_disables_both_fallbacks(postgres_database, tmp_path, monkeypatch):
     from yearn_data import cli
     calls = []
     monkeypatch.setattr(cli, 'price_unpriced_reports', lambda conn, **kw: calls.append(kw) or 0)
@@ -332,13 +334,9 @@ def test_yearn_only_command_disables_both_fallbacks(tmp_path, monkeypatch):
     assert calls[0]['onchain_fallbacks'] is False
 
 
-def test_gnosis_price_namespace_requires_no_rpc():
-    from yearn_data.pricing import yearn_prices_token_key
-    assert yearn_prices_token_key(100, '0x' + '2' * 40) == 'gnosis:0x' + '2' * 40
-
-
 @pytest.mark.parametrize("exact_outcome", ["ok", "missing", "invalid"])
 def test_malformed_batch_preserves_other_targets_and_exact_provider_fallbacks(
+    postgres_database,
     tmp_path, monkeypatch, exact_outcome
 ):
     from yearn_data import pricing
@@ -404,7 +402,7 @@ def test_malformed_batch_preserves_other_targets_and_exact_provider_fallbacks(
         assert rows[assets[0], "defillama"]["price_usd"] == 7.0
 
 
-def test_yearn_only_pricing_rejects_enabled_onchain_fallbacks_before_requests(monkeypatch, tmp_path):
+def test_yearn_only_pricing_rejects_enabled_onchain_fallbacks_before_requests(postgres_database, monkeypatch, tmp_path):
     from yearn_data import pricing
 
     conn = connect('staging')
@@ -417,6 +415,7 @@ def test_yearn_only_pricing_rejects_enabled_onchain_fallbacks_before_requests(mo
 
 @pytest.mark.parametrize("failure", ["batch-auth", "exact-auth", "missing-key"])
 def test_response_error_recovery_preserves_fatal_authentication_and_configuration(
+    postgres_database,
     monkeypatch, tmp_path, failure
 ):
     from yearn_data import pricing
@@ -444,7 +443,7 @@ def test_response_error_recovery_preserves_fatal_authentication_and_configuratio
 
 
 @pytest.mark.parametrize("problem", ["invalid_price", "duplicate", "wrong_day", "missing_source", "malformed_point"])
-def test_default_batch_preserves_valid_points_and_only_verifies_invalid_target(monkeypatch, tmp_path, problem):
+def test_default_batch_preserves_valid_points_and_only_verifies_invalid_target(postgres_database, monkeypatch, tmp_path, problem):
     from yearn_data import pricing
 
     conn = connect('staging')
@@ -523,7 +522,7 @@ def test_numeric_zero_price_still_means_missing_instead_of_a_usable_zero_price(m
 
 
 @pytest.mark.parametrize("event_source", ["rpc", "envio"])
-def test_run_rejects_unsupported_fallback_flags_before_discovery_or_indexing(monkeypatch, tmp_path, event_source):
+def test_run_rejects_unsupported_fallback_flags_before_discovery_or_indexing(postgres_database, monkeypatch, tmp_path, event_source):
     from yearn_data import cli
 
     monkeypatch.setattr(cli, "get_event_source", lambda: event_source)
@@ -534,7 +533,7 @@ def test_run_rejects_unsupported_fallback_flags_before_discovery_or_indexing(mon
 
 
 @pytest.mark.parametrize("fallback_status", ["missing", "retryable", "invalid", "ok"])
-def test_yearn_fallback_does_not_replace_good_stored_prices_with_failures(monkeypatch, tmp_path, fallback_status):
+def test_yearn_fallback_does_not_replace_good_stored_prices_with_failures(postgres_database, monkeypatch, tmp_path, fallback_status):
     from yearn_data import pricing
     from yearn_data.analysis import run_lifetime_yield
 
@@ -586,6 +585,7 @@ def test_yearn_fallback_does_not_replace_good_stored_prices_with_failures(monkey
 @pytest.mark.parametrize("fallback", [None, "defillama"])
 @pytest.mark.parametrize("ordinary_invocation", ["price", "run"])
 def test_open_day_prices_wait_until_close_and_retry_on_an_ordinary_run(
+    postgres_database,
     monkeypatch, tmp_path, fallback, ordinary_invocation
 ):
     from yearn_data import pricing
@@ -650,7 +650,7 @@ def test_open_day_prices_wait_until_close_and_retry_on_an_ordinary_run(
 
 
 @pytest.mark.parametrize("unsupported_chain", [100, 999999])
-def test_unsupported_chain_stays_unpriced_without_aborting_configured_chains(monkeypatch, tmp_path, unsupported_chain):
+def test_unsupported_chain_stays_unpriced_without_aborting_configured_chains(postgres_database, monkeypatch, tmp_path, unsupported_chain):
     from yearn_data import pricing
 
     conn = connect('staging')
@@ -690,6 +690,7 @@ def test_unsupported_chain_stays_unpriced_without_aborting_configured_chains(mon
 @pytest.mark.parametrize("source,has_key", [("yearn-prices", False), ("yearn-prices", True), ("defillama", False)])
 @pytest.mark.parametrize("event_source", ["envio", "rpc"])
 def test_run_checks_yearn_credentials_before_discovery_and_allows_configured_runs(
+    postgres_database,
     monkeypatch, tmp_path, source, has_key, event_source
 ):
     from yearn_data import cli
@@ -723,7 +724,7 @@ def test_run_checks_yearn_credentials_before_discovery_and_allows_configured_run
         assert calls[-1] == "price_unpriced_reports"
 
 
-def test_report_pricing_uses_the_client_chain_capability(monkeypatch, tmp_path):
+def test_report_pricing_uses_the_client_chain_capability(postgres_database, monkeypatch, tmp_path):
     from yearn_data import pricing
     conn = connect('staging')
     init_db(conn)

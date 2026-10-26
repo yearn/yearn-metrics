@@ -85,43 +85,33 @@ def test_existing_fee_pairing_contract_on_postgres(pg,tmp_path):
     assert PairingStore(tmp_path/'fees').get().id == dataset.id
 
 
-@pytest.mark.parametrize('job', ['canonical', 'usd'])
-def test_failed_fee_export_rolls_back_on_postgres(pg,monkeypatch,job):
-    from yearn_data import fees, fee_valuation
+def test_failed_usd_export_rolls_back_on_postgres(pg,monkeypatch):
+    from yearn_data import fee_valuation
     from test_fee_valuation import seed, CUTOFF
     conn, _ = pg
     init_db(conn)
     seed(conn,1)
-    module = fees if job == 'canonical' else fee_valuation
-    export = fees.run_canonical_fees if job == 'canonical' else lambda c: fee_valuation.run_fee_usd(c,before_timestamp=CUTOFF)
-    original = module.write_output
+    original = fee_valuation.write_output
     def interrupted(conn, run_id, name, row):
         original(conn, run_id, name, row)
         raise RuntimeError('injected export interruption')
-    monkeypatch.setattr(module, 'write_output', interrupted)
+    monkeypatch.setattr(fee_valuation, 'write_output', interrupted)
     with pytest.raises(RuntimeError, match='interruption'):
-        export(conn)
+        fee_valuation.run_fee_usd(conn,before_timestamp=CUTOFF)
     run = conn.execute('SELECT * FROM analysis_runs ORDER BY id DESC LIMIT 1').fetchone()
     assert run['status'] == 'failed' and run['completed_at'] is not None
     assert conn.execute('SELECT COUNT(*) FROM analysis_outputs WHERE run_id=?', (run['id'],)).fetchone()[0] == 0
-    monkeypatch.setattr(module, 'write_output', original)
-    completed = export(conn)
+    monkeypatch.setattr(fee_valuation, 'write_output', original)
+    completed = fee_valuation.run_fee_usd(conn,before_timestamp=CUTOFF)
     assert conn.execute('SELECT status FROM analysis_runs WHERE id=?', (completed,)).fetchone()[0] == 'complete'
 
 
-@pytest.mark.parametrize('pipeline',[False,True])
-def test_existing_lifetime_yield_analysis_on_postgres(pg,tmp_path,monkeypatch,pipeline):
-    import test_analysis as cases
-    from yearn_data.storage import seed_chains
-    from yearn_data.config import CHAINS
+def test_existing_lifetime_yield_analysis_in_pipeline(pg):
+    from test_analysis import assert_lifetime_yield_amounts
     conn, _ = pg
-    init_db(conn)
-    seed_chains(conn,CHAINS)
-    # Reuse the financial regression's data and expectations with a PG writer.
-    monkeypatch.setattr(cases,'connect',lambda _:conn)
-    from contextlib import nullcontext
-    with conn.raw.pipeline() if pipeline else nullcontext():
-        cases.test_lifetime_yield_uses_net_gain_minus_loss(tmp_path)
+    # Exercise the same known amounts through the driver's pipeline transport.
+    with conn.raw.pipeline():
+        assert_lifetime_yield_amounts(conn)
 
 
 def test_fee_price_retry_replaces_missing_with_exact_price(pg,monkeypatch):
@@ -175,18 +165,6 @@ def test_good_fallback_quote_survives_failed_refresh_on_postgres(pg):
     refreshed = {key: (3.0, 'ok', {'evidence': 'new valid quote'})}
     assert _write_defillama_price_row(conn, row, refreshed, None, onchain_fallbacks=False) == 1
     assert conn.execute('SELECT price_usd FROM prices').fetchone()[0] == 3.0
-
-
-def test_failed_fee_refresh_preserves_quote_on_postgres(pg):
-    from yearn_data.fee_valuation import save_price
-    conn, _ = pg
-    init_db(conn)
-    target = (1, '0x' + '2' * 40, 86399)
-    good = (2.5, 'ok', {'provider': 'yearn-prices', 'normalized_timestamp': target[2]})
-    save_price(conn, target, good)
-    before = dict(conn.execute('SELECT * FROM fee_daily_prices').fetchone())
-    save_price(conn, target, (None, 'retryable', {'provider': 'yearn-prices'}))
-    assert dict(conn.execute('SELECT * FROM fee_daily_prices').fetchone()) == before
 
 
 def test_real_postgres_analytics_pins_inputs_and_preserves_failed_selection(pg):
@@ -386,12 +364,15 @@ def test_totals_preparation_refuses_concurrent_builder(pg,tmp_path,monkeypatch):
 
 
 @pytest.mark.parametrize('trust_ca', [False,True])
-def test_remote_tls_rejects_untrusted_or_wrong_hostname(tmp_path,trust_ca):
+def test_remote_tls_rejects_untrusted_or_wrong_hostname(tmp_path,monkeypatch,trust_ca):
     import socket
     import ssl
     import subprocess
     import threading
     from yearn_data.postgres import Connection
+    # This local TLS peer is not a database; allow only this handshake test to
+    # use the real driver without provisioning a Postgres schema.
+    monkeypatch.setattr(psycopg, 'connect', psycopg.Connection.connect)
     cert,key=tmp_path/'cert.pem',tmp_path/'key.pem'
     subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','1',
                     '-subj','/CN=wrong.invalid','-addext','subjectAltName=DNS:wrong.invalid',

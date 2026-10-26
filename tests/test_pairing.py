@@ -49,7 +49,7 @@ def snapshots(db, *, fallback=None, fee_cutoff=CUTOFF, fee_price='1'):
 
 
 @pytest.fixture
-def publication(tmp_path):
+def publication(postgres_database, tmp_path):
     db = connect('staging');init_db(db)
     runs = snapshots(db)
     root = tmp_path/'selected'

@@ -21,7 +21,7 @@ def coverage(conn, address, entity="StrategyReported"):
 
 @pytest.mark.parametrize("version", ["v2", "v3"])
 @pytest.mark.parametrize("creation_block", [None, 20])
-def test_lifetime_run_catches_up_a_newly_registered_vault(tmp_path, monkeypatch, version, creation_block):
+def test_lifetime_run_catches_up_a_newly_registered_vault(postgres_database, tmp_path, monkeypatch, version, creation_block):
     conn = helpers._db(tmp_path)
     entity = "StrategyReported" if version == "v3" else "V2StrategyReported"
     kind = "role_manager" if version == "v3" else "registry"
@@ -69,7 +69,7 @@ def test_lifetime_run_catches_up_a_newly_registered_vault(tmp_path, monkeypatch,
     assert conn.execute("SELECT COUNT(*) FROM strategy_reports").fetchone()[0] == 2
 
 
-def test_legacy_shared_cursor_does_not_assert_vault_history(tmp_path, monkeypatch):
+def test_legacy_shared_cursor_does_not_assert_vault_history(postgres_database, tmp_path, monkeypatch):
     conn = helpers._db(tmp_path)
     helpers._seed_vault(conn)
     envio._set_envio_cursor(conn, 1, "StrategyReported", 100)
@@ -83,7 +83,7 @@ def test_legacy_shared_cursor_does_not_assert_vault_history(tmp_path, monkeypatc
     assert calls == []
 
 
-def test_failed_catchup_resumes_completed_windows_without_resetting_shared_cursor(tmp_path, monkeypatch):
+def test_failed_catchup_resumes_completed_windows_without_resetting_shared_cursor(postgres_database, tmp_path, monkeypatch):
     conn = helpers._db(tmp_path)
     helpers._seed_vault(conn)
     monkeypatch.setattr(envio, "latest_processed_block", lambda _: 200)
@@ -120,7 +120,7 @@ def test_failed_catchup_resumes_completed_windows_without_resetting_shared_curso
     assert conn.execute("SELECT COUNT(*) FROM strategy_reports").fetchone()[0] == 2
 
 
-def test_bounded_replay_preserves_all_forward_coverage(tmp_path, monkeypatch):
+def test_bounded_replay_preserves_all_forward_coverage(postgres_database, tmp_path, monkeypatch):
     conn = helpers._db(tmp_path)
     helpers._seed_vault(conn)
     monkeypatch.setattr(envio, "latest_processed_block", lambda _: 200)
@@ -134,7 +134,7 @@ def test_bounded_replay_preserves_all_forward_coverage(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("decimals", [None, 6, 18])
-def test_envio_reports_with_prices_require_known_decimals_for_valuation(tmp_path, monkeypatch, decimals):
+def test_envio_reports_with_prices_require_known_decimals_for_valuation(postgres_database, tmp_path, monkeypatch, decimals):
     conn = helpers._db(tmp_path)
     helpers._seed_vault(conn)
     conn.execute("UPDATE vaults SET asset_decimals=?", (decimals,))

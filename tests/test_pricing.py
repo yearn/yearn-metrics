@@ -113,7 +113,7 @@ def test_fetch_defillama_price_retries_rate_limit(monkeypatch):
     assert len(calls) == 2
 
 
-def test_price_unpriced_reports_records_defillama_missing_without_fallback(monkeypatch, tmp_path):
+def test_price_unpriced_reports_records_defillama_missing_without_fallback(postgres_database, monkeypatch, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -145,7 +145,7 @@ def test_price_unpriced_reports_records_defillama_missing_without_fallback(monke
     assert row["status"] == "error"
 
 
-def test_price_unpriced_volume_uses_flow_tables(monkeypatch, tmp_path):
+def test_price_unpriced_volume_uses_flow_tables(postgres_database, monkeypatch, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -178,7 +178,7 @@ def test_price_unpriced_volume_uses_flow_tables(monkeypatch, tmp_path):
     assert row["status"] == "ok"
 
 
-def test_price_unpriced_volume_can_retry_missing_with_polygon_stable_fallback(monkeypatch, tmp_path):
+def test_price_unpriced_volume_can_retry_missing_with_polygon_stable_fallback(postgres_database, monkeypatch, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -235,7 +235,7 @@ def test_price_unpriced_volume_can_retry_missing_with_polygon_stable_fallback(mo
     assert "canonical_polygon_stable_fallback" in row["raw_json"]
 
 
-def test_price_unpriced_reports_retries_missing_with_v3_alias(monkeypatch, tmp_path):
+def test_price_unpriced_reports_retries_missing_with_v3_alias(postgres_database, monkeypatch, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -287,7 +287,7 @@ def test_price_unpriced_reports_retries_missing_with_v3_alias(monkeypatch, tmp_p
     assert "canonical_arbitrum_stable_fallback" in row["raw_json"]
 
 
-def test_price_unpriced_reports_uses_curve_lp_fallback(monkeypatch, tmp_path):
+def test_price_unpriced_reports_uses_curve_lp_fallback(postgres_database, monkeypatch, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -582,7 +582,7 @@ def test_balancer_bpt_price_uses_actual_supply_for_phantom_pool(monkeypatch):
     assert payload["supply_method"] == "getActualSupply()"
 
 
-def test_refresh_onchain_fallbacks_reprices_existing_ok_row(monkeypatch, tmp_path):
+def test_refresh_onchain_fallbacks_reprices_existing_ok_row(postgres_database, monkeypatch, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -620,7 +620,7 @@ def test_refresh_onchain_fallbacks_reprices_existing_ok_row(monkeypatch, tmp_pat
     assert conn.execute("SELECT price_usd FROM prices").fetchone()["price_usd"] == 2.0
 
 
-def test_price_unpriced_reports_uses_crv_derivative_fallback(monkeypatch, tmp_path):
+def test_price_unpriced_reports_uses_crv_derivative_fallback(postgres_database, monkeypatch, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -756,7 +756,7 @@ def test_curve_zero_balance_does_not_require_valuation(monkeypatch, balance_gett
         _curve_lp_price.cache_clear()
 
 
-def test_yearn_only_missing_price_never_calls_optional_adapters(tmp_path, monkeypatch):
+def test_yearn_only_missing_price_never_calls_optional_adapters(postgres_database, tmp_path, monkeypatch):
     from yearn_data import pricing
     conn = connect('staging')
     init_db(conn)
@@ -775,7 +775,7 @@ def test_yearn_only_missing_price_never_calls_optional_adapters(tmp_path, monkey
     assert tuple(conn.execute('SELECT source,status,price_usd FROM prices').fetchone()) == ('yearn-prices', 'missing', None)
 
 
-def test_exhausted_defillama_target_does_not_abort_other_targets(tmp_path, monkeypatch):
+def test_exhausted_defillama_target_does_not_abort_other_targets(postgres_database, tmp_path, monkeypatch):
     from yearn_data import pricing
     conn = connect('staging')
     init_db(conn)

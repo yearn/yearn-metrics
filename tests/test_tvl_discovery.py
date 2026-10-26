@@ -13,7 +13,7 @@ def addr(n):
 
 
 @pytest.fixture
-def db(tmp_path):
+def db(postgres_database, tmp_path):
     conn=connect('staging')
     init_db(conn)
     yield conn
@@ -403,7 +403,7 @@ def test_unified_source_chain_filter_and_invalid_bounds(db):
     assert db.execute('SELECT COUNT(*) FROM tvl_discovery_runs').fetchone()[0]==1
 
 
-def test_cli_discovery_returns_nonzero_for_partial_source_results(tmp_path,monkeypatch,capsys):
+def test_cli_discovery_returns_nonzero_for_partial_source_results(postgres_database, tmp_path,monkeypatch,capsys):
     from yearn_data.cli import main
     args_seen={}
     def discover(conn,**kwargs):

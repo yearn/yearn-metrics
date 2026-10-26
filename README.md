@@ -58,7 +58,8 @@ to validate and install the committed lockfile before running checks. Lint and
 tests use the interpreter pinned in `.python-version`; tests also run on the
 Python 3.10 minimum declared in `pyproject.toml`. uv uses the interpreter supplied
 by CI, with managed interpreter downloads disabled. See the [Postgres test guide](docs/postgres.md#tests)
-to run the test suite.
+to run the test suite, and the [testing policy](docs/testing.md) for retention
+rules and selecting tests without Postgres.
 
 Fixtures defined in `tests/conftest.py` are available automatically; request them
 as test arguments without importing them. Fixtures defined in other test modules

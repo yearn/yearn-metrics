@@ -38,7 +38,7 @@ def test_invalid_ids_cannot_become_success(monkeypatch):
     assert isinstance(reader.transport(calls,123,False)[calls[0]],Exception)
 
 
-def test_price_omissions_verified_and_persisted(monkeypatch):
+def test_price_omissions_verified_and_persisted(postgres_database, monkeypatch):
     c=connect('staging')
     c.execute('CREATE TABLE tvl_prices(chain_id BIGINT,token_address TEXT,timestamp BIGINT,block_number BIGINT,source TEXT,price_usd DOUBLE PRECISION,status TEXT,raw_json TEXT, '
               'PRIMARY KEY(chain_id,token_address,timestamp,source))')
@@ -52,7 +52,7 @@ def test_price_omissions_verified_and_persisted(monkeypatch):
 
 @pytest.mark.parametrize('stage', ['batch', 'exact'])
 @pytest.mark.parametrize('failure', ['authentication', 'configuration'])
-def test_backfill_stops_on_operator_price_errors(monkeypatch, stage, failure):
+def test_backfill_stops_on_operator_price_errors(postgres_database, monkeypatch, stage, failure):
     from yearn_data import pricing
     conn = connect('staging')
     conn.execute('CREATE TABLE tvl_prices(chain_id BIGINT,token_address TEXT,timestamp BIGINT,block_number BIGINT,source TEXT,price_usd DOUBLE PRECISION,status TEXT,raw_json TEXT, '
@@ -80,7 +80,7 @@ def test_birth_hint_checked_against_previous_block():
 
 
 @pytest.mark.parametrize('interrupted', [False,True])
-def test_restart_restores_saved_batch_exports_without_recollection(tmp_path,monkeypatch,interrupted):
+def test_restart_restores_saved_batch_exports_without_recollection(postgres_database, tmp_path,monkeypatch,interrupted):
     from types import SimpleNamespace
     from yearn_data.storage import connect,init_db
     db='staging';conn=connect(db);init_db(conn)

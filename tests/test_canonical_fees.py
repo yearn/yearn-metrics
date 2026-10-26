@@ -54,7 +54,7 @@ def seed(conn, cases=CASES):
 
 
 @pytest.fixture
-def db(tmp_path):
+def db(postgres_database, tmp_path):
     c = connect('staging')
     init_db(c)
     yield c
@@ -186,7 +186,7 @@ def test_decoder_rejects_ambiguous_fee_pairing():
         decode_v2_receipt(receipt,e['vault_address'])
 
 
-def test_cli_can_project_and_export_allocator_fees_offline(tmp_path):
+def test_cli_can_project_and_export_allocator_fees_offline(postgres_database, tmp_path):
     path='staging'
     conn=connect(path);init_db(conn)
     seed(conn,[c for c in DIRECT if c['event']['contract_family']=='yearn-v3-allocator'])
