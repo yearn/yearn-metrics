@@ -692,7 +692,21 @@ def test_katana_predeposits_excluded_before_and_after_migration(source, address)
         history = dataset.history(group=grouping, chain_id=1, interval='daily', constant=True)
         for chart in ('actualChart', 'constantPriceChart'):
             assert [sum(v for k,v in r.items() if k != 'timestamp') for r in history[chart]] == [200, 200]
-    assert dataset.summary()['totalTvl'] == 400
+    summary = dataset.summary()
+    assert summary['totalTvl'] == 400
+    assert summary['vaultBridgeExcluded'] == 0
+    assert all(value == 0 for value in summary['crossChainOverlapByChain'].values())
+    assert all(value == 0 for value in summary['crossChainOverlapByCategory'].values())
+    assert dataset.audit()['crossChainVaults'] == []
+    graph = dataset.graph()
+    assert graph['totalBridgeExcludedTvlUsd'] == 0
+    assert graph['bridgeExclusions'] == []
+    for _, rows, _, diagnostics in dataset.frames(dates):
+        assert all(row['vault'] != address for row in rows)
+        assert diagnostics.get('known_bridge_excluded_usd', '0') == '0'
+    # Auditors can still retrieve the original dated valuations from storage.
+    stored = conn.execute('SELECT timestamp,data_json FROM tvl_snapshots WHERE chain_id=1 AND vault=? ORDER BY timestamp', (address,)).fetchall()
+    assert [(row[0], json.loads(row[1])['tvl_usd']) for row in stored] == [(timestamp, '100') for timestamp in dates]
     assert conn.execute('SELECT COUNT(*) FROM tvl_snapshots WHERE vault=?', (address,)).fetchone()[0] == 2
     legacy = dict(dataset.manifest)
     legacy['vaultPolicies'] = [p for p in legacy['vaultPolicies'] if p['address'].lower() != address]
