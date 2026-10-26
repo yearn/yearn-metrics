@@ -164,6 +164,7 @@ def test_hosted_graph_uses_selected_tvl_release_and_rejects_retired_pin(publishe
 @pytest.mark.parametrize('url,status,expected', [
     ('/api/fees',200,'public, s-maxage=30'),
     ('/api/fees?datasetId='+'a'*64,200,'public, s-maxage=3600'),
+    ('/api/fees/vaults/history?datasetId='+'a'*64,200,'public, s-maxage=3600'),
     ('/api/profitability?datasetId='+'a'*64,200,'public, s-maxage=30'),
     ('/api/profitability?publicationId='+'a'*64,200,'public, s-maxage=3600'),
     ('/api/comparison',200,'public, s-maxage=30'),
@@ -261,6 +262,8 @@ def test_prepared_history_survives_removal_of_old_ingestion_rows(published):
 
 @pytest.mark.parametrize('route', [
     '/api/fees', '/api/fees/vaults', '/api/fees/history?interval=weekly',
+    '/api/fees/vaults/history?scope=product',
+    '/api/fees/vaults/history?chainId=1&interval=weekly',
     '/api/fees/history?chainId=1,10&interval=monthly',
     '/api/fees?chainId=10&since=1704153600&until=1704240000',
     '/api/fees?chainId=1&vaultAddress=0x'+'22'*20,
@@ -537,3 +540,20 @@ def test_publish_with_malformed_vault_valuation(published, field):
     publish(database, financial, history, prepare_analytics=True)
     code, payload = HostedAPI(database).response('/api/comparison/defillama-comparable')
     assert code == 200 and payload['reconciliation']['state'] == 'unavailable'
+
+
+def test_grouped_fee_history_rejects_stale_pin_before_loading_rows(selected_api):
+    api, selection = selected_api
+    status, body = api.response('/api/fees/vaults/history?datasetId=' + 'f'*64)
+    assert status == 410 and body['releaseId'] == selection['releaseId']
+
+
+def test_grouped_fee_history_discards_response_if_publication_changes(selected_api, monkeypatch):
+    from types import SimpleNamespace
+    api, selection = selected_api
+    def view(*args):
+        selection['releaseId'] = 'b'*64
+        return {'buckets': []}
+    monkeypatch.setattr(api.registry, 'fees', lambda _: SimpleNamespace(view=view))
+    status, body = api.response('/api/fees/vaults/history?datasetId=' + selection['feesDatasetId'])
+    assert status == 410 and body['releaseId'] == 'b'*64

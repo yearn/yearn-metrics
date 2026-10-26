@@ -351,3 +351,79 @@ def test_pairing_compression_encoding_case(monkeypatch,encoding,compressed):
         return server
     monkeypatch.setattr(pairing,'ThreadingHTTPServer',create_server)
     pairing.serve_pairing('unused')
+
+
+@pytest.mark.parametrize('interval', ['monthly', 'weekly'])
+@pytest.mark.parametrize('scope', ['contract', 'product'])
+def test_grouped_vault_history_preserves_exact_month_views_and_empty_ranges(monkeypatch, interval, scope):
+    """One row read must replace fanout without changing scope or decimal order."""
+    from yearn_data import fee_products
+    from yearn_data.pairing import FEE_FIELDS, EARNINGS_FIELDS
+    dataset = PairingDataset.__new__(PairingDataset)
+    dataset.id = 'a' * 64
+    dataset.cutoff = DAY + 62 * 86400
+    dataset.chains = (1, 10)
+    dataset.vault_names = {}
+    dataset.vaults = frozenset(((1, VAULT), (1, TOKENIZED), (10, VAULT)))
+    monkeypatch.setattr(fee_products, 'PRODUCTS', ({
+        'id': 'test', 'chainId': 1, 'address': VAULT, 'name': 'Product',
+        'memberAddresses': (VAULT, TOKENIZED), 'earningsAddress': VAULT,
+    },))
+    def row(address, timestamp, amount, *, chain=1):
+        return {'chain_id': chain, 'vault_address': address, 'block_timestamp': timestamp,
+                'contract_family': 'yearn-v3-allocator', 'version': 'v3',
+                **{field: amount for field in (*FEE_FIELDS.values(), *EARNINGS_FIELDS.values())}}
+    dataset.fees = [row(VAULT, DAY, '0.123456789123456789123456789'),
+                    row(TOKENIZED, DAY + 86400, '0.000000000000000000000000001'),
+                    row(VAULT, DAY + 31 * 86400, '0'),
+                    row(TOKENIZED, DAY + 31 * 86400, None),
+                    row(VAULT, DAY, '999', chain=10)]
+    # At precision 28 the middle +1 is rounded away. Recombining exact or
+    # differently ordered subtotals would incorrectly produce 13 instead of 12.
+    dataset.earnings = [row(VAULT, DAY, '10000000000000000000000000000'),
+                        row(VAULT, DAY, '1'),
+                        row(VAULT, DAY, '-10000000000000000000000000000'),
+                        row(VAULT, DAY, '12'), row(TOKENIZED, DAY, '100'),
+                        row(VAULT, DAY + 31 * 86400, '0')]
+    reads = []
+    original = dataset.view_rows
+    def counted(*args):
+        reads.append(args)
+        return original(*args)
+    monkeypatch.setattr(dataset, 'view_rows', counted)
+    until = DAY + 92 * 86400
+    grouped = dataset.view('vault-history', DAY, until, (1,), interval, scope=scope)
+    assert len(reads) == 1
+    assert grouped['dataCutoffTimestamp'] == dataset.cutoff
+    assert grouped['datasetId'] == dataset.id and grouped['aggregationScope'] == scope
+    assert grouped['buckets'][-1]['count'] == 0
+    assert grouped['buckets'][-1]['vaults'] == []
+    for bucket in grouped['buckets']:
+        if bucket['startTimestamp'] < dataset.cutoff:
+            expected = dataset.view('vaults', bucket['startTimestamp'], bucket['endTimestamp'],
+                                    (1,), scope=scope)
+            metadata = {'chainId', 'address', 'name', 'contractFamily', 'productId',
+                        'memberAddresses', 'earningsAddress', 'totalFeesPaidUsd'}
+            assert bucket['vaults'] == [
+                {k: v for k, v in row.items() if k in metadata}
+                | {'lifetimeEarnings': {'netYieldUsd': row['lifetimeEarnings']['netYieldUsd']}}
+                for row in expected['vaults']]
+            assert bucket['count'] == expected['count']
+    first = grouped['buckets'][0]['vaults']
+    assert first[0]['totalFeesPaidUsd'] == ('0.123456789123456789123456790' if scope == 'product'
+                                         else '0.123456789123456789123456789')
+    assert first[0]['lifetimeEarnings'] == {'netYieldUsd': '12'}
+    assert set(first[0]) == ({'chainId', 'address', 'name', 'contractFamily',
+                              'totalFeesPaidUsd', 'lifetimeEarnings'}
+                             | ({'productId', 'memberAddresses', 'earningsAddress'}
+                                if scope == 'product' else set()))
+    february = next(b for b in grouped['buckets'] if b['startTimestamp'] <= DAY + 31 * 86400 < b['endTimestamp'])
+    assert february['vaults'][0]['totalFeesPaidUsd'] == '0'
+    if scope == 'contract':
+        assert february['vaults'][1]['totalFeesPaidUsd'] is None
+    clipped = dataset.view('vault-history', DAY + 1, DAY + 2 * 86400, (1,), interval, scope=scope)
+    assert clipped['buckets'][0]['startTimestamp'] == DAY + 1
+    assert clipped['buckets'][-1]['endTimestamp'] == DAY + 2 * 86400
+
+    huge = dataset.view('vault-history', DAY, 10**30, (1,), interval, scope=scope)
+    assert huge['buckets'] == grouped['buckets']

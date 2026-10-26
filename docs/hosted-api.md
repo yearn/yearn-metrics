@@ -373,3 +373,48 @@ prepared history fails publication before changing the hosted selection. Collect
 new observations in a new run, generate its new dataset ID, and prepare its history
 and analytics before publishing. Preparation is idempotent for an existing dataset;
 it does not extend an already prepared dataset in place.
+
+## Grouped fee vault histories
+
+`GET /api/fees/vaults/history` accepts the existing fee filters: `datasetId`,
+`scope=contract|product`, `chainId`, `vaultAddress`, `since`, `until`, and
+`interval=monthly|weekly`. It returns the selected `datasetId`,
+`aggregationScope`, `interval`, `dataCutoffTimestamp`, and ordered `buckets`.
+Each bucket contains `period`, `startTimestamp`, `endTimestamp`, `count`, and
+`vaults`. Each vault retains `chainId`, `address`, `name`, and `contractFamily`,
+plus `productId`, `memberAddresses`, and `earningsAddress` when applicable. Its
+financial fields are only `totalFeesPaidUsd` and
+`lifetimeEarnings: {netYieldUsd}`; each value remains an exact decimal string or
+null. This compact shape avoids transferring unused fee components, earnings
+components, and contract-family subtotals for every period. The existing
+`/api/fees/vaults` response keeps its full row shape.
+The broad requests used by the charts and monthly table read published source
+rows once, replacing a separate vault query for each period. A product request
+filtered to a member address retains the existing per-member expansion reads.
+
+Buckets use UTC calendar months or Monday-based weeks. Explicit `since` and
+`until` clip the first and last bucket bounds, and event inclusion retains the
+existing half-open range capped at the immutable publication cutoff. With no
+`since`, the first bucket starts at the earliest matching event; with no `until`,
+the last bucket ends at the cutoff. Empty buckets within that range contain
+`count: 0` and `vaults: []`, rather than fabricated numeric amounts. Requests
+starting at or after the cutoff still fail validation. An explicit `until`
+beyond the cutoff preserves the final publication bucket's calendar identity,
+but emits no later calendar buckets. Even an arbitrarily large `until` cannot
+create an unbounded future calendar. `dataCutoffTimestamp` distinguishes a
+partially observed final bucket from a complete period; consumers must not
+interpret wholly unobserved requested periods as genuine zero.
+
+Amounts retain the existing Decimal precision and source order within each
+bucket. Product membership, designated earnings legs, and unavailable versus
+genuine-zero values retain the existing policies. Compact rows calculate only
+the two amounts consumed by these views; they do not calculate unused subtotals. No
+monthly totals are recombined to produce financial sums. This endpoint requires
+no schema migration, publication backfill, or additional database permissions.
+It uses the existing stale-pin and mid-request publication-change HTTP 410
+checks and pinned-response cache policy.
+
+Release the backend route before enabling a consumer that uses it. A consumer
+must validate the dataset, aggregation scope, interval, and exact requested
+bucket bounds; missing or malformed buckets are unavailable data. Reload the
+selection on HTTP 410. Older backends return 404 for this new route.
