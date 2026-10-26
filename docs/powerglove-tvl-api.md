@@ -179,8 +179,18 @@ history. Auditors need authorized source database access: query `tvl_snapshots`
 by `chain_id = 1`, the vault address, and the publication manifest
 `runs[].id` values as `run_id`; `timestamp` and `data_json` retain the original
 dated valuations.
-The manifest `vaultPolicies` identifies the excluded addresses. Read these source
-observations before accounting; they are not part of the reported TVL totals.
+The manifest `vaultPolicies` identifies the excluded addresses. Do not sum all
+matching observations: select one row per `(chain_id, vault, timestamp)`, preferring
+non-null `tvl_usd`, then non-null `asset_units`, then unavailable rows. Within each
+quality tier, the greatest `run_id` wins. Apply the manifest's frozen
+`priceRejections` to the selected row: an exact chain/asset/timestamp/price match
+makes its price and TVL unavailable, without falling back to an older quote.
+`TvlDataset.selected_rows(conn, 'tvl_snapshots', timestamps, chain_id=1)` implements
+both steps before the reporting-policy filter; filter its output to the excluded
+addresses. See [Publication and automatic selection](#publication-and-automatic-selection).
+These selected source valuations are not part of the reported TVL totals; reproducing
+an older publication's external or constant-price series also requires that
+publication's dated ownership fractions and reference-price rules.
 Deploying the inventory alone does not rewrite an existing publication: prepare
 and select a new publication to make the change visible to Powerglove.
 

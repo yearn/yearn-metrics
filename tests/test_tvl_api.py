@@ -5,7 +5,8 @@ import pytest
 
 from yearn_data.storage import connect, init_db
 from yearn_data.tvl import SCHEMA
-from yearn_data.tvl_api import TvlStore, tvl_response
+from yearn_data.tvl_api import BRIDGE_MIGRATIONS, TvlStore, tvl_response
+from yearn_data.tvl_policy import VAULT_POLICIES
 
 DAY = 1704067199  # Sunday UTC close, preceding Monday January 1.
 PARENT = '0x'+'11'*20
@@ -664,12 +665,24 @@ def test_public_chain_history_matches_prepared_dates(source,monkeypatch,suffix,f
         if field in streamed:assert [r['timestamp'] for r in streamed[field]]==[DAY+86400]
 
 
-@pytest.mark.parametrize('address', [
-    '0x7b5a0182e400b241b317e781a4e9dedfc1429822',
-    '0xcc6a16be713f6a714f68b0e1f4914fd3db15fbef',
-    '0x48c03b6ffd0008460f8657db1037c7e09deedfcb',
-    '0x92c82f5f771f6a44cfa09357dd0575b81bf5f728',
-])
+KATANA_MIGRATION_SOURCES = {
+    row['sourceVaultAddress'].lower() for row in BRIDGE_MIGRATIONS
+    if row['sourceChainId'] == 1 and row['targetChainId'] == 747474
+}
+KATANA_PREDEPOSIT_POLICIES = [
+    policy for policy in VAULT_POLICIES
+    if policy['chainId'] == 1 and policy['address'].lower() in KATANA_MIGRATION_SOURCES
+]
+
+
+def test_katana_predeposit_policies_cover_registered_migration_sources():
+    assert len(KATANA_MIGRATION_SOURCES) == 4
+    assert len(KATANA_PREDEPOSIT_POLICIES) == 4
+    assert {policy['address'].lower() for policy in KATANA_PREDEPOSIT_POLICIES} == KATANA_MIGRATION_SOURCES
+    assert all(policy['excludeFromTvl'] and policy['scope'] == 'all-history' for policy in KATANA_PREDEPOSIT_POLICIES)
+
+
+@pytest.mark.parametrize('address', [policy['address'].lower() for policy in KATANA_PREDEPOSIT_POLICIES])
 def test_katana_predeposits_excluded_before_and_after_migration(source, address):
     from yearn_data.tvl_api import TvlDataset
     conn, path, root = source
