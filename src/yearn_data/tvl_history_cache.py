@@ -9,6 +9,7 @@ from collections import defaultdict
 from decimal import Decimal,localcontext
 
 from .storage import connect, table_exists
+from .tvl import decimal
 
 VERSION = 'dated-accounting-1'
 FIELDS = ('chain_id','vault','name','category','version','asset_units','tvl_usd','external_tvl_usd')
@@ -184,9 +185,10 @@ def prepare_price_repair(dataset, previous):
         quotes={}
         for row in manifest.get('priceRejections',[]):
             coordinate=(row['chainId'],row['asset'].lower(),row['timestamp'])
-            if coordinate in quotes and quotes[coordinate]!=row['priceUsd']:
+            price = decimal(row['priceUsd'])
+            if coordinate in quotes and quotes[coordinate]!=price:
                 raise ValueError('price repair cannot use conflicting quotes at one rejection coordinate')
-            quotes[coordinate]=row['priceUsd']
+            quotes[coordinate]=price
         return {(*coordinate,price) for coordinate,price in quotes.items()}
     old=rejection_set(previous.manifest)
     new=rejection_set(dataset.manifest)

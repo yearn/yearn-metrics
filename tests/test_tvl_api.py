@@ -777,3 +777,15 @@ def test_publish_rejects_conflicting_price_rejections(source, monkeypatch):
     with pytest.raises(ValueError, match='conflicting quotes'):
         tvl_api.publish_tvl(database, publication)
     assert not (publication/'current.json').exists()
+
+
+@pytest.mark.parametrize('price', ['72000000.00', '7.2e7'])
+def test_publish_accepts_numerically_identical_rejections(source, monkeypatch, price):
+    from yearn_data import tvl_api
+    conn, database, publication = source
+    run(conn, 1, DAY, [(PARENT, '720000000')])
+    quote = {'chainId':1, 'asset':'0x'+'aa'*20, 'timestamp':DAY, 'priceUsd':'72000000', 'reason':'fixture'}
+    monkeypatch.setattr(tvl_api, 'PRICE_REJECTIONS', [quote, quote | {'priceUsd':price}])
+    manifest = tvl_api.publish_tvl(database, publication)
+    dataset = tvl_api.TvlDataset(manifest)
+    assert dataset.history(interval='daily')['chart'][0].get('Ethereum') is None

@@ -79,8 +79,8 @@ in-flight revision checks are part of this retention contract. Applying the
 database consolidation alone does not deploy those API changes.
 
 Older local manifest files may remain as small operational records. The file-backed
-TVL API checks the latest consolidation receipt before serving a cached or newly
-loaded pin and again before returning success. It returns HTTP 410 if the pin lacks
+TVL API checks the latest consolidation receipt once, after reading a cached or
+newly loaded pin and before returning its response. It returns HTTP 410 if the pin lacks
 the canonical run union, because its observations may have been removed. Pins that
 include that union remain usable; publishing a new dataset alone does not retire
 old pins. On 410, retry without the dataset pin to use the current local pointer. Do not

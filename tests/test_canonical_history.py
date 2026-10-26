@@ -255,3 +255,20 @@ def test_file_pin_handles_legacy_consolidation_receipts(legacy, keep_manifest):
     store = TvlStore(database, history, auto_publish=False)
     assert tvl_response(store, '/api/tvl?datasetId='+old)[0] == 410
     assert tvl_response(store, '/api/tvl?datasetId='+current.id)[0] == 200
+
+
+@pytest.mark.parametrize('hosted', [False, True])
+def test_receipt_is_checked_once_only_for_file_backed_responses(published, monkeypatch, hosted):
+    from yearn_data.tvl_api import tvl_response
+    database, _, history, _ = published
+    calls=[]; original=TvlDataset.assert_available
+    def check(dataset):
+        calls.append(dataset.id)
+        return original(dataset)
+    monkeypatch.setattr(TvlDataset, 'assert_available', check)
+    if hosted:
+        response = HostedAPI(database).response('/api/tvl/history/runs/latest')
+    else:
+        response = tvl_response(TvlStore(database, history, auto_publish=False), '/api/tvl/history/runs/latest')
+    assert response[0] == 200
+    assert len(calls) == (0 if hosted else 1)

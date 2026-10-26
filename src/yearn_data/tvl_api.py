@@ -171,7 +171,7 @@ class TvlDataset:
         for row in manifest.get('priceRejections', []):
             coordinate = (row['chainId'], row['asset'].lower(), row['timestamp'])
             previous = self.price_rejections.get(coordinate)
-            if previous is not None and previous['priceUsd'] != row['priceUsd']:
+            if previous is not None and decimal(previous['priceUsd']) != decimal(row['priceUsd']):
                 raise ValueError('TVL publication cannot use conflicting quotes at one rejection coordinate')
             self.price_rejections[coordinate] = row
         self._lock = threading.RLock()
@@ -724,9 +724,7 @@ class TvlStore:
                 dataset_id = json.loads((self.root/'current.json').read_text())['datasetId']
             if not isinstance(dataset_id,str) or not re.fullmatch('[a-f0-9]{64}',dataset_id):
                 raise ValueError('invalid TVL datasetId')
-            dataset = self.load(dataset_id)
-            dataset.assert_available()
-            return dataset
+            return self.load(dataset_id)
 
 
 def tvl_response(store, url):
@@ -769,22 +767,27 @@ def tvl_response(store, url):
         if value('category') is not None and value('category') not in CATEGORIES:
             raise ValueError('unsupported TVL category')
         dataset = store.get(value('datasetId'))
-        if chain_id is not None and chain_id not in {c for c,_ in dataset.catalog}:
-            raise ValueError('unsupported TVL chain')
-        if request.path == '/api/tvl/graph':
-            result = dataset.graph(chain_id,value('category'),value('includeRetired','true')=='true')
-        elif request.path.startswith('/api/tvl/history'):
-            if group == 'vault' and len(dataset.sampled_dates(interval,start,end)) > PUBLIC_VAULT_HISTORY_MAX_DATES:
-                raise ValueError('vault history date limit exceeded; narrow the time range or use a coarser interval')
-            result = dataset.history(group,mode,interval,start,end,chain_id,request.path.endswith('/constant-price'),max_points=PUBLIC_HISTORY_MAX_POINTS)
-            if response_format=='chart':result=chart_response(result,top)
-        elif request.path.endswith('/curation-products'):
-            result = dataset.curation(chain_id)
-        elif request.path == '/api/audit/tree':
-            result = dataset.audit(chain_id)
-        else:
-            result = dataset.summary(chain_id)
-        dataset.assert_available()
+        try:
+            if chain_id is not None and chain_id not in {c for c,_ in dataset.catalog}:
+                raise ValueError('unsupported TVL chain')
+            if request.path == '/api/tvl/graph':
+                result = dataset.graph(chain_id,value('category'),value('includeRetired','true')=='true')
+            elif request.path.startswith('/api/tvl/history'):
+                if group == 'vault' and len(dataset.sampled_dates(interval,start,end)) > PUBLIC_VAULT_HISTORY_MAX_DATES:
+                    raise ValueError('vault history date limit exceeded; narrow the time range or use a coarser interval')
+                result = dataset.history(group,mode,interval,start,end,chain_id,request.path.endswith('/constant-price'),max_points=PUBLIC_HISTORY_MAX_POINTS)
+                if response_format=='chart':result=chart_response(result,top)
+            elif request.path.endswith('/curation-products'):
+                result = dataset.curation(chain_id)
+            elif request.path == '/api/audit/tree':
+                result = dataset.audit(chain_id)
+            else:
+                result = dataset.summary(chain_id)
+        finally:
+            # Check once after reads, including cached results and failed reads
+            # of retired rows. Hosted serving has its own release recheck.
+            if isinstance(store, TvlStore):
+                dataset.assert_available()
         return 200, result
     except RetiredTvlDataset as error:
         return 410, {'error':str(error)}

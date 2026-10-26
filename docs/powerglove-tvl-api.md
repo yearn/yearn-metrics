@@ -94,12 +94,19 @@ unavailable amounts remain null rather than fabricated zero.
 `datasets/<dataset-id>.json` freezes finished source-run membership, the vault
 catalogue, positively identified V3 allocators, selection policies and current-close
 diagnostics. `current.json` activates it atomically after validation. Failed
-publication retains the preceding selection. Completed source observations must
-remain immutable and available while clients use their dataset IDs.
+publication retains the preceding selection. Completed observations are immutable,
+but canonical consolidation can retire superseded observations and dataset pins.
 
 The TVL summary returns `datasetId` and `asOfTimestamp`. Powerglove pins its history,
 constant-price chart and chain drilldown to this identity. A stored dataset remains
-addressable after a subsequent collection publishes another one.
+addressable after a subsequent collection publishes another one, until canonical
+consolidation retires its backing observations. The file-backed API returns HTTP
+410 with an `error` when a pin lacks the retained canonical run union. Retry
+without `datasetId` to obtain the current summary, then pin all related requests
+to its new ID. The local current pointer must reference an available publication.
+The hosted API rejects any superseded pin with HTTP 410 and the current
+`releaseId`; reload `/api/publication` and retry the related views together.
+Neither path returns a successful partial history for a retired pin.
 
 ## Routes and accounting
 
@@ -161,7 +168,8 @@ network ID 20 and transaction
 `0x6896487aac1fe132614719e7758719d55d11036bb163d1a959ed9500d8cd30f0`.
 This transaction set all four deposit limits to zero and bridged their USDC, USDT,
 WBTC and ETH positions to Katana. The publication freezes this evidence under
-`bridgeMigrations`; older dataset IDs retain their original accounting context.
+`bridgeMigrations`; older dataset IDs retain their original accounting context
+while available, subject to the HTTP 410 retirement contract above.
 Excluded parent positions remain in diagnostics but no longer deduct child TVL.
 
 Undated bridge registry entries retain the optional latest-close retirement
