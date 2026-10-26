@@ -662,3 +662,39 @@ def test_public_chain_history_matches_prepared_dates(source,monkeypatch,suffix,f
     assert streamed==prepared
     for field in ('chart','actualChart','constantPriceChart'):
         if field in streamed:assert [r['timestamp'] for r in streamed[field]]==[DAY+86400]
+
+
+@pytest.mark.parametrize('address', [
+    '0x7b5a0182e400b241b317e781a4e9dedfc1429822',
+    '0xcc6a16be713f6a714f68b0e1f4914fd3db15fbef',
+    '0x48c03b6ffd0008460f8657db1037c7e09deedfcb',
+    '0x92c82f5f771f6a44cfa09357dd0575b81bf5f728',
+])
+def test_katana_predeposits_excluded_before_and_after_migration(source, address):
+    from yearn_data.tvl_api import TvlDataset
+    conn, path, root = source
+    conn.execute("INSERT INTO tvl_vaults(chain_id,address,version,tvl_category,updated_at) VALUES (1,?,'v3','v3',1)", (address,))
+    conn.execute("INSERT INTO tvl_vaults(chain_id,address,version,tvl_category,updated_at) VALUES (747474,?,'v3','v3',1)", (CHILD,))
+    dates = (1751241599, 1751327999)  # June 29 and 30 closes, across the migration.
+    for number, timestamp in enumerate(dates, 1):
+        run(conn, number, timestamp, [(address, '100'), (CHILD, '200')])
+        row = json.loads(conn.execute('SELECT data_json FROM tvl_snapshots WHERE run_id=? AND vault=?', (number, CHILD)).fetchone()[0])
+        row['chain_id'] = 747474
+        conn.execute('INSERT INTO tvl_snapshots VALUES (?,?,?,?,?,?)', (number, 747474, CHILD, timestamp, 100+timestamp, json.dumps(row)))
+    conn.commit()
+    dataset = TvlStore(path, root).get()
+    for mode in ('raw', 'external'):
+        history = dataset.history(mode=mode, interval='daily', constant=True)
+        for chart in ('actualChart', 'constantPriceChart'):
+            assert [r['Ethereum'] for r in history[chart]] == [200, 200]
+            assert [r['Katana'] for r in history[chart]] == [200, 200]
+    for grouping in ('vault', 'category'):
+        history = dataset.history(group=grouping, chain_id=1, interval='daily', constant=True)
+        for chart in ('actualChart', 'constantPriceChart'):
+            assert [sum(v for k,v in r.items() if k != 'timestamp') for r in history[chart]] == [200, 200]
+    assert dataset.summary()['totalTvl'] == 400
+    assert conn.execute('SELECT COUNT(*) FROM tvl_snapshots WHERE vault=?', (address,)).fetchone()[0] == 2
+    legacy = dict(dataset.manifest)
+    legacy['vaultPolicies'] = [p for p in legacy['vaultPolicies'] if p['address'].lower() != address]
+    legacy['datasetId'] = 'legacy-predeposit-' + address
+    assert [r['Ethereum'] for r in TvlDataset(legacy).history(interval='daily')['chart']] == [300, 200]

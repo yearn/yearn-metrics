@@ -153,11 +153,18 @@ observation outlier rule. It applies the dated external fraction to those values
 It measures asset-unit change at frozen prices, not independently reconstructed
 net deposit flows; share-token assets retain their stored share-unit definition.
 
-The four Ethereum Katana pre-deposit vaults are excluded from external TVL from
-June 30, 2025 at 13:06:47 UTC (09:06:47 Eastern), inclusive. Before that cutoff,
-their TVL remains included even though today's catalogue marks them inactive.
-Raw history retains the stored balances throughout. Both actual and constant-price
-history apply the same dated external fraction.
+The four Ethereum Katana pre-deposit vaults (USDC, WETH, USDT and WBTC) are
+excluded across all history in new publications, including before their June 30,
+2025 migration. This is an explicit reporting-scope decision, not a claim that
+pre-migration assets were already held on Katana. Katana vault balances remain
+included on their own dates; no balances are moved or backfilled onto Katana.
+
+The all-history rule is frozen in `vaultPolicies` and applies to actual and
+constant-price charts, chain/version/vault breakdowns, and reporting totals.
+Raw-mode API charts also respect this reporting scope; stored observations remain
+unchanged for audit. Older dataset IDs retain the original dated exclusion.
+Deploying the inventory alone does not rewrite an existing publication: prepare
+and select a new publication to make the change visible to Powerglove.
 
 The registry stores the migration timestamp, Ethereum block 22817424, destination
 network ID 20 and transaction
