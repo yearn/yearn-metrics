@@ -576,11 +576,13 @@ class TvlDataset:
         # Long daily histories remain streamed instead of retaining millions of
         # vault rows. The main weekly charts fit within the bounded shared cache.
         if self.history_prepared():
-            from .tvl_history_cache import rows
-            frames=rows(self,timestamps,chain_id)
+            from .tvl_history_cache import rows as prepared_rows
+            frame_source = lambda: prepared_rows(self, timestamps, chain_id)
         else:
-            frames = (self.history_rows(timestamps, chain_id) if max_points is None and len(timestamps) <= HISTORY_CACHE_MAX_DATES
-                      else self.streamed_history_rows(timestamps,chain_id))
+            source = (self.history_rows if max_points is None and len(timestamps) <= HISTORY_CACHE_MAX_DATES
+                      else self.streamed_history_rows)
+            frame_source = lambda: source(timestamps, chain_id)
+        frames = frame_source()
         references = {}
         reference_prices = {}
         if constant:
@@ -623,11 +625,7 @@ class TvlDataset:
             # Resolve equal latest values by first appearance in dated charts.
             ranked = sorted(latest, key=latest.get, reverse=True)
             selected, remaining = ranked[:top], ranked[top:]
-            if self.history_prepared():
-                from .tvl_history_cache import rows
-                frames = rows(self, timestamps, chain_id)
-            else:
-                frames = self.streamed_history_rows(timestamps, chain_id)
+            frames = frame_source()
         points = []
         actual_chart, fixed_chart = [], []
         try:

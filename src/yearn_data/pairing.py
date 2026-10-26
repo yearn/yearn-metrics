@@ -66,10 +66,6 @@ def _sum(rows, field, precision=400):
         return format(sum((Decimal(str(value)) for value in values), Decimal(0)), 'f')
 
 
-def _fees(rows):
-    return {name: _sum(rows, field) for name, field in FEE_FIELDS.items()}
-
-
 def _fee_totals(rows):
     """Accumulate overall and family amounts with one decimal conversion each."""
     fields = tuple(FEE_FIELDS.values())

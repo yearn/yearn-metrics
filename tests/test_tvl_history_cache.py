@@ -467,6 +467,18 @@ def test_compact_history_limits_emitted_series_preserving_rank_and_missing_price
         dataset._history('vault', 'external', 'daily', None, None, 1, True, 4)
     compact = dataset._history('vault', 'external', 'daily', None, None, 1, True, 4, 1, metric)
     assert compact['pointCount'] == 4
+    # Bounded uncapped internal charts reuse the materialized source in both
+    # passes, avoiding a second nested-position calculation during emission.
+    with monkeypatch.context() as cached:
+        calls = []
+        def cached_rows(timestamps, chain_id):
+            calls.append((timestamps, chain_id))
+            return tuple(frames)
+        cached.setattr(dataset, 'history_rows', cached_rows)
+        cached.setattr(dataset, 'streamed_history_rows', lambda *args: pytest.fail('cached chart streamed again'))
+        uncapped = dataset._history('vault', 'external', 'daily', None, None, 1, True, top=1, top_metric=metric)
+        assert uncapped == compact
+        assert calls == [(dates, 1), (dates, 1)]
     a, b = ('a (1:a)', 'b (1:b)')
     if metric is None:
         expected = chart_response(full, top=1)
