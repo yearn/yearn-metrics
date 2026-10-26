@@ -4,9 +4,10 @@ The Ethereum base USD yVault (`0x696d02Db93291651ED510704c9b286841d506987`)
 reports locker yield redistribution inside `StrategyReported.total_fees`.
 That redistribution is not fee revenue.
 
-`canonical-fees-7` binds each report to the preceding `FeesReported` event
+The current `fees.METHOD_VERSION` (`canonical-fees-9`) binds each report to the preceding `FeesReported` event
 from its historical accountant, using the complete transaction receipt and a
 block-hash-pinned `accountant()` call. A split cannot be reused across reports.
+This rule was introduced in `canonical-fees-7`.
 Both historical accountants are supported; unknown implementations remain
 unresolved until verified. Zero deductions without a split event are known zero.
 

@@ -12,6 +12,9 @@ Verified runtime hash: `0x48ca6275895571ea285bae62f082392412ccc3ac035877c881a05a
 
 ## Accounting
 
+This rule was introduced in `canonical-fees-9`, the current
+`fees.METHOD_VERSION`.
+
 - Preserve raw StrategyReported deductions as `reported_total_fees_raw`.
 - Classify the deduction less actual protocol fees as `recovery_distribution_raw`;
   expose its valuation as `recoveryDistributionUsd`.

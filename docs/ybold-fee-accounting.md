@@ -15,7 +15,9 @@ The exact-match runtime hash is
 
 ## Accounting rule
 
-`canonical-fees-8` requires a successful receipt matching the report transaction,
+This rule was introduced in `canonical-fees-8`.
+
+The current `fees.METHOD_VERSION` (`canonical-fees-9`) requires a successful receipt matching the report transaction,
 block, log index, strategy and amounts. Historical `accountant()`, `feeRecipient()`
 and runtime code are read at the receipt's block hash. Unknown implementations,
 recipients or unreconciled amounts remain unresolved instead of falling back to
