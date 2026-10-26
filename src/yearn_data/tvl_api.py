@@ -520,9 +520,9 @@ class TvlDataset:
     def _history(self, group, mode, interval, start, end, chain_id, constant, max_points=None):
         timestamps = self.sampled_dates(interval, start, end)
         if not constant and group in ('chain','category','type') and chain_id is None:
-            from .tvl_history_cache import totals_ready,totals
+            from .tvl_history_cache import totals_ready,totals,populated_dates
             if totals_ready(self):
-                chart={timestamp:{'timestamp':timestamp} for timestamp in timestamps}
+                chart={timestamp:{'timestamp':timestamp} for timestamp in populated_dates(self,timestamps)}
                 points=[]
                 for row in totals(self,timestamps,'category' if group=='type' else group,mode,chain_id):
                     value=float(Decimal(row['value']))
@@ -549,6 +549,8 @@ class TvlDataset:
         actual_chart, fixed_chart = [], []
         try:
             for timestamp, rows in frames:
+                if not rows:
+                    continue
                 actual, fixed = defaultdict(list), defaultdict(list)
                 for row in rows:
                     name = (CHAINS.get(row['chain_id'],f"Chain {row['chain_id']}") if group == 'chain' else

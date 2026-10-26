@@ -45,6 +45,19 @@ def totals_ready(dataset):
             (dataset.id,VERSION+'+totals')).fetchone() is not None
 
 
+def populated_dates(dataset, timestamps):
+    """Keep dates with accounted rows, including rows with unavailable values."""
+    if not timestamps:
+        return ()
+    values = ','.join('(?)' for _ in timestamps)
+    statement = f"""SELECT requested.timestamp FROM (VALUES {values}) AS requested(timestamp)
+        WHERE EXISTS (SELECT 1 FROM tvl_chart_rows r
+            WHERE r.dataset_id=? AND r.timestamp=requested.timestamp)
+        ORDER BY requested.timestamp"""
+    with closing(connect(dataset.database, readonly=True)) as conn:
+        return tuple(row['timestamp'] for row in conn.execute(statement, (*timestamps, dataset.id)))
+
+
 def totals(dataset,timestamps,group,mode,chain_id=None):
     if not timestamps:return []
     marks=','.join('?' for _ in timestamps)

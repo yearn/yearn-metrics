@@ -733,3 +733,36 @@ def test_constant_history_excludes_policy_vault_references(source, monkeypatch, 
         assert [r['vault'] for r in unprepared['references']] == ['1:' + PARENT]
     else:
         assert unprepared['meta']['referenceCount'] == 1
+
+
+@pytest.mark.parametrize('group', ['chain', 'category', 'type', 'vault'])
+def test_history_omits_empty_policy_dates_but_keeps_unvalued_dates(source, monkeypatch, group):
+    from types import SimpleNamespace
+    from yearn_data import tvl_api as api
+    from yearn_data.tvl_history_cache import prepare
+    conn, path, root = source
+    run(conn, 1, DAY, [(CHILD, '200')])
+    run(conn, 2, DAY+86400, [(PARENT, None)])
+    run(conn, 3, DAY+2*86400, [(PARENT, '100')])
+    monkeypatch.setattr(api, 'VAULT_POLICIES', [
+        {'chainId': 1, 'address': CHILD, 'version': 'v3', 'category': 'v3', 'excludeFromTvl': True},
+    ])
+    store = TvlStore(path, root)
+    dataset = store.get()
+    urls = [f'/api/tvl/history/runs/latest{suffix}?interval=daily&groupBy={group}&format={format}'
+            for suffix in ('', '/constant-price') for format in ('full', 'chart')]
+    before = [tvl_response(store, url) for url in urls]
+    prepare(dataset)
+    prepared_store = SimpleNamespace(get=lambda _: api.TvlDataset(dataset.manifest))
+    after = [tvl_response(prepared_store, url) for url in urls]
+    assert before == after
+    for status, result in after:
+        assert status == 200
+        for field in ('chart', 'actualChart', 'constantPriceChart'):
+            if field in result:
+                assert [row['timestamp'] for row in result[field]] == [DAY+86400, DAY+2*86400]
+                assert result[field][0] == {'timestamp': DAY+86400}
+    # Offline cached rows must obey the same empty-date rule as public streaming.
+    offline = api.TvlDataset(dataset.manifest)
+    monkeypatch.setattr(offline, 'history_prepared', lambda: False)
+    assert [row['timestamp'] for row in offline.history(group=group, interval='daily', constant=True)['chart']] == [DAY+86400, DAY+2*86400]
