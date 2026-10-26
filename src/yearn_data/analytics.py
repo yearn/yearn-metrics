@@ -16,7 +16,7 @@ from .tvl_api import CHAINS, encoded, key, money
 
 DAY = 86400
 YEAR = 365 * DAY
-VERSION = 'powerglove-analytics-24'
+VERSION = 'powerglove-analytics-25'
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS analytics_inputs (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, observed_at INTEGER NOT NULL,
@@ -98,13 +98,15 @@ def fee_stack(rows, positions, configurations):
     issues = []
     for edge in positions:
         parent = (edge['chain_id'],edge['parent'].lower())
-        if edge.get('accounting_excluded'):continue
+        # Bridge scope contributes neither allocations nor uncertainty. A stale
+        # registry target can still carry unresolved ownership for its parent.
+        if edge.get('reason') == 'bridge_parent_excluded':continue
         child = (edge.get('child_chain_id', edge['chain_id']),
                  (edge.get('child') or edge['strategy']).lower())
         value = edge.get('debt_usd',edge.get('allocated_usd'))
         if edge.get('status')!='ok' or value is None:
             issues.append({'parent':list(parent),'strategy':edge['strategy'],'reason':'unavailable allocation'})
-        elif float(value)>0 and child in by_key:
+        elif not edge.get('accounting_excluded') and float(value)>0 and child in by_key:
             by_parent[parent].append((child,float(value),edge['strategy'].lower()))
     configs = {(r['chainId'],r['address'].lower()):r for r in configurations.get('vaults',[])}
     def build(identity, capital, visited):

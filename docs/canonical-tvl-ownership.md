@@ -66,7 +66,10 @@ combined value unavailable.
 The manifest adds `ownershipAccounting: all-yearn-v1`, changing the dataset hash
 even when the raw runs are unchanged. Old manifests retain their previous
 accounting and remain reproducible while retained. Analytics methodology advances
-to `powerglove-analytics-24`. Prepared rows/totals must be regenerated for the new
+to `powerglove-analytics-25`, which keeps unresolved corrected ownership partial
+in the fee view. Reprepare analytics even when the selected source IDs are
+unchanged; an older prepared fee stack can otherwise retain a known rate for
+unresolved ownership. Prepared rows/totals must be regenerated for the new
 TVL identity; the price-repair copy shortcut rejects changed accounting policy.
 
 For an authorized deployment, prepare a new TVL publication and its full dated

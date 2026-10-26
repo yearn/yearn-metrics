@@ -174,3 +174,30 @@ def test_export_records_current_and_legacy_ownership_policy(source, tmp_path, in
     assert child['overlap_usd'] == (None if include_curation else '0')
     assert exported['history'][0]['known_external_tvl_usd'] == ('100' if include_curation else '300')
     assert exported['history'][0]['external_tvl_usd'] is None
+
+
+def test_curation_preserves_unknown_corrected_destination_ownership(source, monkeypatch):
+    from yearn_data import tvl_api as api
+    from test_tvl_api import BRIDGE
+    conn, database, publication = source
+    monkeypatch.setattr(api, 'TARGET_CORRECTIONS', [
+        {'chainId':1, 'strategyAddress':BRIDGE, 'targetVaultAddress':CHILD,
+         'supersededTargetVaultAddresses':[BRIDGE]}])
+    run(conn, 1, DAY, [(PARENT, '100'), (CHILD, '200')], [(BRIDGE, '50')])
+    for stored in conn.execute('SELECT vault,data_json FROM tvl_snapshots').fetchall():
+        row = json.loads(stored['data_json']); row['category'] = 'curation'
+        conn.execute('UPDATE tvl_snapshots SET data_json=? WHERE vault=?', (json.dumps(row), stored['vault']))
+    edge = json.loads(conn.execute('SELECT data_json FROM tvl_positions').fetchone()[0])
+    edge['method'] = 'service-registry'
+    conn.execute('UPDATE tvl_positions SET data_json=?', (json.dumps(edge),)); conn.commit()
+    dataset = TvlStore(database, publication).get()
+    _, accounted, positions, _ = dataset.frames((DAY,))[0]
+    assert positions[0]['accounting_excluded'] is True
+    assert positions[0]['reason'] == 'superseded_registry_target'
+    assert next(row for row in accounted if row['vault'] == CHILD)['external_tvl_usd'] is None
+    products = dataset.curation()
+    child = next(row for row in products['vaults'] if row['address'] == CHILD)
+    assert child['grossTvlUsd'] == 200
+    assert child['knownInternalOverlapTvlUsd'] is child['netTvlUsd'] is None
+    assert products['grossTvlUsd'] == 300
+    assert products['totalTvlUsd'] == dataset.summary()['totalTvl'] == 100

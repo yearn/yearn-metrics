@@ -226,7 +226,8 @@ def test_stack_unsupported_configuration_is_not_fixed_rate():
     assert result['chains'][0]['effectivePerfFee'] is None
 
 
-def test_prepare_freezes_inputs_and_retains_old_selection(postgres_database, tmp_path):
+def test_prepare_freezes_inputs_and_retains_old_selection(postgres_database, tmp_path, monkeypatch):
+    from yearn_data import analytics
     from yearn_data.analytics import prepare
     db='staging';conn=connect(db);conn.executescript(SCHEMA)
     put_input(conn,'fee-config',configs(),observed_at=1)
@@ -236,8 +237,16 @@ def test_prepare_freezes_inputs_and_retains_old_selection(postgres_database, tmp
                         dates=lambda:[i*DAY+DAY-1 for i in range(365)],history_prepared=lambda:False,
                         history_rows=lambda dates,chain:[(t,tuple(rows())) for t in dates],
                         summary=lambda:{'retiredVaultTvl':0,'overlapExcluded':60,'vaultBridgeExcluded':0})
+    # A changed accounting methodology must not reuse a prior prepared body
+    # when source datasets and inputs have not changed.
+    with monkeypatch.context() as patch:
+        patch.setattr(analytics, 'VERSION', 'powerglove-analytics-24')
+        previous_method = prepare(db,financial,tvl)
     old=prepare(db,financial,tvl)
+    assert old != previous_method
     store=AnalyticsStore(db)
+    assert store.get(previous_method)['meta']['methodologyVersion'] == 'powerglove-analytics-24'
+    assert store.get(old)['meta']['methodologyVersion'] == analytics.VERSION
     assert store.get()['meta']['publicationId']==old
     put_input(conn,'membership',{'vaults':[{'chainId':1,'address':A,'included':False}]},observed_at=2)
     new=prepare(db,financial,tvl,select=False)
@@ -362,3 +371,23 @@ def test_comparison_withholds_incomplete_local_scopes(counted, gross, reference_
     for scope in [chains['Ethereum'],categories['Curation']]:
         assert scope['ours']==(None if counted is None else float(counted))
         assert scope['difference']==expected
+
+
+@pytest.mark.parametrize('reason,status,expected_state', [
+    ('bridge_parent_excluded', 'unavailable', 'available'),
+    ('superseded_registry_target', 'unavailable', 'partial'),
+    ('superseded_registry_target', 'ok', 'available'),
+])
+def test_fee_stack_keeps_unknown_corrected_ownership_but_omits_excluded_flows(reason, status, expected_state):
+    positions = [{'chain_id':1, 'parent':A, 'strategy':C, 'child':B,
+                  'debt_usd':'60', 'status':status, 'accounting_excluded':True,
+                  'reason':reason}]
+    result = fee_stack(rows(), positions, configs())
+    entry = next(row for row in result['entries'] if row['vault']['address'] == A)
+    root = entry['roots'][0]
+    assert root['availability']['state'] == expected_state
+    assert root['children'] == []  # Never price the superseded destination.
+    assert entry['performanceFee'] == (None if expected_state == 'partial' else 1000)
+    assert result['availability']['unresolvedAllocations'] == (
+        [{'parent':[1, A], 'strategy':C, 'reason':'unavailable allocation'}]
+        if expected_state == 'partial' else [])
