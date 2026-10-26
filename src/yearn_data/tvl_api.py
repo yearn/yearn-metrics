@@ -508,7 +508,8 @@ class TvlDataset:
     def streamed_history_rows(self, timestamps, chain_id):
         with closing(self.iter_frames(timestamps,chain_id)) as frames:
             for timestamp,rows,_,_ in frames:
-                yield timestamp,rows
+                if chain_id is None or rows:
+                    yield timestamp,rows
 
     def _history(self, group, mode, interval, start, end, chain_id, constant, max_points=None):
         timestamps = self.sampled_dates(interval, start, end)

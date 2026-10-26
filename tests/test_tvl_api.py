@@ -635,3 +635,29 @@ def test_public_history_bounds_reference_metadata(source,monkeypatch):
     status,result=tvl_response(store,'/api/tvl/history/runs/latest/constant-price?groupBy=vault')
     assert status==400 and 'size limit' in result['error']
     assert not store.get()._history_cache
+
+
+@pytest.mark.parametrize('suffix', ['', '/constant-price'])
+@pytest.mark.parametrize('format', ['full','chart'])
+def test_public_chain_history_matches_prepared_dates(source,monkeypatch,suffix,format):
+    from types import SimpleNamespace
+    from yearn_data.tvl_api import TvlDataset
+    from yearn_data.tvl_history_cache import prepare
+    conn,path,root=source
+    run(conn,1,DAY,[(PARENT,'100')])
+    run(conn,2,DAY+86400,[(PARENT,'100'),(CHILD,'50')])
+    row=json.loads(conn.execute('SELECT data_json FROM tvl_snapshots WHERE run_id=2 AND vault=?',(CHILD,)).fetchone()[0])
+    row['chain_id']=10
+    conn.execute('UPDATE tvl_snapshots SET chain_id=10,data_json=? WHERE run_id=2 AND vault=?',(json.dumps(row),CHILD));conn.commit()
+    store=TvlStore(path,root);dataset=store.get()
+    monkeypatch.setattr(dataset,'history_rows',lambda *args:pytest.fail('public history filled the shared row cache'))
+    url=f'/api/tvl/history/runs/latest{suffix}?chainId=10&interval=daily&format={format}'
+    status,streamed=tvl_response(store,url)
+    assert status==200
+    prepare(dataset)
+    prepared_store=SimpleNamespace(get=lambda _:TvlDataset(dataset.manifest))
+    status,prepared=tvl_response(prepared_store,url)
+    assert status==200
+    assert streamed==prepared
+    for field in ('chart','actualChart','constantPriceChart'):
+        if field in streamed:assert [r['timestamp'] for r in streamed[field]]==[DAY+86400]
