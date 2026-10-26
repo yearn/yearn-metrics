@@ -62,6 +62,32 @@ def _fees(rows):
     return {name: _sum(rows, field) for name, field in FEE_FIELDS.items()}
 
 
+def _fee_totals(rows):
+    """Accumulate overall and family amounts with one decimal conversion each."""
+    fields = tuple(FEE_FIELDS.values())
+    totals = [None] * len(fields)
+    families = {}
+    with localcontext() as ctx:
+        ctx.prec = 400
+        for row in rows:
+            family = families.setdefault(row['contract_family'], [None] * len(fields))
+            for index, field in enumerate(fields):
+                value = row.get(field)
+                if value is not None:
+                    amount = Decimal(str(value))
+                    # Start with Decimal(0), as _sum does: the first amount must
+                    # also undergo the declared precision's rounding.
+                    totals[index] = (totals[index] if totals[index] is not None else Decimal(0)) + amount
+                    family[index] = (family[index] if family[index] is not None else Decimal(0)) + amount
+    def formatted(values):
+        return {name: format(value, 'f') if value is not None else None
+                for name, value in zip(FEE_FIELDS, values)}
+    return formatted(totals) | {'byContractFamily': [
+        {'contractFamily': family} | formatted(families[family])
+        for family in FAMILIES if family in families
+    ]}
+
+
 def _earnings(rows):
     # Preserve the existing lifetime-yield analysis' Decimal accumulation policy.
     return {name: _sum(rows, field, precision=28) for name, field in EARNINGS_FIELDS.items()}
@@ -217,13 +243,9 @@ class PairingDataset:
 
         def totals(fee_rows, report_rows):
             pnl = _earnings(report_rows)
-            return _fees(fee_rows) | {
+            return _fee_totals(fee_rows) | {
                 'grossGainsUsd': pnl['grossGainsUsd'], 'lossesUsd': pnl['lossesUsd'],
                 'netLifetimeEarningsUsd': pnl['netYieldUsd'], 'lifetimeEarnings': pnl,
-                'byContractFamily': [
-                    {'contractFamily': family} | _fees([row for row in fee_rows if row['contract_family'] == family])
-                    for family in FAMILIES if any(row['contract_family'] == family for row in fee_rows)
-                ],
             }
         def vault_totals(fee_rows, report_rows, *, compact=False):
             buckets = defaultdict(lambda: ([], []))

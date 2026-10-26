@@ -51,7 +51,7 @@ def fixture(cls, count, vault_count):
 
 
 @contextmanager
-def source(data, postgres):
+def source(data, postgres, hosted_module=None):
     if not postgres:
         yield lambda: copy.copy(data)
         return
@@ -59,6 +59,7 @@ def source(data, postgres):
     from psycopg import sql
     from psycopg.conninfo import conninfo_to_dict
     from yearn_data import hosted_fees
+    hosted_fees = hosted_module or hosted_fees
     from yearn_data.storage import connect
     from contextlib import closing
     url = os.environ['YEARN_TEST_POSTGRES_URL']

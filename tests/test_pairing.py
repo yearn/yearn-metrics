@@ -16,6 +16,38 @@ VAULT = '0x' + '22' * 20
 TOKENIZED = '0x' + '33' * 20
 
 
+def test_summary_preserves_global_family_precision_and_unavailable_amounts():
+    """Combined fee accumulation must not recombine rounded family subtotals."""
+    dataset = PairingDataset.__new__(PairingDataset)
+    dataset.id = 'a' * 64
+    dataset.cutoff = CUTOFF
+    dataset.chains = (1,)
+    dataset.vaults = frozenset(((1, VAULT),))
+    dataset.vault_names = {}
+    def row(amount, family):
+        return {'chain_id': 1, 'vault_address': VAULT, 'block_timestamp': DAY,
+                'contract_family': family, 'total_fees_paid_usd': amount,
+                'protocol_fee_usd': '0', 'manager_fee_usd': None}
+    dataset.fees = [row('1e400', 'yearn-v2-vault'), row('1', 'yearn-v3-allocator'),
+                    row('-1e400', 'yearn-v2-vault'), row('12', 'yearn-v3-allocator')]
+    dataset.earnings = [dict(row(amount, 'yearn-v2-vault'), net_yield_usd=amount)
+                        for amount in ('1e28', '1', '-1e28', '12')]
+    result = dataset.view('summary')
+    assert result['totalFeesPaidUsd'] == '12'
+    assert result['protocolFeesUsd'] == '0'
+    assert result['managerFeesUsd'] is None
+    assert result['netLifetimeEarningsUsd'] == '12'
+    assert result['grossGainsUsd'] is None
+    assert [(entry['contractFamily'], entry['totalFeesPaidUsd'])
+            for entry in result['byContractFamily']] == [
+                ('yearn-v2-vault', '0'), ('yearn-v3-allocator', '13')]
+    assert all(entry['protocolFeesUsd'] == '0' and entry['managerFeesUsd'] is None
+               for entry in result['byContractFamily'])
+    empty = dataset.view('summary', DAY + 1)
+    assert empty['totalFeesPaidUsd'] is None and empty['byContractFamily'] == []
+    assert empty['netLifetimeEarningsUsd'] is None
+
+
 def snapshots(db, *, fallback=None, fee_cutoff=CUTOFF, fee_price='1'):
     earnings = create_analysis_run(db, 'lifetime-yield', {
         'price_source': 'yearn-prices', 'fallback_price_source': fallback, 'before_timestamp': CUTOFF})

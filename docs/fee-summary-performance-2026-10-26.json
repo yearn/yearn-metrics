@@ -1,0 +1,400 @@
+{
+  "baseline_commit": "f0307a7",
+  "quiet_window": "Root, consumer and backend confirmed idle before both sequential runs. Five fresh-object samples per scope; fixed baseline-then-candidate order.",
+  "before": {
+    "fixture": {
+      "months": 32,
+      "vaults": 1000,
+      "fee_rows": 32000,
+      "earning_rows": 32000
+    },
+    "source": "disposable-postgres",
+    "limits": "Fresh object per sample; database/OS caches may be warm. Timers add overhead. Aggregation includes grouping and Decimal work. Row loading includes SQL/transfer/iteration/decoding. Same-object warm call is process cache. No CDN, HTTP, TLS, production or whole-page latency claim.",
+    "source_sha256": {
+      "pairing": "755c817b9062e3c5aabbc0bcba31d65daba404d97a26b67c6ab7a38a2a47ceba",
+      "hosted_fees": "dc6034a29cabe30ea1f93fcd7a9ee57b925d079b7f04047257de41c2a32981c8"
+    },
+    "results": [
+      {
+        "scope": "contract",
+        "medians": {
+          "connect_ms": 12.632956728339195,
+          "decode_ms": 225.6448958069086,
+          "construct_ms": 8.507028222084045,
+          "row_load_ms": 517.0574281364679,
+          "compute_ms": 1078.7327121943235,
+          "aggregation_ms": 555.2525296807289,
+          "serialize_ms": 0.07668696343898773,
+          "total_ms": 1087.322985753417,
+          "warm_same_object_ms": 0.004343688488006592
+        },
+        "samples": [
+          {
+            "connect_ms": 12.592796236276627,
+            "decode_ms": 228.08277793228626,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 8.507028222084045,
+            "row_load_ms": 523.4801825135946,
+            "compute_ms": 1078.7327121943235,
+            "aggregation_ms": 555.2525296807289,
+            "serialize_ms": 0.08324533700942993,
+            "total_ms": 1087.322985753417,
+            "warm_same_object_ms": 0.004343688488006592,
+            "json_bytes": 3231,
+            "financial_sha256": "f1c23b9dbdb2e3b3269f361177ce91e707cdea43e03d7e75e848bf27aab91b3d"
+          },
+          {
+            "connect_ms": 15.49561507999897,
+            "decode_ms": 229.19530980288982,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 9.765423834323883,
+            "row_load_ms": 517.0574281364679,
+            "compute_ms": 1066.5157195180655,
+            "aggregation_ms": 549.4582913815975,
+            "serialize_ms": 0.09545311331748962,
+            "total_ms": 1076.3765964657068,
+            "warm_same_object_ms": 0.005576759576797485,
+            "json_bytes": 3231,
+            "financial_sha256": "f1c23b9dbdb2e3b3269f361177ce91e707cdea43e03d7e75e848bf27aab91b3d"
+          },
+          {
+            "connect_ms": 18.042948096990585,
+            "decode_ms": 225.6448958069086,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 10.478116571903229,
+            "row_load_ms": 580.8062683790922,
+            "compute_ms": 1182.723730802536,
+            "aggregation_ms": 601.9174624234438,
+            "serialize_ms": 0.07527321577072144,
+            "total_ms": 1193.27712059021,
+            "warm_same_object_ms": 0.003917142748832703,
+            "json_bytes": 3231,
+            "financial_sha256": "f1c23b9dbdb2e3b3269f361177ce91e707cdea43e03d7e75e848bf27aab91b3d"
+          },
+          {
+            "connect_ms": 12.632956728339195,
+            "decode_ms": 224.7009538114071,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 8.056553080677986,
+            "row_load_ms": 508.77564772963524,
+            "compute_ms": 1032.168798148632,
+            "aggregation_ms": 523.3931504189968,
+            "serialize_ms": 0.07668696343898773,
+            "total_ms": 1040.302038192749,
+            "warm_same_object_ms": 0.004407018423080444,
+            "json_bytes": 3231,
+            "financial_sha256": "f1c23b9dbdb2e3b3269f361177ce91e707cdea43e03d7e75e848bf27aab91b3d"
+          },
+          {
+            "connect_ms": 12.464895844459534,
+            "decode_ms": 222.05019742250443,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 8.10249149799347,
+            "row_load_ms": 509.3214176595211,
+            "compute_ms": 1108.1759743392467,
+            "aggregation_ms": 598.8545566797256,
+            "serialize_ms": 0.07500313222408295,
+            "total_ms": 1116.3534689694643,
+            "warm_same_object_ms": 0.0040959566831588745,
+            "json_bytes": 3231,
+            "financial_sha256": "f1c23b9dbdb2e3b3269f361177ce91e707cdea43e03d7e75e848bf27aab91b3d"
+          }
+        ]
+      },
+      {
+        "scope": "product",
+        "medians": {
+          "connect_ms": 12.852737680077553,
+          "decode_ms": 241.76537431776524,
+          "construct_ms": 8.072504773736,
+          "row_load_ms": 547.5014634430408,
+          "compute_ms": 1143.4828788042068,
+          "aggregation_ms": 594.4424849003553,
+          "serialize_ms": 0.0765528529882431,
+          "total_ms": 1151.6249291598797,
+          "warm_same_object_ms": 0.004056841135025024
+        },
+        "samples": [
+          {
+            "connect_ms": 12.504257261753082,
+            "decode_ms": 231.54913447797298,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 8.072504773736,
+            "row_load_ms": 523.4862845391035,
+            "compute_ms": 1143.4828788042068,
+            "aggregation_ms": 619.9965942651033,
+            "serialize_ms": 0.06954558193683624,
+            "total_ms": 1151.6249291598797,
+            "warm_same_object_ms": 0.0037048012018203735,
+            "json_bytes": 3230,
+            "financial_sha256": "ab9a2fe458c2732ef8dda867f9c27a6b27e00ff3550565ddb9ee8643a10cadb9"
+          },
+          {
+            "connect_ms": 12.852737680077553,
+            "decode_ms": 241.76537431776524,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 8.013918995857239,
+            "row_load_ms": 547.5014634430408,
+            "compute_ms": 1091.9756274670362,
+            "aggregation_ms": 544.4741640239954,
+            "serialize_ms": 0.083165243268013,
+            "total_ms": 1100.0727117061615,
+            "warm_same_object_ms": 0.005057081580162048,
+            "json_bytes": 3230,
+            "financial_sha256": "ab9a2fe458c2732ef8dda867f9c27a6b27e00ff3550565ddb9ee8643a10cadb9"
+          },
+          {
+            "connect_ms": 13.74862715601921,
+            "decode_ms": 225.39721801877022,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 8.526559919118881,
+            "row_load_ms": 515.8825404942036,
+            "compute_ms": 1042.3859134316444,
+            "aggregation_ms": 526.5033729374409,
+            "serialize_ms": 0.08413568139076233,
+            "total_ms": 1050.996609032154,
+            "warm_same_object_ms": 0.004244968295097351,
+            "json_bytes": 3230,
+            "financial_sha256": "ab9a2fe458c2732ef8dda867f9c27a6b27e00ff3550565ddb9ee8643a10cadb9"
+          },
+          {
+            "connect_ms": 12.066636234521866,
+            "decode_ms": 291.99869371950626,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 7.978646084666252,
+            "row_load_ms": 603.0608750879765,
+            "compute_ms": 1197.5033599883318,
+            "aggregation_ms": 594.4424849003553,
+            "serialize_ms": 0.0765528529882431,
+            "total_ms": 1205.5585589259863,
+            "warm_same_object_ms": 0.004056841135025024,
+            "json_bytes": 3230,
+            "financial_sha256": "ab9a2fe458c2732ef8dda867f9c27a6b27e00ff3550565ddb9ee8643a10cadb9"
+          },
+          {
+            "connect_ms": 14.526616781949997,
+            "decode_ms": 266.86455123126507,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 8.976535871624947,
+            "row_load_ms": 571.5101398527622,
+            "compute_ms": 1197.1854828298092,
+            "aggregation_ms": 625.675342977047,
+            "serialize_ms": 0.0764746218919754,
+            "total_ms": 1206.238493323326,
+            "warm_same_object_ms": 0.003777444362640381,
+            "json_bytes": 3230,
+            "financial_sha256": "ab9a2fe458c2732ef8dda867f9c27a6b27e00ff3550565ddb9ee8643a10cadb9"
+          }
+        ]
+      }
+    ]
+  },
+  "after": {
+    "fixture": {
+      "months": 32,
+      "vaults": 1000,
+      "fee_rows": 32000,
+      "earning_rows": 32000
+    },
+    "source": "disposable-postgres",
+    "limits": "Fresh object per sample; database/OS caches may be warm. Timers add overhead. Aggregation includes grouping and Decimal work. Row loading includes SQL/transfer/iteration/decoding. Same-object warm call is process cache. No CDN, HTTP, TLS, production or whole-page latency claim.",
+    "source_sha256": {
+      "pairing": "9214c3c01bba478f3f1cb473e5640ba622cc646095fb18845dde72ac98b7db4b",
+      "hosted_fees": "dc6034a29cabe30ea1f93fcd7a9ee57b925d079b7f04047257de41c2a32981c8"
+    },
+    "results": [
+      {
+        "scope": "contract",
+        "medians": {
+          "connect_ms": 12.605376541614532,
+          "decode_ms": 233.9895237237215,
+          "construct_ms": 8.344236761331558,
+          "row_load_ms": 527.5792125612497,
+          "compute_ms": 828.9062809199095,
+          "aggregation_ms": 267.02302508056164,
+          "serialize_ms": 0.07850863039493561,
+          "total_ms": 837.170597165823,
+          "warm_same_object_ms": 0.004017725586891174
+        },
+        "samples": [
+          {
+            "connect_ms": 15.594102442264557,
+            "decode_ms": 228.39731350541115,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 10.191446170210838,
+            "row_load_ms": 509.7820945084095,
+            "compute_ms": 856.2235441058874,
+            "aggregation_ms": 346.4414495974779,
+            "serialize_ms": 0.08060038089752197,
+            "total_ms": 866.4955906569958,
+            "warm_same_object_ms": 0.004017725586891174,
+            "json_bytes": 3231,
+            "financial_sha256": "f1c23b9dbdb2e3b3269f361177ce91e707cdea43e03d7e75e848bf27aab91b3d"
+          },
+          {
+            "connect_ms": 12.605376541614532,
+            "decode_ms": 258.25787894427776,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 8.198807016015053,
+            "row_load_ms": 561.8832558393478,
+            "compute_ms": 828.9062809199095,
+            "aggregation_ms": 267.02302508056164,
+            "serialize_ms": 0.06550922989845276,
+            "total_ms": 837.170597165823,
+            "warm_same_object_ms": 0.003976747393608093,
+            "json_bytes": 3231,
+            "financial_sha256": "f1c23b9dbdb2e3b3269f361177ce91e707cdea43e03d7e75e848bf27aab91b3d"
+          },
+          {
+            "connect_ms": 12.125886976718903,
+            "decode_ms": 233.9895237237215,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 8.034206926822662,
+            "row_load_ms": 527.5792125612497,
+            "compute_ms": 794.4697365164757,
+            "aggregation_ms": 266.89052395522594,
+            "serialize_ms": 0.0680144876241684,
+            "total_ms": 802.5719579309225,
+            "warm_same_object_ms": 0.0034943222999572754,
+            "json_bytes": 3231,
+            "financial_sha256": "f1c23b9dbdb2e3b3269f361177ce91e707cdea43e03d7e75e848bf27aab91b3d"
+          },
+          {
+            "connect_ms": 12.716762721538544,
+            "decode_ms": 225.46961344778538,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 8.405987173318863,
+            "row_load_ms": 510.36190427839756,
+            "compute_ms": 772.2512856125832,
+            "aggregation_ms": 261.8893813341856,
+            "serialize_ms": 0.07916055619716644,
+            "total_ms": 780.7364333420992,
+            "warm_same_object_ms": 0.004034489393234253,
+            "json_bytes": 3231,
+            "financial_sha256": "f1c23b9dbdb2e3b3269f361177ce91e707cdea43e03d7e75e848bf27aab91b3d"
+          },
+          {
+            "connect_ms": 12.527311220765114,
+            "decode_ms": 243.1439571082592,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 8.344236761331558,
+            "row_load_ms": 539.188688620925,
+            "compute_ms": 939.6081995218992,
+            "aggregation_ms": 400.4195109009743,
+            "serialize_ms": 0.07850863039493561,
+            "total_ms": 948.0309449136257,
+            "warm_same_object_ms": 0.0042263418436050415,
+            "json_bytes": 3231,
+            "financial_sha256": "f1c23b9dbdb2e3b3269f361177ce91e707cdea43e03d7e75e848bf27aab91b3d"
+          }
+        ]
+      },
+      {
+        "scope": "product",
+        "medians": {
+          "connect_ms": 12.75685429573059,
+          "decode_ms": 234.24500226974487,
+          "construct_ms": 8.304476737976074,
+          "row_load_ms": 528.7424717098475,
+          "compute_ms": 852.8305105865002,
+          "aggregation_ms": 311.01591885089874,
+          "serialize_ms": 0.07518380880355835,
+          "total_ms": 861.1155264079571,
+          "warm_same_object_ms": 0.003634020686149597
+        },
+        "samples": [
+          {
+            "connect_ms": 13.353496789932251,
+            "decode_ms": 234.24500226974487,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 8.214090019464493,
+            "row_load_ms": 528.7424717098475,
+            "compute_ms": 852.8305105865002,
+            "aggregation_ms": 324.0880388766527,
+            "serialize_ms": 0.07092580199241638,
+            "total_ms": 861.1155264079571,
+            "warm_same_object_ms": 0.003546476364135742,
+            "json_bytes": 3230,
+            "financial_sha256": "ab9a2fe458c2732ef8dda867f9c27a6b27e00ff3550565ddb9ee8643a10cadb9"
+          },
+          {
+            "connect_ms": 12.565957382321358,
+            "decode_ms": 250.12932159006596,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 8.141381666064262,
+            "row_load_ms": 572.9450210928917,
+            "compute_ms": 879.6697519719601,
+            "aggregation_ms": 306.7247308790684,
+            "serialize_ms": 0.07518380880355835,
+            "total_ms": 887.8863174468279,
+            "warm_same_object_ms": 0.003634020686149597,
+            "json_bytes": 3230,
+            "financial_sha256": "ab9a2fe458c2732ef8dda867f9c27a6b27e00ff3550565ddb9ee8643a10cadb9"
+          },
+          {
+            "connect_ms": 13.284917920827866,
+            "decode_ms": 221.98458015918732,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 8.764980360865593,
+            "row_load_ms": 516.5818836539984,
+            "compute_ms": 836.2626992166042,
+            "aggregation_ms": 319.68081556260586,
+            "serialize_ms": 0.0736825168132782,
+            "total_ms": 845.1013620942831,
+            "warm_same_object_ms": 0.003956258296966553,
+            "json_bytes": 3230,
+            "financial_sha256": "ab9a2fe458c2732ef8dda867f9c27a6b27e00ff3550565ddb9ee8643a10cadb9"
+          },
+          {
+            "connect_ms": 12.75685429573059,
+            "decode_ms": 222.99161180853844,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 8.304476737976074,
+            "row_load_ms": 504.5972801744938,
+            "compute_ms": 815.6131990253925,
+            "aggregation_ms": 311.01591885089874,
+            "serialize_ms": 0.08134543895721436,
+            "total_ms": 823.9990212023258,
+            "warm_same_object_ms": 0.0038854777812957764,
+            "json_bytes": 3230,
+            "financial_sha256": "ab9a2fe458c2732ef8dda867f9c27a6b27e00ff3550565ddb9ee8643a10cadb9"
+          },
+          {
+            "connect_ms": 12.501401826739311,
+            "decode_ms": 275.6742089986801,
+            "connect_calls": 2,
+            "decode_calls": 64001,
+            "construct_ms": 8.320080116391182,
+            "row_load_ms": 585.2153040468693,
+            "compute_ms": 896.0681948810816,
+            "aggregation_ms": 310.8528908342123,
+            "serialize_ms": 0.08086487650871277,
+            "total_ms": 904.4691398739815,
+            "warm_same_object_ms": 0.0035353004932403564,
+            "json_bytes": 3230,
+            "financial_sha256": "ab9a2fe458c2732ef8dda867f9c27a6b27e00ff3550565ddb9ee8643a10cadb9"
+          }
+        ]
+      }
+    ]
+  }
+}
