@@ -141,8 +141,11 @@ Native accounting caps verified nested holdings by both parent and child TVL.
 The graph accepts `chainId`, `category`, `includeRetired`, and `datasetId`.
 See [TVL overlap conditions](tvl-overlaps.md) for its flow-versus-deduction fields,
 router and wrapper corrections, cross-chain verification, and review procedure.
-The headline retains the existing service's separate curation-layer convention;
-the curation-product view explicitly deducts verified curated child ownership.
+New publications include curated vaults in the same canonical ownership ledger:
+Yearn-owned deposits reduce the receiving vault's external TVL, including holdings
+routed through strategies. The manifest pins this as `ownershipAccounting:
+all-yearn-v1`; older publications retain their separate curation-layer convention.
+See [canonical ownership](canonical-tvl-ownership.md) for availability and rollout.
 Powerglove uses external TVL directly rather than scaling raw historical values to
 match today's headline. Constant-price history freezes each vault's asset-unit
 price at a reference inside the requested window, using the existing first-seven

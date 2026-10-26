@@ -744,3 +744,20 @@ def test_report_pricing_uses_the_client_chain_capability(monkeypatch, tmp_path):
     pricing.price_unpriced_reports(conn, fallback=None, onchain_fallbacks=False)
     assert calls == [(12345, asset, 86399)]
     assert tuple(conn.execute('SELECT price_usd,status FROM prices').fetchone()) == (2.0, 'ok')
+
+
+def test_hyperevm_batch_uses_canonical_namespace(monkeypatch):
+    asset = '0xb88339cb7199b77e23db6e890353e22632ba630f'
+    timestamp = 1791503999
+
+    def get(path, *, params, timeout):
+        import json
+        assert json.loads(params['coins']) == {f'hyperliquid:{asset}': [timestamp]}
+        return {'coins': {f'hyperliquid:{asset}': {'symbol': 'USDC', 'prices': [
+            {'timestamp': timestamp, 'price': 0.9998, 'source': 'defillama', 'confidence': 0.99}
+        ]}}}
+
+    monkeypatch.setattr('yearn_data.pricing._yearn_prices_get', get)
+    from yearn_data.pricing import fetch_yearn_prices_batch
+    result = fetch_yearn_prices_batch([(999, asset, timestamp)])
+    assert result[(999, asset, timestamp)][:2] == (0.9998, 'ok')

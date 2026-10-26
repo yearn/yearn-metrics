@@ -117,7 +117,7 @@ def yearn_prices_token_key(chain_id: int, token_address: str) -> str:
     if not TOKEN_ADDRESS_PATTERN.fullmatch(token_address):
         raise ValueError(f"invalid token address {token_address!r}")
     # Canonical Yearn Prices namespaces for catalog chains outside fee defaults.
-    additional_chains = {100: 'gnosis', 146: 'sonic', 80094: 'berachain', 4663: 'robinhood'}
+    additional_chains = {100: 'gnosis', 146: 'sonic', 999: 'hyperliquid', 80094: 'berachain', 4663: 'robinhood'}
     if int(chain_id) in additional_chains:
         return f"{additional_chains[int(chain_id)]}:{token_address.lower()}"
     try:

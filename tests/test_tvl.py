@@ -122,7 +122,7 @@ def test_incoming_and_parent_tvl_caps(child_tvl,deductions,external):
 
 def test_curation_is_an_explicit_accounting_choice():
     points=[snapshot(1,'100'),snapshot(2,'100','curation')]
-    assert account(points,[edge(1,9,2,'100','100')])[2]['external_tvl_usd']=='200'
+    assert account(points,[edge(1,9,2,'100','100')],include_curation=False)[2]['external_tvl_usd']=='200'
     assert account(points,[edge(1,9,2,'100','100')],include_curation=True)[2]['external_tvl_usd']=='100'
 
 
@@ -130,13 +130,13 @@ def test_curation_nesting_is_deducted_without_merging_product_layers():
     points=[snapshot(1,'100'),snapshot(2,'100','morpho-v2') | {'category':'curation'},
             snapshot(3,'110','morpho-v1') | {'category':'curation'}]
     positions=[edge(1,8,2,'100','100'),edge(2,9,3,'100','105')]
-    rows,edges,total=account(points,positions)
+    rows,edges,total=account(points,positions,include_curation=False)
     assert [r['external_tvl_usd'] for r in rows]==['100','100','10']
     assert total['external_tvl_usd']=='210'
     assert edges[0]['reason']=='curation_separate_product'
     assert edges[1]['overlap_usd']=='100'
     assert account(points,positions,include_curation=True)[2]['external_tvl_usd']=='110'
-    assert account(points,positions,deduct_internal_curation=False)[2]['external_tvl_usd']=='310'
+    assert account(points,positions,include_curation=False,deduct_internal_curation=False)[2]['external_tvl_usd']=='310'
 
 
 def test_internal_curation_missing_price_is_unavailable_not_zero_overlap():
@@ -323,7 +323,7 @@ def test_curated_product_can_have_v3_contract_semantics():
     child=snapshot(2,'100','v3')
     child['category']='curation'
     positions=[edge(1,2,2,'60','100')]
-    assert Decimal(account([snapshot(1,'100'),child],positions)[2]['external_tvl_usd'])==200
+    assert Decimal(account([snapshot(1,'100'),child],positions,include_curation=False)[2]['external_tvl_usd'])==200
     assert Decimal(account([snapshot(1,'100'),child],positions,include_curation=True)[2]['external_tvl_usd'])==140
 
 

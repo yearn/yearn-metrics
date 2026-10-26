@@ -13,8 +13,10 @@ removes these vaults and their incoming/outgoing edges before computing totals,
 so an excluded parent cannot also deduct a child. Stored balances are preserved.
 This is an explicit reporting exclusion, not a claim about a migration date.
 
-Curation V2 → V1 holdings now reduce curation TVL. Vaults → Curation holdings
-still retain the previously approved separate-product-layer headline policy.
+Curation V2 → V1 holdings reduce curation TVL. At the time of this rollout,
+Vaults → Curation holdings retained the separate-product-layer headline policy.
+New `all-yearn-v1` publications supersede that convention with
+[canonical ownership accounting](canonical-tvl-ownership.md).
 Missing prices remain unavailable and make internal overlap accounting incomplete.
 
 New manifests pin `vaultPolicies` and `deductInternalCuration`. Their presence

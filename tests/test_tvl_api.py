@@ -183,7 +183,8 @@ def test_complete_position_from_different_block_is_not_applied(source):
     conn.execute('UPDATE tvl_snapshots SET data_json=? WHERE run_id=2',(json.dumps(row),))
     conn.commit()
     dataset = TvlStore(path,root).get()
-    assert dataset.summary()['totalTvl'] == 200
+    assert dataset.summary()['totalTvl'] == 100
+    assert next(r for r in dataset.frames((DAY,))[0][1] if r['vault']==CHILD)['external_tvl_usd'] is None
     assert dataset.frames((DAY,))[0][2][0]['reason'] == 'selected_block_mismatch'
 
 
@@ -473,7 +474,7 @@ def test_internal_curation_policy_is_pinned_and_prepared_history_matches(source)
     history=dataset.history(interval='daily',group='category')
     prepare(dataset)
     assert dataset.history(interval='daily',group='category')['chart']==history['chart']
-    legacy=dict(dataset.manifest);legacy.pop('deductInternalCuration');legacy['datasetId']='legacy'
+    legacy=dict(dataset.manifest);legacy.pop('deductInternalCuration');legacy.pop('ownershipAccounting');legacy['datasetId']='legacy'
     assert TvlDataset(legacy).summary()['totalTvl']==210
 
 

@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pricing architecture — focused plan</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; color: #202020; background: #fafafa; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 1080px; margin: auto; padding: 48px 28px 72px; }
+    h1 { font-size: clamp(2rem, 5vw, 3rem); line-height: 1.12; letter-spacing: -.04em; margin: 12px 0 24px; }
+    h2 { font-size: 1.45rem; margin-top: 42px; padding-top: 22px; border-top: 1px solid #ccc; }
+    h3 { font-size: 1.05rem; margin-top: 26px; }
+    p, li { line-height: 1.65; }
+    li + li { margin-top: 7px; }
+    a { color: inherit; text-underline-offset: 3px; }
+    a:hover { text-decoration-thickness: 2px; }
+    a:focus-visible { outline: 3px solid #555; outline-offset: 3px; }
+    code { font-family: ui-monospace, monospace; font-size: .9em; overflow-wrap: anywhere; }
+    .meta { font-size: .85rem; color: #555; }
+    .lead { font-size: 1.16rem; max-width: 850px; }
+    .note { border-left: 3px solid #222; padding: 4px 20px; margin: 26px 0; background: #f0f0f0; }
+    nav { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 28px 0; font-size: .9rem; }
+    .table-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: .94rem; }
+    th, td { text-align: left; vertical-align: top; border-bottom: 1px solid #d8d8d8; padding: 14px 14px 14px 0; line-height: 1.55; }
+    th { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; }
+    td:first-child { min-width: 145px; }
+    .flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 24px 0; }
+    .flow div { border: 1px solid #aaa; padding: 16px; }
+    .flow strong { display: block; margin-bottom: 9px; }
+    .flow span { font-size: .9rem; line-height: 1.5; }
+    details { margin-top: 24px; border: 1px solid #ccc; padding: 18px; }
+    summary { cursor: pointer; font-weight: 650; }
+    .issue { background: white; border: 1px solid #bbb; padding: 20px 24px; }
+    footer { margin-top: 44px; font-size: .85rem; color: #555; }
+    @media (max-width: 700px) { main { padding: 28px 18px 48px; } .flow { grid-template-columns: 1fr 1fr; } th, td { min-width: 190px; } }
+    @media print { body { background: white; } main { max-width: none; padding: 0; } nav { display: none; } .flow, tr, .issue { break-inside: avoid; } details { display: block; } }
+  </style>
+</head>
+<body>
+<main>
+  <div class="meta">YEARN METRICS · PROPOSED PLAN · 20 OCTOBER 2026</div>
+  <h1>Simplify pricing without expanding PR #24</h1>
+  <p class="lead">Keep the correctness fixes and consolidate earnings policy in #24. Preserve the distinct fee, fallback, and TVL work already in later PRs. Track provider-client extraction and a common price-result contract in one separate issue.</p>
+  <p class="meta">Planning only. No implementation, branch history, GitHub issues, or publications changed. The open PR heads and their code were inspected; later PRs have not received a new full review or test run for this plan.</p>
+  <nav aria-label="Plan sections"><a href="#boundary">Outcome and boundaries</a><a href="#pr24">PR #24</a><a href="#later">Later PRs</a><a href="#issue">Separate issue</a><a href="#sequence">Delivery order</a><a href="#evidence">Evidence</a></nav>
+
+  <section id="boundary">
+    <h2>Outcome and boundaries</h2>
+    <p>A pricing change should have one explicit owner for provider selection, one clear result from acquisition, and a deliberate rule for retrying or replacing stored evidence. Adding a provider for earnings must not silently change fee or TVL valuation.</p>
+    <p>Preserve the current earnings default of Yearn Prices with configurable fallback, the explicit Yearn-only mode, exact end-of-day validation, genuine-zero versus unknown values, offline analysis, and the existing CLI/export contracts. Canonical fee USD valuation introduced later is a separate product from legacy <code>vault-fees</code>.</p>
+    <p>The plan does not change economic formulas, choose a new default provider, consolidate the earnings/fee/TVL tables, rescan history, or republish datasets. Removing fallback may simplify the product, but that is a separate behavior decision requiring evidence of the resulting coverage change.</p>
+    <div class="flow" aria-label="Proposed responsibility flow">
+      <div><strong>1. Job policy</strong><span>Allowed providers, time convention, fallback permission, and retry choices.</span></div>
+      <div><strong>2. Provider clients</strong><span>Transport and evidence validation; return a quote or an explicit failure.</span></div>
+      <div><strong>3. Job storage</strong><span>Select work, persist evidence, preserve usable quotes, and schedule retries.</span></div>
+      <div><strong>4. Valuation</strong><span>Read eligible evidence, calculate USD values, and report completeness.</span></div>
+    </div>
+    <p class="meta">This is the target separation. Only the small earnings-policy consolidation belongs in #24; the provider/result extraction belongs in the separate issue below. Job-specific caches and accounting remain separate.</p>
+  </section>
+
+  <section id="pr24">
+    <h2>PR #24: one small policy cleanup</h2>
+    <p><strong>Keep all four review-fix commits.</strong> They establish complete valuation counts, per-target malformed-response recovery, early configuration checks, cached-price preservation, explicit legacy fee source selection, pending-day retries, and unsupported-chain isolation. These are necessary for the new earnings path to behave correctly on its own.</p>
+    <p><strong>Proposed addition:</strong> use one small, pure earnings-policy resolver from the CLI, report acquisition, and lifetime-yield analysis. It should produce the allowed ordered providers and validate the onchain/provider dependency. Keep credential validation at acquisition entry points, before discovery/indexing; cached offline analysis must not require an API key.</p>
+    <p>Limit the change to <code>cli.py</code>, <code>pricing.py</code>, <code>analysis.py</code>, a small policy helper if useful, and focused tests/docs. Preserve existing public arguments and export field meanings. Avoid moving provider implementations or changing the price schema in this PR.</p>
+    <h3>Acceptance checks</h3>
+    <ul>
+      <li>The same earnings options give acquisition and analysis the same allowed providers; Yearn-only analysis never consumes an existing DefiLlama row.</li>
+      <li>Missing credentials and unsupported acquisition flags fail before indexing; offline analysis still works from cached data without credentials.</li>
+      <li>The review regressions remain covered: open day → pending → next-day success; good cached price → failed fetch; one malformed target among valid targets; unsupported chain alongside a supported chain; zero/net-zero/missing-decimals completeness.</li>
+      <li>Legacy fee analysis and volume retain their documented source policies. No new fee-USD cache, cutoff/export pipeline, or adapter family is introduced.</li>
+    </ul>
+    <p class="meta">The last completed local run at <code>037c7b50b384</code> had 293 passing tests and 12 skips. That is prior validation of the fixes, not validation of this proposed cleanup. The final head has not received upstream re-review.</p>
+  </section>
+
+  <section id="later">
+    <h2>What the later PRs already cover</h2>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Owner</th><th>Already implemented at inspected head</th><th>Focused follow-through</th></tr></thead>
+      <tbody>
+        <tr><td><a href="https://github.com/yearn/yearn-metrics/pull/25">#25</a> / <a href="https://github.com/yearn/yearn-metrics/pull/26">#26</a><br>Native fee accounting</td><td>Observed and reconstructed native-asset amounts, evidence binding, and acceptance rules. These layers do not add USD pricing.</td><td>Keep price availability independent of whether an observed fee amount is accepted. Carry #24 fixes through without moving valuation responsibilities here.</td></tr>
+        <tr><td><a href="https://github.com/yearn/yearn-metrics/pull/27">#27</a><br>Canonical fee USD and exports</td><td>Yearn-only <code>fee_valuation.py</code>; an asset/day cache scoped by endpoint and policy; shared closed-cutoff validation; completeness and exact-run export context. Failed fee batches do not fan out into exact requests.</td><td>Keep this isolation. Integrate the new response-error distinctions with fee pricing and test auth versus malformed evidence, partial batches, refresh/retry behavior, cutoff exclusion, and cross-policy cache isolation. The earnings cutoff is optional; this PR does not replace #24’s pending-day retry fix. Review failed-refresh preservation in this layer rather than assuming the earnings writer protects this separate cache.</td></tr>
+        <tr><td><a href="https://github.com/yearn/yearn-metrics/pull/28">#28</a><br>Optional fallback behavior</td><td>Bounded DefiLlama transport, observation-time/value checks, local wrapper/LP adapters, and explicit adapter refresh.</td><td>Combine its <code>_existing_price_filter</code> with #24’s pending-day eligibility. Preserve #24’s conditional price upsert and unsupported-chain guard when adopting its parallel fallback execution. Test ordinary retries and explicit refresh together. Keep Yearn-only mode isolated from every fallback adapter.</td></tr>
+        <tr><td><a href="https://github.com/yearn/yearn-metrics/pull/30">#30</a><br>TVL valuation</td><td>Separate TVL storage, selected-provider fetching, UTC-EOD constraints for Yearn samples, and explicit unavailable/zero balances.</td><td>Reuse provider clients when extracted, while retaining TVL-specific dated quantities, nested ownership, and completeness rules. Shared transport does not imply shared valuation or tables.</td></tr>
+        <tr><td><a href="https://github.com/yearn/yearn-metrics/pull/33">#33</a><br>PostgreSQL persistence</td><td>SQLite/PostgreSQL compatibility and explicit price upserts.</td><td>Preserve #24’s “failed fetch cannot replace a good fallback quote” condition when translating the writer. Test the invariant on both database backends. A syntactically valid upsert is insufficient if its replacement condition changes.</td></tr>
+        <tr><td><a href="https://github.com/yearn/yearn-metrics/pull/35">#35</a><br>Quote rejection and repair</td><td>Evidence-scoped TVL quote rejection and a new immutable publication that recalculates affected dates.</td><td>Retain the distinction between a failed acquisition and deliberate withdrawal of invalid evidence. Preserve the old publication. This is the owner for TVL repair semantics, not the earnings acquisition refactor.</td></tr>
+        <tr><td><a href="https://github.com/yearn/yearn-metrics/pull/31">#31–32</a>, <a href="https://github.com/yearn/yearn-metrics/pull/34">#34</a>, <a href="https://github.com/yearn/yearn-metrics/pull/36">#36–38</a>, <a href="https://github.com/yearn/yearn-metrics/pull/43">#43</a><br>Consumers and operations</td><td>Serving, operations, analytics, publication, and comparison work. #38 also contains integrated canonical-history work.</td><td>Consume the existing price/valuation contracts and rerun affected integration checks after propagation. These PRs are not a place to introduce a general pricing framework. #29’s Fantom fee execution work also remains separate.</td></tr>
+      </tbody>
+    </table></div>
+    <div class="note"><p><strong>Specific conflict to resolve:</strong> #28 replaces the old “unpriced” SQL predicate and changes the same fallback writer that #24 repaired. #33 changes that writer again for PostgreSQL. Neither later head contains #24’s four fix commits in its ancestry. Preserve the behavior through each layer; do not resolve these conflicts by choosing either version wholesale.</p></div>
+  </section>
+
+  <section id="issue">
+    <h2>One separate architecture issue</h2>
+    <p><strong>Recommendation: a separate PR, after the #27/#28/#30 interfaces are reconciled.</strong> The refactor touches several legitimate consumers and is not required to deliver #24. No existing open issue was returned by the repository issue query. The following is an issue-ready proposal, not a posted issue or a newly confirmed production defect.</p>
+    <div class="issue">
+      <h3>Extract price-provider clients and explicit result contracts</h3>
+      <p><strong>Problem.</strong> <code>pricing.py</code> combines HTTP clients, evidence parsing, local onchain calculations, batch orchestration, retry selection, and database writes. Fee valuation calls private helpers from this module; TVL imports its fetch functions. These dependencies make local changes affect unrelated job policies.</p>
+      <p><strong>Scope.</strong> Extract the Yearn and DefiLlama client code behind small public functions. Give each target result explicit value, status/reason, provider, requested time, evidence time, and provenance fields. Distinguish a failed batch request from individual unresolved targets. Keep authentication/configuration failures distinguishable from unavailable price evidence.</p>
+      <p>Keep work selection, cache writes, and policy decisions in the earnings, fee, and TVL consumers. Give local onchain adapters a separate module boundary and an explicit dependency on the quotes they use. Replace cross-module private-client imports with the public interface. Use concrete functions and result types; no plugin registry or generic provider framework is needed.</p>
+      <p><strong>Acceptance.</strong> Provider clients perform no SQL or valuation. Existing callers and CLI behavior remain supported. Job-specific cache identities, fallback permissions, retry rules, and export meanings remain intact. Tests cover mixed valid/invalid targets, typed fatal errors, provider/time provenance, and the lifecycle regressions retained from #24. Integration tests cover earnings, canonical fee USD, and TVL with their different policies.</p>
+      <p><strong>Replacement rule.</strong> Shared result terminology must distinguish an unsuccessful fetch from explicit evidence rejection. Consumers decide whether a prior quote remains eligible; #35’s deliberate quote withdrawal must remain possible.</p>
+      <p><strong>Out of scope.</strong> A unified cache/schema migration, new providers, changed default source policy, new pricing formulas, historical backfills, and publication changes. Do not silently standardize all batch-failure retry behavior during extraction; preserve or explicitly review each consumer’s request budget.</p>
+      <p><strong>Dependencies and delivery.</strong> Reconcile #24’s fixes through #27, #28, and #30 first. Implement against a base containing all affected callers, in small behavior-preserving commits. If PostgreSQL is present on that base, include its persistence integration checks. Review any proposed behavioral change separately from file extraction.</p>
+    </div>
+  </section>
+
+  <section id="sequence">
+    <h2>Delivery order</h2>
+    <ol>
+      <li><strong>Finalize #24:</strong> retain the fixes, make the small policy consolidation, run its focused regressions and full suite, then obtain a fresh review of the resulting head. The previous four-round loop is exhausted; this plan does not trigger a fifth run.</li>
+      <li><strong>Carry changes forward:</strong> snapshot exact heads and preserve unrelated edits, verify immediate-parent ancestry, and propagate in dependency order. Reconcile behavior explicitly in #27, #28, and #33. Update stale PR descriptions when implementing that stack work.</li>
+      <li><strong>Validate at the owners:</strong> #27 tests fee-cache isolation and closed-day exports; #28 tests refresh/retry and fallback isolation; #30 tests TVL semantics; #33 tests both database writers; #35 tests rejection and immutable repair. Run an integrated suite once the affected layers are combined.</li>
+      <li><strong>Track and implement the extraction separately:</strong> use the issue scope above after the interfaces stabilize. Successful extraction means less coupling with the same observable outputs, not fewer financial safeguards.</li>
+    </ol>
+    <p class="meta">Stack note: live GitHub data shows #24 targets main, while its description still names #23. Descendant heads lack the latest #24 fixes. The inspected #32 head is also not an ancestor of #33, so verify the full chain before restacking; the saved descriptions and old branch guide are not authoritative ancestry evidence.</p>
+  </section>
+
+  <details id="evidence">
+    <summary>Pinned code evidence and inspection limits</summary>
+    <p>GitHub open-PR metadata and locally available objects matching those heads were read on 20 October 2026. There were 16 open PRs and no open issues returned. Incremental diffs were inspected for the core pricing layers; the later integration layers received focused source inspection, not a fresh comprehensive review.</p>
+    <ul>
+      <li><a href="https://github.com/yearn/yearn-metrics/blob/037c7b50b38479733aa08a26745fc8b7a5a406db/src/yearn_data/pricing.py#L891">#24: policy validation and work selection</a>; <a href="https://github.com/yearn/yearn-metrics/blob/037c7b50b38479733aa08a26745fc8b7a5a406db/src/yearn_data/pricing.py#L1182">protected fallback writer</a>; <a href="https://github.com/yearn/yearn-metrics/blob/037c7b50b38479733aa08a26745fc8b7a5a406db/src/yearn_data/analysis.py#L76">analysis source selection</a>.</li>
+      <li><a href="https://github.com/yearn/yearn-metrics/blob/b11f095fcf0aa5f870ae932ac6bb574eb74dc145/src/yearn_data/fee_valuation.py#L66">#27: fee cache and acquisition</a>; <a href="https://github.com/yearn/yearn-metrics/blob/b11f095fcf0aa5f870ae932ac6bb574eb74dc145/docs/earnings-and-fees.md">closed-day workflow</a>.</li>
+      <li><a href="https://github.com/yearn/yearn-metrics/blob/28cbcd3b0f4bfe1d9fb8aef010dc6cc1fb8d2e4f/src/yearn_data/pricing.py#L1298">#28: retry/refresh predicate</a>; <a href="https://github.com/yearn/yearn-metrics/blob/28cbcd3b0f4bfe1d9fb8aef010dc6cc1fb8d2e4f/src/yearn_data/pricing.py#L1540">parallel fallback execution</a>.</li>
+      <li><a href="https://github.com/yearn/yearn-metrics/blob/6a0178feec4aacc1f59391762aaedd2b1c7d2fd8/src/yearn_data/tvl_sources.py#L241">#30: TVL provider consumption</a>.</li>
+      <li><a href="https://github.com/yearn/yearn-metrics/commit/aa045b7968db7ef6c7548ec337814bac2612d41f">#33: PostgreSQL compatibility increment</a>.</li>
+      <li><a href="https://github.com/yearn/yearn-metrics/blob/253896978e84952993727e8a91596c9d4c18eb21/src/yearn_data/tvl_history_cache.py#L156">#35: immutable price-rejection repair</a>.</li>
+    </ul>
+  </details>
+  <footer>Private static planning preview. Source: <code>docs/pricing-architecture-plan.html</code>. Application code and existing user edits are untouched. No source defaults, databases, or GitHub objects were changed.</footer>
+</main>
+</body>
+</html>
