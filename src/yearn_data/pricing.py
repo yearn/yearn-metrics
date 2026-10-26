@@ -1311,12 +1311,39 @@ def _safe_row_level_fallback_price(
         }
 
 
-def _existing_price_filter(retry_missing: bool, refresh_onchain_fallbacks: bool) -> str:
-    if refresh_onchain_fallbacks:
-        return "AND (p.token_address IS NULL OR p.status != 'ok' OR p.raw_json LIKE '%fallback%')"
+# Recorded top-level adapter provenance, excluding provider aliases and failed
+# fallback attempts. Keep legacy stored results refreshable without a migration.
+ONCHAIN_ADAPTER_SOURCES = (
+    'exchange_rate_wrapper_fallback', 'yearn_v1_vault_fallback', 'aave_atoken_fallback',
+    'curve_lp_fallback', 'curve_lp_balance_fallback', 'erc4626_wrapper_fallback',
+    'balancer_bpt_fallback', 'uniswap_v2_pair_fallback', 'curve_get_dy_fallback',
+    'ycrv_crv_par_fallback', 'crv_derivative_curve_lp_fallback',
+)
+
+
+def _existing_price_filter(retry_missing: bool) -> str:
     if retry_missing:
-        return "AND (p.token_address IS NULL OR p.status != 'ok')"
-    return "AND p.token_address IS NULL"
+        return "p.token_address IS NULL OR p.status != 'ok'"
+    return "p.token_address IS NULL"
+
+
+def _adapter_refresh_sql(enabled: bool, target: str) -> tuple[str, str]:
+    if not enabled:
+        return '', 'FALSE'
+    join = f"""LEFT JOIN prices adapter_price
+        ON adapter_price.chain_id={target}.chain_id
+        AND adapter_price.token_address={target}.asset
+        AND adapter_price.timestamp={target}.block_timestamp
+        AND adapter_price.source='defillama'"""
+    sources = ','.join("'"+name+"'" for name in ONCHAIN_ADAPTER_SOURCES)
+    match = f"adapter_price.status='ok' AND json_extract(adapter_price.raw_json,'$.source') IN ({sources})"
+    return join, match
+
+
+def _refresh_adapter_rows(conn, rows, *, onchain_fallbacks):
+    refresh = [row for row in rows if row['refresh_adapter']]
+    count = _price_unpriced_reports_defillama_batched(conn, refresh, None, onchain_fallbacks=onchain_fallbacks) if refresh else 0
+    return count, [row for row in rows if not row['refresh_adapter']]
 
 
 def _fetch_price(source: str, chain_id: int, token_address: str, timestamp: int, block_number: int):
@@ -1354,43 +1381,49 @@ def price_unpriced_reports(
     onchain_fallbacks: bool = True,
 ) -> int:
     validate_report_pricing_policy(source, fallback, onchain_fallbacks)
+    if refresh_onchain_fallbacks and source == 'yearn-prices' and fallback != 'defillama':
+        raise ValueError('refreshing onchain fallbacks requires DefiLlama provider fallback')
     chain_filter = ""
     chain_params: list[int] = []
     if chain_ids:
         chain_filter = f"AND r.chain_id IN ({','.join('?' for _ in chain_ids)})"
         chain_params = sorted(chain_ids)
-    price_filter = _existing_price_filter(retry_missing, refresh_onchain_fallbacks)
+    price_filter = _existing_price_filter(retry_missing)
     price_params: list[int] = []
-    if source == "yearn-prices" and not (retry_missing or refresh_onchain_fallbacks):
-        price_filter = "AND (p.token_address IS NULL OR (p.status = 'pending' AND r.block_timestamp < ?))"
+    if source == "yearn-prices" and not retry_missing:
+        price_filter = "p.token_address IS NULL OR (p.status = 'pending' AND r.block_timestamp < ?)"
         price_params = [int(time.time()) // 86_400 * 86_400]
+    refresh_join, refresh_match = _adapter_refresh_sql(refresh_onchain_fallbacks, 'r')
     sql = f"""
     SELECT
         r.chain_id,
         r.asset,
         r.block_timestamp,
-        MIN(r.block_number) AS block_number
+        MIN(r.block_number) AS block_number,
+        MAX(CASE WHEN ({refresh_match}) THEN 1 ELSE 0 END) AS refresh_adapter
     FROM strategy_reports r
     LEFT JOIN prices p
       ON p.chain_id = r.chain_id
      AND p.token_address = r.asset
      AND p.timestamp = r.block_timestamp
      AND p.source = ?
+    {refresh_join}
     WHERE r.asset IS NOT NULL
       {chain_filter}
-      {price_filter}
+      AND (({price_filter}) OR ({refresh_match}))
     GROUP BY r.chain_id, r.asset, r.block_timestamp
     ORDER BY r.block_timestamp
     """
     if limit:
         sql += f" LIMIT {int(limit)}"
     rows = conn.execute(sql, (source, *chain_params, *price_params)).fetchall()
-    count = 0
+    count, rows = _refresh_adapter_rows(conn, rows, onchain_fallbacks=onchain_fallbacks)
     if source == "defillama":
         count += _price_unpriced_reports_defillama_batched(conn, rows, fallback, onchain_fallbacks=onchain_fallbacks)
         return count
     if source == "yearn-prices":
-        count, unresolved_rows = _price_rows_with_yearn_prices(conn, rows)
+        primary_count, unresolved_rows = _price_rows_with_yearn_prices(conn, rows)
+        count += primary_count
         if fallback == "defillama":
             count += _price_unpriced_reports_defillama_batched(
                 conn,
@@ -1460,6 +1493,8 @@ def price_unpriced_volume(
         raise ValueError(f"unsupported price source {source!r}")
     if fallback is not None and fallback not in SUPPORTED_SOURCES:
         raise ValueError(f"unsupported fallback source {fallback!r}")
+    if refresh_onchain_fallbacks and source == 'yearn-prices' and fallback != 'defillama':
+        raise ValueError('refreshing onchain fallbacks requires DefiLlama provider fallback')
     rows = _unpriced_volume_rows(
         conn,
         source,
@@ -1468,12 +1503,13 @@ def price_unpriced_volume(
         refresh_onchain_fallbacks=refresh_onchain_fallbacks,
         chain_ids=chain_ids,
     )
-    count = 0
+    count, rows = _refresh_adapter_rows(conn, rows, onchain_fallbacks=onchain_fallbacks)
     if source == "defillama":
         count += _price_unpriced_reports_defillama_batched(conn, rows, fallback, onchain_fallbacks=onchain_fallbacks)
         return count
     if source == "yearn-prices":
-        count, _ = _price_rows_with_yearn_prices(conn, rows)
+        primary_count, _ = _price_rows_with_yearn_prices(conn, rows)
+        count += primary_count
         return count
 
     for row in rows:
@@ -1536,7 +1572,8 @@ def _unpriced_volume_rows(
     if chain_ids:
         chain_filter = f"AND f.chain_id IN ({','.join('?' for _ in chain_ids)})"
         chain_params = sorted(chain_ids)
-    price_filter = _existing_price_filter(retry_missing, refresh_onchain_fallbacks)
+    price_filter = _existing_price_filter(retry_missing)
+    refresh_join, refresh_match = _adapter_refresh_sql(refresh_onchain_fallbacks, 'f')
     for table in ("vault_flows", "strategy_debt_flows"):
         table_rows = conn.execute(
             f"""
@@ -1544,16 +1581,18 @@ def _unpriced_volume_rows(
                 f.chain_id,
                 f.asset,
                 f.block_timestamp,
-                MIN(f.block_number) AS block_number
+                MIN(f.block_number) AS block_number,
+                MAX(CASE WHEN ({refresh_match}) THEN 1 ELSE 0 END) AS refresh_adapter
             FROM {table} f
             LEFT JOIN prices p
               ON p.chain_id = f.chain_id
              AND p.token_address = f.asset
              AND p.timestamp = f.block_timestamp
              AND p.source = ?
+            {refresh_join}
             WHERE f.asset IS NOT NULL
               {chain_filter}
-              {price_filter}
+              AND (({price_filter}) OR ({refresh_match}))
             GROUP BY f.chain_id, f.asset, f.block_timestamp
             ORDER BY f.block_timestamp
             """,
@@ -1568,6 +1607,7 @@ def _unpriced_volume_rows(
                     "asset": row["asset"],
                     "block_timestamp": int(row["block_timestamp"]),
                     "block_number": int(row["block_number"]),
+                    "refresh_adapter": row["refresh_adapter"],
                 }
     rows = sorted(rows_by_key.values(), key=lambda row: int(row["block_timestamp"]))
     if limit:

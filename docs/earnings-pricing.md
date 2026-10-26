@@ -129,4 +129,13 @@ Run this command to replace saved adapter results:
 yearn-data price --source defillama --refresh-onchain-fallbacks --limit 500
 ```
 
+The flag selects successful saved local-adapter results by their recorded
+adapter source, not provider alias metadata or failed adapter attempts. It works
+with the default Yearn Prices source too: those refresh targets are read from
+DefiLlama storage and refreshed through DefiLlama, while normal Yearn Prices
+pending/retry selection remains unchanged. It does not refresh provider alias
+quotes merely because their payload contains fallback metadata. The normal
+chain filters and combined target limit apply to refresh and pending targets.
+Yearn-only mode cannot use this flag; enable DefiLlama provider fallback first.
+
 The `price-volume` command also accepts `--refresh-onchain-fallbacks`.

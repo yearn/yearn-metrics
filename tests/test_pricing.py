@@ -582,42 +582,46 @@ def test_balancer_bpt_price_uses_actual_supply_for_phantom_pool(monkeypatch):
     assert payload["supply_method"] == "getActualSupply()"
 
 
-def test_refresh_onchain_fallbacks_reprices_existing_ok_row(postgres_database, monkeypatch, tmp_path):
-    conn = connect('staging')
-    init_db(conn)
-    seed_chains(conn, CHAINS)
-    token = "0x0000000000000000000000000000000000000002"
-    conn.execute(
-        """
-        INSERT INTO strategy_reports (
-            chain_id, version, vault_address, strategy_address, tx_hash, log_index,
-            block_number, block_timestamp, asset, asset_decimals, gain_raw, loss_raw,
-            net_raw, extra_json
-        ) VALUES (1, 'v2', '0x0000000000000000000000000000000000000001',
-                  '0x0000000000000000000000000000000000000003', '0xabc', 0,
-                  10, 100, ?, 18, '1', '0', '1', '{}')
-        """,
-        (token,),
-    )
-    conn.execute(
-        """
-        INSERT INTO prices (chain_id, token_address, timestamp, block_number, source,
-                            price_usd, status, raw_json)
-        VALUES (1, ?, 100, 10, 'defillama', 0.5, 'ok',
-                '{"source":"curve_lp_balance_fallback"}')
-        """,
-        (token,),
-    )
+@pytest.mark.parametrize('source', ['defillama', 'yearn-prices'])
+def test_refresh_onchain_fallbacks_uses_adapter_provenance_without_widening_retries(postgres_database, monkeypatch, source):
+    import json
+    from yearn_data import pricing
+    conn = connect('staging'); init_db(conn); seed_chains(conn, CHAINS)
+    tokens = ['0x'+f'{index:040x}' for index in range(2, 7)]
+    # Adapter result, provider alias, permanent miss, closed pending, open pending.
+    for index, token in enumerate(tokens):
+        conn.execute("""INSERT INTO strategy_reports
+            (chain_id,version,vault_address,strategy_address,tx_hash,log_index,
+             block_number,block_timestamp,asset,asset_decimals,gain_raw,loss_raw,net_raw)
+            VALUES (1,'v2',?,? ,?,0,10,?,?,18,'1','0','1')""",
+            (tokens[0],tokens[1],f'0x{index}',100+index,token))
+        payload = ({'source':'curve_lp_balance_fallback'} if index == 0 else
+                   {'fallback_coin':'coingecko:ethereum','fallback_payload':{'price':3}})
+        conn.execute("INSERT INTO prices VALUES (1,?,?,10,'defillama',0.5,?,?)",
+                     (token,100+index,'missing' if index == 2 else 'ok',json.dumps(payload)))
+        conn.execute("INSERT INTO prices VALUES (1,?,?,10,'yearn-prices',1,?, '{}')",
+                     (token,100+index,('ok','ok','missing','pending','pending')[index]))
     conn.commit()
-    monkeypatch.setattr(
-        "yearn_data.pricing.fetch_defillama_prices_batch",
-        lambda requests_: {(1, token, 100): (2.0, "ok", {"source": "defillama"})},
-    )
-
-    count = price_unpriced_reports(conn, source="defillama", refresh_onchain_fallbacks=True)
-
-    assert count == 1
-    assert conn.execute("SELECT price_usd FROM prices").fetchone()["price_usd"] == 2.0
+    monkeypatch.setattr(pricing.time, 'time', lambda:86400)
+    # Move only the final pending timestamp into the current (unclosed) day.
+    conn.execute('UPDATE strategy_reports SET block_timestamp=86400 WHERE asset=?',(tokens[4],))
+    conn.execute('UPDATE prices SET timestamp=86400 WHERE token_address=?',(tokens[4],)); conn.commit()
+    provider_calls=[]; primary_calls=[]
+    def provider(requests_):
+        provider_calls.extend(requests_)
+        return {target:(2.0,'ok',{'source':'defillama'}) for target in requests_}
+    def primary(database, rows):
+        primary_calls.extend((r['asset'],r['block_timestamp']) for r in rows)
+        return 0, []
+    monkeypatch.setattr(pricing, 'fetch_defillama_prices_batch', provider)
+    monkeypatch.setattr(pricing, '_price_rows_with_yearn_prices', primary)
+    assert price_unpriced_reports(conn, source=source, refresh_onchain_fallbacks=True) == 1
+    assert provider_calls == [(1,tokens[0],100)]
+    assert primary_calls == ([(tokens[3],103)] if source == 'yearn-prices' else [])
+    quotes = {r['token_address']:r for r in conn.execute("SELECT * FROM prices WHERE source='defillama'")}
+    assert quotes[tokens[0]]['price_usd'] == 2
+    assert quotes[tokens[1]]['price_usd'] == 0.5
+    assert 'fallback_coin' in json.loads(quotes[tokens[1]]['raw_json'])
 
 
 def test_price_unpriced_reports_uses_crv_derivative_fallback(postgres_database, monkeypatch, tmp_path):
@@ -796,3 +800,37 @@ def test_exhausted_defillama_target_does_not_abort_other_targets(postgres_databa
     pricing.price_unpriced_reports(conn, source='defillama', fallback=None, onchain_fallbacks=False)
     rows = conn.execute('SELECT price_usd,status FROM prices ORDER BY timestamp').fetchall()
     assert [tuple(row) for row in rows] == [(None, 'retryable'), (2.0, 'ok')]
+
+
+@pytest.mark.parametrize('operation', [price_unpriced_reports, price_unpriced_volume])
+def test_adapter_refresh_cannot_bypass_yearn_only_policy(operation):
+    with pytest.raises(ValueError, match='requires DefiLlama provider fallback'):
+        operation(None, source='yearn-prices', fallback=None, onchain_fallbacks=False,
+                  refresh_onchain_fallbacks=True)
+
+
+def test_volume_adapter_refresh_preserves_alias_quotes_chain_filter_and_target_limit(postgres_database, monkeypatch):
+    import json
+    from yearn_data import pricing
+    conn = connect('staging'); init_db(conn); seed_chains(conn, CHAINS)
+    records = [(10,99,'curve_lp_balance_fallback'), (1,100,'curve_lp_balance_fallback'),
+               (1,101,None), (1,102,'balancer_bpt_fallback')]
+    tokens = ['0x'+f'{index:040x}' for index in range(10,14)]
+    for index, (chain,timestamp,adapter) in enumerate(records):
+        payload = {'source':adapter} if adapter else {'fallback_coin':'coingecko:ethereum'}
+        conn.execute("""INSERT INTO vault_flows
+            (chain_id,version,vault_address,direction,tx_hash,log_index,block_number,
+             block_timestamp,asset,asset_decimals,assets_raw,shares_raw,decoded_json)
+            VALUES (?,'v3',?,'deposit',?,0,10,?,?,6,'1','1','{}')""",
+            (chain,tokens[0],f'0x{index}',timestamp,tokens[index]))
+        conn.execute("INSERT INTO prices VALUES (?,?,?,10,'defillama',0.5,'ok',?)",
+                     (chain,tokens[index],timestamp,json.dumps(payload)))
+    conn.commit()
+    calls=[]
+    def provider(requests_):
+        calls.extend(requests_)
+        return {target:(2.0,'ok',{'source':'defillama'}) for target in requests_}
+    monkeypatch.setattr(pricing, 'fetch_defillama_prices_batch', provider)
+    assert price_unpriced_volume(conn, refresh_onchain_fallbacks=True, chain_ids={1}, limit=1) == 1
+    assert calls == [(1,tokens[1],100)]
+    assert [r[0] for r in conn.execute('SELECT price_usd FROM prices ORDER BY timestamp')] == [0.5,2,0.5,0.5]
