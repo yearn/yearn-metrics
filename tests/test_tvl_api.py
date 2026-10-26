@@ -860,3 +860,36 @@ def test_publish_accepts_numerically_identical_rejections(source, monkeypatch, p
     manifest = tvl_api.publish_tvl(database, publication)
     dataset = tvl_api.TvlDataset(manifest)
     assert dataset.history(interval='daily')['chart'][0].get('Ethereum') is None
+
+
+def test_curation_does_not_recount_dated_bridge_vault_or_its_holdings(source, monkeypatch):
+    from yearn_data import tvl_api as api
+    conn, database, publication = source
+    cutoff = DAY+86400
+    monkeypatch.setattr(api, 'BRIDGE_MIGRATIONS', [
+        {'sourceChainId':1, 'sourceVaultAddress':BRIDGE, 'targetChainId':10,
+         'migrationTimestamp':cutoff}])
+    conn.execute('UPDATE tvl_vaults SET active=1 WHERE address=?', (BRIDGE,))
+    # Both source and child are curation products, so re-accounting an excluded
+    # source edge would incorrectly deduct 50 from the remaining child's TVL.
+    for number, timestamp in ((1, DAY), (2, cutoff)):
+        run(conn, number, timestamp, [(BRIDGE, '100'), (CHILD, '100')], [(CHILD, '50')])
+        for stored in conn.execute('SELECT vault,data_json FROM tvl_snapshots WHERE run_id=?', (number,)).fetchall():
+            row = json.loads(stored['data_json']); row['category'] = 'curation'
+            conn.execute('UPDATE tvl_snapshots SET data_json=? WHERE run_id=? AND vault=?',
+                         (json.dumps(row), number, stored['vault']))
+        edge = json.loads(conn.execute('SELECT data_json FROM tvl_positions WHERE run_id=?', (number,)).fetchone()[0])
+        edge['parent'] = BRIDGE
+        conn.execute('UPDATE tvl_positions SET parent=?,data_json=? WHERE run_id=?',
+                     (BRIDGE, json.dumps(edge), number))
+        conn.commit()
+        store = TvlStore(database, publication)
+        status, products = tvl_response(store, '/api/tvl/curation-products')
+        assert status == 200
+        assert products['grossTvlUsd'] == (200 if timestamp < cutoff else 100)
+        assert products['totalTvlUsd'] == (150 if timestamp < cutoff else 100)
+        assert products['knownInternalOverlapTvlUsd'] == (50 if timestamp < cutoff else 0)
+        assert products['vaultCount'] == (2 if timestamp < cutoff else 1)
+        assert products['totalTvlUsd'] == store.get().summary()['totalTvl']
+        assert products['byFamily']['morpho_curated']['netTvlUsd'] == products['totalTvlUsd']
+        assert {r['address'] for r in products['vaults']} == ({BRIDGE, CHILD} if timestamp < cutoff else {CHILD})

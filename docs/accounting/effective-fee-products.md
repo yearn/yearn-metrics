@@ -57,6 +57,11 @@ was used. Retained rates are last-known observations, not fresh RPC evidence.
 
 ## Historical verification and publication
 
+The publication IDs and numeric evidence in these rollout sections were produced
+under earlier methodology versions, before the shipped `powerglove-analytics-24`.
+They have not been regenerated or revalidated under version 24; use them as
+historical evidence, not current-publication verification.
+
 Finalized Ethereum block **26178806** confirms a 10% staked yBOLD fee and zero own
 fees for unstaked yBOLD and both current yvUSD components. yvUSD's `lockerBonus`
 is 1000 basis points and stays separate from fees.
@@ -93,7 +98,7 @@ yvUSD external TVL. The previous TVL release
 `b04af26bf93ac8065d439063d2c788abb9274f3728b80d2ba0b6faba8c32c113` was retained at that rollout.
 
 That rollout used `powerglove-analytics-5`. Current publication jobs use
-`powerglove-analytics-22`, matching `analytics.VERSION`. Reprepare analytics to
+`powerglove-analytics-24`, matching `analytics.VERSION`. Reprepare analytics to
 serve retained-fee provenance and current comparison-evidence validation.
 
 

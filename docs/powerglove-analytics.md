@@ -223,7 +223,7 @@ do not establish June coverage or justify retaining a pre-repair June denominato
 
 ## Missing external chain breakdowns
 
-Methodology `powerglove-analytics-22` preserves an absent DefiLlama chain entry
+Current methodology `powerglove-analytics-24` preserves an absent DefiLlama chain entry
 as unavailable. A by-chain comparison requires explicit values from both finance
 and curation snapshots, including explicit zero where appropriate. Without them,
 `defillama` and `difference` are null; protocol-level totals remain separate.
