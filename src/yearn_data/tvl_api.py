@@ -248,7 +248,7 @@ class TvlDataset:
         # the later corrected canonical prices.
         rejected = []
         for (chain,asset,timestamp), quote in self.price_rejections.items():
-            rejected.append("(s.chain_id=? AND s.timestamp=? AND lower(json_extract(s.data_json,'$.asset'))=? AND CAST(json_extract(s.data_json,'$.price_usd') AS TEXT)=?)")
+            rejected.append("(s.chain_id=? AND s.timestamp=? AND lower(json_extract(s.data_json,'$.asset'))=? AND CAST(json_extract(s.data_json,'$.price_usd') AS NUMERIC)=CAST(? AS NUMERIC))")
             args += (chain,timestamp,asset,quote['priceUsd'])
         exclude = ' AND NOT ('+' OR '.join(rejected)+')' if rejected else ''
         sql = f'''WITH winners AS (

@@ -364,7 +364,8 @@ def test_long_histories_keep_streaming_instead_of_filling_shared_cache(source, m
     assert [r['Ethereum'] for r in dataset.history(interval='daily')['chart']] == [100,200]
 
 
-def test_reference_skips_a_full_window_of_rejected_prices(source, monkeypatch):
+@pytest.mark.parametrize('rejected_price', ['72000000', '72000000.00', '7.2e7'])
+def test_reference_skips_a_full_window_of_rejected_prices(source, monkeypatch, rejected_price):
     import yearn_data.tvl_api as api
     conn,path,root = source
     asset='0x'+'aa'*20
@@ -373,7 +374,7 @@ def test_reference_skips_a_full_window_of_rejected_prices(source, monkeypatch):
         timestamp=DAY+index*86400
         run(conn,index+1,timestamp,[(PARENT,'720000000')])
         rejected.append({'chainId':1,'asset':asset,'timestamp':timestamp,
-                         'priceUsd':'72000000','reason':'verified_bad_quote'})
+                         'priceUsd':rejected_price,'reason':'verified_bad_quote'})
     run(conn,9,DAY+8*86400,[(PARENT,'10')])
     monkeypatch.setattr(api,'PRICE_REJECTIONS',rejected)
     store=TvlStore(path,root)
@@ -382,6 +383,11 @@ def test_reference_skips_a_full_window_of_rejected_prices(source, monkeypatch):
                                      'priceUsd':1,'source':'stored-tvl','depegCandidateSkipped':False}]
     assert result['constantPriceChart'][-1]['Ethereum'] == 10
     assert all(row == {'timestamp':DAY+index*86400} for index,row in enumerate(result['actualChart'][:-1]))
+    from yearn_data.tvl_history_cache import prepare
+    prepare(store.get())
+    prepared=api.TvlDataset(store.get().manifest).history(interval='daily',constant=True)
+    assert prepared['references']==result['references']
+    assert prepared['constantPriceChart']==result['constantPriceChart']
 
 
 def test_dated_bridge_cutoff_preserves_pre_migration_and_pinned_selection(source, monkeypatch):
