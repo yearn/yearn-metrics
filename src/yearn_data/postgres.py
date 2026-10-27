@@ -195,6 +195,8 @@ class Connection:
         self.raw.commit()
 
     def rollback(self):
+        # psycopg rollback already syncs an active pipeline before checking
+        # transaction status, unlike its commit path. Delegate that recovery.
         self.raw.rollback()
 
     def close(self):
