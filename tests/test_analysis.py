@@ -8,6 +8,51 @@ from yearn_data.incident_adjustments import adjustment_for_tx
 from yearn_data.storage import connect, from_json, init_db, seed_chains
 
 
+@pytest.mark.parametrize(('job', 'failure'), [
+    (job, failure) for job in (run_lifetime_yield, run_vault_fees, run_vault_volume)
+    for failure in (RuntimeError, KeyboardInterrupt)
+] + [(run_lifetime_yield, 'sql')])
+def test_failed_analysis_rolls_back_outputs_and_allows_clean_retry(postgres_database, monkeypatch, job, failure):
+    import psycopg
+    from yearn_data import analysis
+
+    conn = connect('staging')
+    init_db(conn)
+    conn.execute('''INSERT INTO strategy_reports
+        (chain_id,version,vault_address,strategy_address,tx_hash,log_index,block_number,
+         block_timestamp,asset,asset_decimals,gain_raw,loss_raw,net_raw,total_fees_raw)
+        VALUES(1,'v3','vault','strategy','report',0,10,100,'asset',6,'7','0','7','1')''')
+    conn.execute('''INSERT INTO vault_flows
+        (chain_id,version,vault_address,direction,tx_hash,log_index,block_number,
+         block_timestamp,asset,asset_decimals,assets_raw,shares_raw)
+        VALUES(1,'v3','vault','deposit','deposit',0,10,100,'asset',6,'7','7')''')
+    conn.commit()
+    original_write = analysis.write_output
+
+    def interrupt_after_output(*args):
+        original_write(*args)
+        if failure == 'sql':
+            conn.execute('SELECT * FROM missing_analysis_relation')
+        raise failure('interrupted analysis output')
+
+    monkeypatch.setattr(analysis, 'write_output', interrupt_after_output)
+    error_type = psycopg.errors.UndefinedTable if failure == 'sql' else failure
+    with pytest.raises(error_type):
+        job(conn)
+    # A caller rollback cannot erase a committed terminal marker.
+    conn.rollback()
+    failed = conn.execute('SELECT * FROM analysis_runs').fetchone()
+    assert failed['status'] == 'failed' and failed['completed_at'] is not None
+    assert conn.execute('SELECT COUNT(*) FROM analysis_outputs').fetchone()[0] == 0
+
+    monkeypatch.setattr(analysis, 'write_output', original_write)
+    run_id = job(conn)
+    assert run_id != failed['id']
+    assert conn.execute('SELECT status FROM analysis_runs WHERE id=?', (run_id,)).fetchone()[0] == 'complete'
+    assert conn.execute('SELECT COUNT(*) FROM analysis_runs WHERE status=\'running\'').fetchone()[0] == 0
+    assert conn.execute('SELECT COUNT(*) FROM analysis_outputs WHERE run_id=?', (run_id,)).fetchone()[0] > 0
+
+
 def test_lifetime_yield_uses_net_gain_minus_loss(postgres_database, tmp_path):
     assert_lifetime_yield_amounts(connect('staging'))
 
