@@ -418,7 +418,7 @@ def test_offline_recomputation_restores_formula_but_policy_only_preserves_candid
     assert row['accounting_json'] is None and row['reason']=='cached_fee_inputs_missing_or_changed'
 
 
-def test_offline_formula_refresh_keeps_execution_fee_and_updates_only_baseline(db):
+def test_offline_recompute_rejects_unbound_execution_summary(db):
     from yearn_data.fee_recompute import recompute_canonical_fees
     case=next(c for c in CASES if c['event']['id']==82042);seed(db,[case])
     index_canonical_fees(db,reconstruct_v2=True,receipt_fetcher=lambda c,t:RECEIPTS[c,t],state_reader=lambda *a:case['reconstruction'])
@@ -426,10 +426,9 @@ def test_offline_formula_refresh_keeps_execution_fee_and_updates_only_baseline(d
     evidence['execution_verification']={'status':'verified','fee_operand_raw':'65524'}
     candidate={'method':'execution-fee-mint','total_fees_paid_raw':'65524','baseline_candidate':{'total_fees_paid_raw':'123'}}
     db.execute('UPDATE canonical_fee_reports SET candidate_json=?,evidence_json=?',(json.dumps(candidate),json.dumps(evidence)))
-    assert recompute_canonical_fees(db,'formulas')['accepted']==1
-    row=db.execute('SELECT * FROM canonical_fee_reports').fetchone()
-    assert json.loads(row['candidate_json'])['baseline_candidate']['total_fees_paid_raw']=='65525'
-    assert json.loads(row['accounting_json'])['total_fees_paid_raw']=='65524'
+    for mode in ('policy','formulas'):
+        assert recompute_canonical_fees(db,mode)['unavailable']==1
+        assert db.execute('SELECT accounting_json FROM canonical_fee_reports').fetchone()[0] is None
 
 
 def test_projection_rebuild_reuses_state_and_detects_changed_release(db):
@@ -500,6 +499,17 @@ def test_old_zero_gain_requires_and_accepts_no_mint_receipt(db):
     r=db.execute('SELECT * FROM canonical_fee_reports').fetchone()
     assert r['status']=='ok' and json.loads(r['accounting_json'])['total_fees_paid_raw']=='0'
     assert json.loads(r['candidate_json'])['method']=='receipt-no-mint-zero'
+    from yearn_data.fee_recompute import recompute_canonical_fees
+    receipt=db.execute('SELECT * FROM fee_receipt_evidence').fetchone()
+    for mode in ('policy','formulas'):
+        for invalid in (None,'{}'):
+            db.execute('DELETE FROM fee_receipt_evidence')
+            db.execute('INSERT INTO fee_receipt_evidence VALUES (?,?,?,?,?)',tuple(receipt))
+            assert recompute_canonical_fees(db,mode)['accepted']==1
+            if invalid is None:db.execute('DELETE FROM fee_receipt_evidence')
+            else:db.execute('UPDATE fee_receipt_evidence SET receipt_json=?',(invalid,))
+            assert recompute_canonical_fees(db,mode)['unavailable']==1
+            assert db.execute('SELECT accounting_json FROM canonical_fee_reports').fetchone()[0] is None
 
 
 def test_report_key_scope_preserves_unselected_reports_and_accepts_033_no_mint(db):
@@ -547,3 +557,35 @@ def test_cli_explicit_execution_keeps_report_scope(db, tmp_path, monkeypatch):
     selector.write_text('[[1,"invalid",4]]')
     with pytest.raises(ValueError, match='report keys'):
         cli.main(['--db', database, 'index-fees', '--canonical', '--report-keys', str(selector)])
+
+
+def test_later_activity_execution_recompute_requires_retained_raw_evidence(db,monkeypatch):
+    from yearn_data import fees
+    from yearn_data.fee_recompute import recompute_canonical_fees
+    case=json.loads((Path(__file__).parent/'fixtures/fee-unresolved-execution/88561.json').read_text())
+    seed(db,[case]);event=case['event']
+    index_canonical_fees(db,reconstruct_v2=True,verify_selective=True,
+        receipt_fetcher=lambda *a:case['receipt'],trace_fetcher=lambda *a:case['trace'],
+        block_logs_fetcher=lambda *a:[l for l in case['receipt']['logs'] if l['address'].lower()==event['vault_address']],
+        state_reader=lambda *a:{'state_formula':None,'share_decimals':18,'price_per_share_block_raw':10**18})
+    row=db.execute('SELECT * FROM canonical_fee_reports').fetchone()
+    assert row['status']=='ok'
+    assert 'direct_execution_asset' not in json.loads(row['evidence_json'])
+    assert json.loads(row['accounting_json'])['total_fees_paid_raw']==case['expected_operand_raw']
+    snapshots={table:[tuple(r) for r in db.execute('SELECT * FROM '+table)] for table in
+               ('fee_receipt_evidence','fee_execution_traces','fee_block_log_evidence')}
+    def offline(*args):pytest.fail('offline recomputation attempted acquisition')
+    monkeypatch.setattr(fees,'web3_for',offline)
+    mutations=['DELETE FROM fee_receipt_evidence','DELETE FROM fee_execution_traces',
+               "UPDATE fee_receipt_evidence SET receipt_json='{}'",
+               "UPDATE fee_execution_traces SET trace_json='{\"ops\":[]}'"]
+    for mode in ('policy','formulas'):
+        for mutation in mutations:
+            for table,records in snapshots.items():
+                db.execute('DELETE FROM '+table)
+                db.executemany('INSERT INTO '+table+' VALUES ('+','.join('?' for _ in records[0])+')',records)
+            assert recompute_canonical_fees(db,mode)['accepted']==1
+            assert json.loads(db.execute('SELECT accounting_json FROM canonical_fee_reports').fetchone()[0])['total_fees_paid_raw']==case['expected_operand_raw']
+            db.execute(mutation)
+            assert recompute_canonical_fees(db,mode)['unavailable']==1
+            assert db.execute('SELECT accounting_json FROM canonical_fee_reports').fetchone()[0] is None

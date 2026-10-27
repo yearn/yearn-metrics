@@ -80,21 +80,23 @@ def recompute_canonical_fees(conn, mode, chains=None, limit=None, version=None, 
             snapshot=evidence.get('report_inputs')
             if snapshot is not None and snapshot!=report_inputs(r):
                 raise ValueError('source report changed')
-            if candidate['method']=='execution-fee-mint' and 'direct_execution_asset' in evidence:
-                from .fee_trace import verify_cached_direct_execution
-                verification=verify_cached_direct_execution(conn,r,evidence)
+            if candidate['method']=='execution-fee-mint':
+                from .fee_trace import verify_cached_execution
+                verification=verify_cached_execution(conn,r,evidence)
                 evidence['execution_verification']=verification
                 candidate={**candidate,'total_fees_paid_raw':verification['fee_operand_raw'],
                            'calculation_version':verification['trace_version']}
-            elif mode=='formulas':
-                if snapshot is None:
-                    raise ValueError('legacy source binding unavailable')
-                baseline=normalize_candidate(reconstruct_candidate(evidence['fee_shares'],evidence['historical_state']))
-                if candidate['method']=='execution-fee-mint':
-                    # Formula changes update the estimate, never overwrite a traced operand.
+                if mode=='formulas' and 'direct_execution_asset' not in evidence:
+                    baseline=normalize_candidate(reconstruct_candidate(evidence['fee_shares'],evidence['historical_state']))
                     candidate={**candidate,'baseline_candidate':baseline}
-                else:
-                    candidate=baseline
+            else:
+                if candidate['method']=='receipt-no-mint-zero':
+                    from .fee_trace import verify_cached_no_mint
+                    verify_cached_no_mint(conn,r,evidence)
+                if mode=='formulas':
+                    if snapshot is None:
+                        raise ValueError('legacy source binding unavailable')
+                    candidate=normalize_candidate(reconstruct_candidate(evidence['fee_shares'],evidence['historical_state']))
             decision=assess_candidate(candidate,evidence)
             if decision['status']=='accepted':
                 amounts=_amounts(r['gain_raw'],r['loss_raw'],candidate['total_fees_paid_raw'])

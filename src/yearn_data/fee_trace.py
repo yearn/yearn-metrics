@@ -263,29 +263,49 @@ class SelectiveFeeVerifier:
             return {'status':'unavailable','reason':'trace_unavailable_or_unrecognized'}
 
 
-def verify_cached_direct_execution(conn, report, evidence):
-    """Revalidate trace-only accounting from retained receipt and execution evidence."""
+def cached_fee_receipt(conn, report, evidence):
+    """Rebind retained receipt and derived share evidence without acquisition."""
     import json
     from .fees import _number, _hex, decode_v2_receipt
     from .fee_reconstruction import extract_fee_shares
-    if evidence.get('direct_execution_asset') != {'asset':report['asset'],'asset_decimals':report['asset_decimals']}:
-        raise ValueError('execution asset binding changed')
-    cached=conn.execute('SELECT receipt_json FROM fee_receipt_evidence WHERE chain_id=? AND tx_hash=?',
+    cached=conn.execute('SELECT receipt_json,block_number,block_hash FROM fee_receipt_evidence WHERE chain_id=? AND tx_hash=?',
                         (report['chain_id'],report['tx_hash'])).fetchone()
-    if not cached:raise ValueError('retained execution receipt missing')
-    receipt=json.loads(cached[0])
+    if not cached:raise ValueError('retained fee receipt missing')
+    receipt=json.loads(cached['receipt_json'])
     if (_hex(receipt['transactionHash'])!=report['tx_hash'].lower() or _number(receipt['status'])!=1 or
-            _hex(receipt['blockHash'])!=evidence['block_hash'] or _number(receipt['blockNumber'])!=report['block_number']):
+            _hex(receipt['blockHash'])!=evidence['block_hash'] or _number(receipt['blockNumber'])!=report['block_number'] or
+            cached['block_number']!=report['block_number'] or cached['block_hash']!=evidence['block_hash']):
         raise ValueError('retained receipt identity changed')
     decoded=decode_v2_receipt(receipt,report['vault_address']).get(report['log_index'])
     if (not decoded or decoded['gain']!=int(report['gain_raw']) or decoded['loss']!=int(report['loss_raw']) or
             decoded['strategy'].lower()!=report['strategy_address'].lower() or decoded['fee'] is not None):
-        raise ValueError('execution report changed')
+        raise ValueError('retained fee report changed')
     shares=extract_fee_shares(receipt['logs'],report['vault_address'],report['log_index'])
-    explicit = evidence.get('execution_selection') == 'explicit_report_keys'
-    if not explicit and decoded['gain'] != 0:raise ValueError('execution selection changed')
-    if shares!=evidence['fee_shares'] or shares['status'] not in ('found', 'zero-share-mint'):raise ValueError('execution mint binding changed')
+    if shares!=evidence['fee_shares']:raise ValueError('retained fee shares changed')
+    return receipt,shares,decoded
+
+
+def verify_cached_execution(conn, report, evidence):
+    """Revalidate every accepted execution path from retained raw evidence."""
+    direct=evidence.get('direct_execution_asset')
+    if direct is not None and direct!={'asset':report['asset'],'asset_decimals':report['asset_decimals']}:
+        raise ValueError('execution asset binding changed')
+    receipt,shares,decoded=cached_fee_receipt(conn,report,evidence)
+    explicit=evidence.get('execution_selection')=='explicit_report_keys'
+    if direct is not None and not explicit and decoded['gain']!=0:
+        raise ValueError('execution selection changed')
+    if direct is None and evidence.get('execution_verification',{}).get('trigger')!='later_vault_logs':
+        raise ValueError('execution selection unavailable')
+    if shares['status'] not in ('found','zero-share-mint'):
+        raise ValueError('execution mint binding changed')
     def offline(*args):raise ValueError('execution evidence missing; offline replay cannot fetch')
     result=SelectiveFeeVerifier(conn,1,offline,offline,offline).verify(report,receipt,shares,explicit=explicit)
     if result['status']!='verified':raise ValueError('cached execution verification failed')
     return result
+
+
+def verify_cached_no_mint(conn, report, evidence):
+    from .fee_state import NO_MINT_RELEASES
+    _,shares,_=cached_fee_receipt(conn,report,evidence)
+    if report['api_version'] not in NO_MINT_RELEASES or shares['status']!='no-mint':
+        raise ValueError('receipt-only zero fee is unsupported')
