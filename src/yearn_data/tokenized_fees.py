@@ -58,6 +58,40 @@ def validate_inventory(vault):
             'asset_decimals':decimals}
 
 
+
+def inventory_fingerprint(vault):
+    return hashlib.sha256(json.dumps(validate_inventory(vault),sort_keys=True).encode()).hexdigest()
+
+
+def pending_tokenized_ranges(conn,inventory,chain,from_block,to_block,before_timestamp,*,
+                             chunk_size=2000,confirmations=None):
+    """Reuse complete earlier-cutoff ranges with identical inventory/finality policy.
+
+    Native indexing proves each range end is before its cutoff before committing
+    it. Forward refreshes can subtract those intervals without rescanning them.
+    """
+    from .coverage import uncovered_ranges
+    if min(from_block,to_block)<0 or from_block>to_block or chunk_size<1:
+        raise ValueError('invalid Tokenized range bounds')
+    if confirmations is not None and (isinstance(confirmations,bool) or confirmations<1):
+        raise ValueError('confirmations must be positive')
+    chain_id=CHAINS[chain].chain_id
+    policy='finalized' if confirmations is None else f'latest-minus-{confirmations}'
+    targets=[]
+    seen=set()
+    for vault in sorted((validate_inventory(v) for v in inventory if v['chain_id']==chain_id),key=lambda v:v['address']):
+        if vault['address'] in seen:raise ValueError('duplicate Tokenized inventory addresses')
+        seen.add(vault['address'])
+        first=max(from_block,int(vault['deployment_block']))
+        if first>to_block:continue
+        saved=conn.execute("""SELECT from_block,to_block FROM tokenized_fee_ranges
+            WHERE chain_id=? AND vault_address=? AND inventory_hash=? AND finality_policy=?
+            AND before_timestamp<=? AND to_block>=? AND from_block<=? ORDER BY from_block,to_block""",
+            (chain_id,vault['address'],inventory_fingerprint(vault),policy,before_timestamp,first,to_block))
+        targets.extend(dict(vault=vault,fromBlock=lo,toBlock=hi) for lo,hi in
+                       uncovered_ranges(saved,first,to_block,chunk_size))
+    return targets
+
 def decode_tokenized_fee(vault, log, header):
     vault=validate_inventory(vault)
     if log.get('removed') or log['address'].lower()!=vault['address']:
@@ -116,7 +150,7 @@ def index_tokenized_fees(conn, inventory, chain, from_block, to_block, before_ti
     counts={'vaults':len(vaults),'completed_chunks':0,'reused_chunks':0,'events':0,'finality_policy':policy,'finality_boundary':boundary}
     headers={to_block:end}
     for vault in vaults:
-        fingerprint=hashlib.sha256(json.dumps(vault,sort_keys=True).encode()).hexdigest()
+        fingerprint=inventory_fingerprint(vault)
         start=max(from_block,int(vault['deployment_block']))
         for first in range(start,to_block+1,chunk_size):
             last=min(first+chunk_size-1,to_block)

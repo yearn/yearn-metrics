@@ -1,0 +1,1819 @@
+{
+  "baselineCatchupCommit": "3db530831ce79bec597a43f5ab795d45d1ed8ab7",
+  "optimizedCatchupCommit": "664c25c09f7be237d199cc0a5b6d1a2f9984f602",
+  "scope": "Offline full refresh worker; first native TVL dispatch and complete matching preparation; no production providers or writes",
+  "trials": [
+    {
+      "active": 60,
+      "coverageDigest": "d8e6f0007bf018524c6ba1947858461b30d0b9b0a1171c31178e31b3973df50a",
+      "coverageRows": 160,
+      "cutoff": 172800,
+      "feeSummary": "24.0",
+      "implementation": "before",
+      "inactive": 60,
+      "initialFullyCovered": 40,
+      "initialPartiallyCovered": 40,
+      "initialUncovered": 40,
+      "inventory": 120,
+      "knownNetYieldUsd": "240.0",
+      "moduleSha256": "88462327c2bcbd3c39d76b7955e01baf9dfc7d1b0d531ad6202dda432dd7efc8",
+      "phases": [
+        {
+          "coverageSelects": 256,
+          "phase": "extend",
+          "reportFetches": 80,
+          "secondsToFirstTvlDispatch": 1.3741588331758976,
+          "secondsToPrepared": 2.993789602071047,
+          "stages": [
+            {
+              "seconds": 0.6693833414465189,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.06555042043328285,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.029774781316518784,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.16657128743827343,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.04502426087856293,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.04596150107681751,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.21334410645067692,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.0590564776211977,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.10256502777338028,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.13031909987330437,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.021580809727311134,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.07353590056300163,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.17314631305634975,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.15265475399792194,
+              "stage": "analytics"
+            }
+          ]
+        },
+        {
+          "coverageSelects": 256,
+          "phase": "covered-repeat",
+          "reportFetches": 0,
+          "secondsToFirstTvlDispatch": 0.6338271833956242,
+          "secondsToPrepared": 2.156040919944644,
+          "stages": [
+            {
+              "seconds": 0.11412419751286507,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.053821779787540436,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.02220671996474266,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.0322156585752964,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.026708897203207016,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.03323367051780224,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.20949944853782654,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.0426067728549242,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.10287833958864212,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.12160113267600536,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.017435697838664055,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.06778442300856113,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.13907575607299805,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.1438447367399931,
+              "stage": "analytics"
+            }
+          ]
+        }
+      ],
+      "reportRows": 120,
+      "reportsDigest": "2ccf3b5bd751a3c18492984c323ffdc629f6f146f8fe52c2f788a4b7e4d151ce",
+      "simulatedCoverageReadLatencyMs": 0.0,
+      "trial": 0
+    },
+    {
+      "active": 60,
+      "coverageDigest": "d8e6f0007bf018524c6ba1947858461b30d0b9b0a1171c31178e31b3973df50a",
+      "coverageRows": 160,
+      "cutoff": 172800,
+      "feeSummary": "24.0",
+      "implementation": "before",
+      "inactive": 60,
+      "initialFullyCovered": 40,
+      "initialPartiallyCovered": 40,
+      "initialUncovered": 40,
+      "inventory": 120,
+      "knownNetYieldUsd": "240.0",
+      "moduleSha256": "88462327c2bcbd3c39d76b7955e01baf9dfc7d1b0d531ad6202dda432dd7efc8",
+      "phases": [
+        {
+          "coverageSelects": 256,
+          "phase": "extend",
+          "reportFetches": 80,
+          "secondsToFirstTvlDispatch": 1.3834806270897388,
+          "secondsToPrepared": 2.9621410313993692,
+          "stages": [
+            {
+              "seconds": 0.654361829161644,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.07773412205278873,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.03920666314661503,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.15900426357984543,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.041824158281087875,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.0456203855574131,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.27480666525661945,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.05317489430308342,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.11238725669682026,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.12734491750597954,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.018238993361592293,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.06540020927786827,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.1453089416027069,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.14281403087079525,
+              "stage": "analytics"
+            }
+          ]
+        },
+        {
+          "coverageSelects": 256,
+          "phase": "covered-repeat",
+          "reportFetches": 0,
+          "secondsToFirstTvlDispatch": 0.624069232493639,
+          "secondsToPrepared": 2.164063051342964,
+          "stages": [
+            {
+              "seconds": 0.11230226047337055,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.05323027819395065,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.022309644147753716,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.03317639231681824,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.02690461464226246,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.030322423204779625,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.2169253546744585,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.04132980480790138,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.10328912921249866,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.12590260989964008,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.02100399322807789,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.08405648730695248,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.14586197212338448,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.14534609764814377,
+              "stage": "analytics"
+            }
+          ]
+        }
+      ],
+      "reportRows": 120,
+      "reportsDigest": "2ccf3b5bd751a3c18492984c323ffdc629f6f146f8fe52c2f788a4b7e4d151ce",
+      "simulatedCoverageReadLatencyMs": 0.0,
+      "trial": 1
+    },
+    {
+      "active": 60,
+      "coverageDigest": "d8e6f0007bf018524c6ba1947858461b30d0b9b0a1171c31178e31b3973df50a",
+      "coverageRows": 160,
+      "cutoff": 172800,
+      "feeSummary": "24.0",
+      "implementation": "before",
+      "inactive": 60,
+      "initialFullyCovered": 40,
+      "initialPartiallyCovered": 40,
+      "initialUncovered": 40,
+      "inventory": 120,
+      "knownNetYieldUsd": "240.0",
+      "moduleSha256": "88462327c2bcbd3c39d76b7955e01baf9dfc7d1b0d531ad6202dda432dd7efc8",
+      "phases": [
+        {
+          "coverageSelects": 256,
+          "phase": "extend",
+          "reportFetches": 80,
+          "secondsToFirstTvlDispatch": 1.3068844843655825,
+          "secondsToPrepared": 2.963319554924965,
+          "stages": [
+            {
+              "seconds": 0.6404869314283133,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.06344706751406193,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.02202104963362217,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.14913401193916798,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.048088036477565765,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.04567643068730831,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.2873002141714096,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.057560499757528305,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.10308055393397808,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.12373191677033901,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.017967429012060165,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.06224164739251137,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.16032779403030872,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.189116932451725,
+              "stage": "analytics"
+            }
+          ]
+        },
+        {
+          "coverageSelects": 256,
+          "phase": "covered-repeat",
+          "reportFetches": 0,
+          "secondsToFirstTvlDispatch": 0.6110816784203053,
+          "secondsToPrepared": 2.2405059691518545,
+          "stages": [
+            {
+              "seconds": 0.12401699461042881,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.05083334632217884,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.02220538817346096,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.030376795679330826,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.025456085801124573,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.027873173356056213,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.2411911729723215,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.0651489607989788,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.11417414620518684,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.12422872334718704,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.018752267584204674,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.06850403733551502,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.14034375362098217,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.14588759280741215,
+              "stage": "analytics"
+            }
+          ]
+        }
+      ],
+      "reportRows": 120,
+      "reportsDigest": "2ccf3b5bd751a3c18492984c323ffdc629f6f146f8fe52c2f788a4b7e4d151ce",
+      "simulatedCoverageReadLatencyMs": 0.0,
+      "trial": 2
+    },
+    {
+      "active": 60,
+      "coverageDigest": "d8e6f0007bf018524c6ba1947858461b30d0b9b0a1171c31178e31b3973df50a",
+      "coverageRows": 160,
+      "cutoff": 172800,
+      "feeSummary": "24.0",
+      "implementation": "after",
+      "inactive": 60,
+      "initialFullyCovered": 40,
+      "initialPartiallyCovered": 40,
+      "initialUncovered": 40,
+      "inventory": 120,
+      "knownNetYieldUsd": "240.0",
+      "moduleSha256": "c5cce32a239b8625cb32207d15b4fc810808181e414b2343d173b047fdb8db62",
+      "phases": [
+        {
+          "coverageSelects": 10,
+          "phase": "extend",
+          "reportFetches": 80,
+          "secondsToFirstTvlDispatch": 1.2425516471266747,
+          "secondsToPrepared": 2.8194507751613855,
+          "stages": [
+            {
+              "seconds": 0.5980570055544376,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.05110607482492924,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.022174611687660217,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.14255825616419315,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.04227347485721111,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.06814084015786648,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.20502950809895992,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.05358918756246567,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.09981432370841503,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.14938116446137428,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.024268312379717827,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.11777089536190033,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.14374001137912273,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.1604310367256403,
+              "stage": "analytics"
+            }
+          ]
+        },
+        {
+          "coverageSelects": 10,
+          "phase": "covered-repeat",
+          "reportFetches": 0,
+          "secondsToFirstTvlDispatch": 0.5334762316197157,
+          "secondsToPrepared": 2.22928786277771,
+          "stages": [
+            {
+              "seconds": 0.044771766290068626,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.04872303269803524,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.02122834138572216,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.03172679618000984,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.027279285714030266,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.02903084270656109,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.27999692410230637,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.03913250006735325,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.10074733570218086,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.1283169612288475,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.020330950617790222,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.07263770140707493,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.13960699550807476,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.14302190393209457,
+              "stage": "analytics"
+            }
+          ]
+        }
+      ],
+      "reportRows": 120,
+      "reportsDigest": "2ccf3b5bd751a3c18492984c323ffdc629f6f146f8fe52c2f788a4b7e4d151ce",
+      "simulatedCoverageReadLatencyMs": 0.0,
+      "trial": 0
+    },
+    {
+      "active": 60,
+      "coverageDigest": "d8e6f0007bf018524c6ba1947858461b30d0b9b0a1171c31178e31b3973df50a",
+      "coverageRows": 160,
+      "cutoff": 172800,
+      "feeSummary": "24.0",
+      "implementation": "after",
+      "inactive": 60,
+      "initialFullyCovered": 40,
+      "initialPartiallyCovered": 40,
+      "initialUncovered": 40,
+      "inventory": 120,
+      "knownNetYieldUsd": "240.0",
+      "moduleSha256": "c5cce32a239b8625cb32207d15b4fc810808181e414b2343d173b047fdb8db62",
+      "phases": [
+        {
+          "coverageSelects": 10,
+          "phase": "extend",
+          "reportFetches": 80,
+          "secondsToFirstTvlDispatch": 1.2818925715982914,
+          "secondsToPrepared": 2.838397903367877,
+          "stages": [
+            {
+              "seconds": 0.5638478398323059,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.05456581898033619,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.021738916635513306,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.188767297193408,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.0519119743257761,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.04947119764983654,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.20684739388525486,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.060856135562062263,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.11229696497321129,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.12853839620947838,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.020062025636434555,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.0686530601233244,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.14859912730753422,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.1445952206850052,
+              "stage": "analytics"
+            }
+          ]
+        },
+        {
+          "coverageSelects": 10,
+          "phase": "covered-repeat",
+          "reportFetches": 0,
+          "secondsToFirstTvlDispatch": 0.6266956739127636,
+          "secondsToPrepared": 2.5311322938650846,
+          "stages": [
+            {
+              "seconds": 0.06390317529439926,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.06207111291587353,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.02414778806269169,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.03618211671710014,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.025721877813339233,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.029587827622890472,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.29339232854545116,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.04375070706009865,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.1958225965499878,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.17294229194521904,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.024256013333797455,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.08843908086419106,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.14417114295065403,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.16060358844697475,
+              "stage": "analytics"
+            }
+          ]
+        }
+      ],
+      "reportRows": 120,
+      "reportsDigest": "2ccf3b5bd751a3c18492984c323ffdc629f6f146f8fe52c2f788a4b7e4d151ce",
+      "simulatedCoverageReadLatencyMs": 0.0,
+      "trial": 1
+    },
+    {
+      "active": 60,
+      "coverageDigest": "d8e6f0007bf018524c6ba1947858461b30d0b9b0a1171c31178e31b3973df50a",
+      "coverageRows": 160,
+      "cutoff": 172800,
+      "feeSummary": "24.0",
+      "implementation": "after",
+      "inactive": 60,
+      "initialFullyCovered": 40,
+      "initialPartiallyCovered": 40,
+      "initialUncovered": 40,
+      "inventory": 120,
+      "knownNetYieldUsd": "240.0",
+      "moduleSha256": "c5cce32a239b8625cb32207d15b4fc810808181e414b2343d173b047fdb8db62",
+      "phases": [
+        {
+          "coverageSelects": 10,
+          "phase": "extend",
+          "reportFetches": 80,
+          "secondsToFirstTvlDispatch": 1.5382918436080217,
+          "secondsToPrepared": 3.26245310716331,
+          "stages": [
+            {
+              "seconds": 0.7208681087940931,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.08136734925210476,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.03351934812963009,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.1632224004715681,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.047381725162267685,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.07836897484958172,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.2275638859719038,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.059995993971824646,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.14533275552093983,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.13873209431767464,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.02509183995425701,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.06627734564244747,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.15237896516919136,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.17588205449283123,
+              "stage": "analytics"
+            }
+          ]
+        },
+        {
+          "coverageSelects": 10,
+          "phase": "covered-repeat",
+          "reportFetches": 0,
+          "secondsToFirstTvlDispatch": 0.6204169690608978,
+          "secondsToPrepared": 2.260826924815774,
+          "stages": [
+            {
+              "seconds": 0.04320479556918144,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.05230586789548397,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.021085206419229507,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.04975868947803974,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.044952671974897385,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.033453039824962616,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.20165303722023964,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.04260752722620964,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.0968465618789196,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.14610918797552586,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.02023676037788391,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.07310207933187485,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.13896669819951057,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.18216941691935062,
+              "stage": "analytics"
+            }
+          ]
+        }
+      ],
+      "reportRows": 120,
+      "reportsDigest": "2ccf3b5bd751a3c18492984c323ffdc629f6f146f8fe52c2f788a4b7e4d151ce",
+      "simulatedCoverageReadLatencyMs": 0.0,
+      "trial": 2
+    },
+    {
+      "active": 60,
+      "coverageDigest": "d8e6f0007bf018524c6ba1947858461b30d0b9b0a1171c31178e31b3973df50a",
+      "coverageRows": 160,
+      "cutoff": 172800,
+      "feeSummary": "24.0",
+      "implementation": "before",
+      "inactive": 60,
+      "initialFullyCovered": 40,
+      "initialPartiallyCovered": 40,
+      "initialUncovered": 40,
+      "inventory": 120,
+      "knownNetYieldUsd": "240.0",
+      "moduleSha256": "88462327c2bcbd3c39d76b7955e01baf9dfc7d1b0d531ad6202dda432dd7efc8",
+      "phases": [
+        {
+          "coverageSelects": 256,
+          "phase": "extend",
+          "reportFetches": 80,
+          "secondsToFirstTvlDispatch": 1.830532245337963,
+          "secondsToPrepared": 3.4820307921618223,
+          "stages": [
+            {
+              "seconds": 1.1938454117625952,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.05231707915663719,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.020427076146006584,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.13213047944009304,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.04525180347263813,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.05007064715027809,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.1857846975326538,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.05176655016839504,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.10911894775927067,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.1564456820487976,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.025189217180013657,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.11080196686089039,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.1551211066544056,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.1474148016422987,
+              "stage": "analytics"
+            }
+          ]
+        },
+        {
+          "coverageSelects": 256,
+          "phase": "covered-repeat",
+          "reportFetches": 0,
+          "secondsToFirstTvlDispatch": 1.1813863292336464,
+          "secondsToPrepared": 2.662814410403371,
+          "stages": [
+            {
+              "seconds": 0.6880052406340837,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.054196884855628014,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.021690554916858673,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.031591663137078285,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.025718072429299355,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.03088906779885292,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.2052917703986168,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.041682228446006775,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.09475374780595303,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.12858114205300808,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.017319511622190475,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.06694814004004002,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.14148272387683392,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.14428488537669182,
+              "stage": "analytics"
+            }
+          ]
+        }
+      ],
+      "reportRows": 120,
+      "reportsDigest": "2ccf3b5bd751a3c18492984c323ffdc629f6f146f8fe52c2f788a4b7e4d151ce",
+      "simulatedCoverageReadLatencyMs": 2.0,
+      "trial": 0
+    },
+    {
+      "active": 60,
+      "coverageDigest": "d8e6f0007bf018524c6ba1947858461b30d0b9b0a1171c31178e31b3973df50a",
+      "coverageRows": 160,
+      "cutoff": 172800,
+      "feeSummary": "24.0",
+      "implementation": "before",
+      "inactive": 60,
+      "initialFullyCovered": 40,
+      "initialPartiallyCovered": 40,
+      "initialUncovered": 40,
+      "inventory": 120,
+      "knownNetYieldUsd": "240.0",
+      "moduleSha256": "88462327c2bcbd3c39d76b7955e01baf9dfc7d1b0d531ad6202dda432dd7efc8",
+      "phases": [
+        {
+          "coverageSelects": 256,
+          "phase": "extend",
+          "reportFetches": 80,
+          "secondsToFirstTvlDispatch": 1.8900726195424795,
+          "secondsToPrepared": 3.375687276944518,
+          "stages": [
+            {
+              "seconds": 1.2318296805024147,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.057325348258018494,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.02572651393711567,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.14604905992746353,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.042946359142661095,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.045770443975925446,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.18843483552336693,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.05048733949661255,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.10363195836544037,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.12576310336589813,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.017798012122511864,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.06490624696016312,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.14885477535426617,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.14095674455165863,
+              "stage": "analytics"
+            }
+          ]
+        },
+        {
+          "coverageSelects": 256,
+          "phase": "covered-repeat",
+          "reportFetches": 0,
+          "secondsToFirstTvlDispatch": 1.3030232079327106,
+          "secondsToPrepared": 2.8577572368085384,
+          "stages": [
+            {
+              "seconds": 0.7017008680850267,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.10022901184856892,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.03243144229054451,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.051292868331074715,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.027380339801311493,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.028224341571331024,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.2448022235184908,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.04038860276341438,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.10917594656348228,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.1163480393588543,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.016765300184488297,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.0697050541639328,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.14443803951144218,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.15381035953760147,
+              "stage": "analytics"
+            }
+          ]
+        }
+      ],
+      "reportRows": 120,
+      "reportsDigest": "2ccf3b5bd751a3c18492984c323ffdc629f6f146f8fe52c2f788a4b7e4d151ce",
+      "simulatedCoverageReadLatencyMs": 2.0,
+      "trial": 1
+    },
+    {
+      "active": 60,
+      "coverageDigest": "d8e6f0007bf018524c6ba1947858461b30d0b9b0a1171c31178e31b3973df50a",
+      "coverageRows": 160,
+      "cutoff": 172800,
+      "feeSummary": "24.0",
+      "implementation": "before",
+      "inactive": 60,
+      "initialFullyCovered": 40,
+      "initialPartiallyCovered": 40,
+      "initialUncovered": 40,
+      "inventory": 120,
+      "knownNetYieldUsd": "240.0",
+      "moduleSha256": "88462327c2bcbd3c39d76b7955e01baf9dfc7d1b0d531ad6202dda432dd7efc8",
+      "phases": [
+        {
+          "coverageSelects": 256,
+          "phase": "extend",
+          "reportFetches": 80,
+          "secondsToFirstTvlDispatch": 1.993693569675088,
+          "secondsToPrepared": 3.583714734762907,
+          "stages": [
+            {
+              "seconds": 1.215752799063921,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.08267382346093655,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.039713768288493156,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.16256221942603588,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.05926387384533882,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.0478998776525259,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.19981294311583042,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.05508612282574177,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.12966086715459824,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.16116235591471195,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.018766827881336212,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.06874609924852848,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.15788676030933857,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.1518614310771227,
+              "stage": "analytics"
+            }
+          ]
+        },
+        {
+          "coverageSelects": 256,
+          "phase": "covered-repeat",
+          "reportFetches": 0,
+          "secondsToFirstTvlDispatch": 1.1638386696577072,
+          "secondsToPrepared": 2.8984295148402452,
+          "stages": [
+            {
+              "seconds": 0.6481477431952953,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.052464809268713,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.024924878031015396,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.03233158402144909,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.02696213312447071,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.028719395399093628,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.21947076171636581,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.0419741366058588,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.15044628456234932,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.12434378452599049,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.02064702659845352,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.09438533522188663,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.21820824593305588,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.15389360673725605,
+              "stage": "analytics"
+            }
+          ]
+        }
+      ],
+      "reportRows": 120,
+      "reportsDigest": "2ccf3b5bd751a3c18492984c323ffdc629f6f146f8fe52c2f788a4b7e4d151ce",
+      "simulatedCoverageReadLatencyMs": 2.0,
+      "trial": 2
+    },
+    {
+      "active": 60,
+      "coverageDigest": "d8e6f0007bf018524c6ba1947858461b30d0b9b0a1171c31178e31b3973df50a",
+      "coverageRows": 160,
+      "cutoff": 172800,
+      "feeSummary": "24.0",
+      "implementation": "after",
+      "inactive": 60,
+      "initialFullyCovered": 40,
+      "initialPartiallyCovered": 40,
+      "initialUncovered": 40,
+      "inventory": 120,
+      "knownNetYieldUsd": "240.0",
+      "moduleSha256": "c5cce32a239b8625cb32207d15b4fc810808181e414b2343d173b047fdb8db62",
+      "phases": [
+        {
+          "coverageSelects": 10,
+          "phase": "extend",
+          "reportFetches": 80,
+          "secondsToFirstTvlDispatch": 1.1705522760748863,
+          "secondsToPrepared": 2.8743182215839624,
+          "stages": [
+            {
+              "seconds": 0.5614751297980547,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.05209797993302345,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.02212335728108883,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.13384698517620564,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.04137507639825344,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.04737786017358303,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.20030066929757595,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.05288965813815594,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.10834828205406666,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.12268713302910328,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.018452275544404984,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.06925078108906746,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.21108576282858849,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.2517455741763115,
+              "stage": "analytics"
+            }
+          ]
+        },
+        {
+          "coverageSelects": 10,
+          "phase": "covered-repeat",
+          "reportFetches": 0,
+          "secondsToFirstTvlDispatch": 0.6006326917558908,
+          "secondsToPrepared": 2.16241267696023,
+          "stages": [
+            {
+              "seconds": 0.05771692842245102,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.04936860501766205,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.02182726003229618,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.031289299950003624,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.029288891702890396,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.03301223926246166,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.275993887335062,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.041510386392474174,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.1089421734213829,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.12636049464344978,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.019911522045731544,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.07080295495688915,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.14428462833166122,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.14617228880524635,
+              "stage": "analytics"
+            }
+          ]
+        }
+      ],
+      "reportRows": 120,
+      "reportsDigest": "2ccf3b5bd751a3c18492984c323ffdc629f6f146f8fe52c2f788a4b7e4d151ce",
+      "simulatedCoverageReadLatencyMs": 2.0,
+      "trial": 0
+    },
+    {
+      "active": 60,
+      "coverageDigest": "d8e6f0007bf018524c6ba1947858461b30d0b9b0a1171c31178e31b3973df50a",
+      "coverageRows": 160,
+      "cutoff": 172800,
+      "feeSummary": "24.0",
+      "implementation": "after",
+      "inactive": 60,
+      "initialFullyCovered": 40,
+      "initialPartiallyCovered": 40,
+      "initialUncovered": 40,
+      "inventory": 120,
+      "knownNetYieldUsd": "240.0",
+      "moduleSha256": "c5cce32a239b8625cb32207d15b4fc810808181e414b2343d173b047fdb8db62",
+      "phases": [
+        {
+          "coverageSelects": 10,
+          "phase": "extend",
+          "reportFetches": 80,
+          "secondsToFirstTvlDispatch": 1.3103470504283905,
+          "secondsToPrepared": 2.86129461042583,
+          "stages": [
+            {
+              "seconds": 0.7017043419182301,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.05156056024134159,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.02177201770246029,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.13248395547270775,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.04417450353503227,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.04773643985390663,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.2010521274060011,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.052765123546123505,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.11647705361247063,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.12453746609389782,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.019945211708545685,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.0783977247774601,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.15306145511567593,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.15175951831042767,
+              "stage": "analytics"
+            }
+          ]
+        },
+        {
+          "coverageSelects": 10,
+          "phase": "covered-repeat",
+          "reportFetches": 0,
+          "secondsToFirstTvlDispatch": 0.5311398692429066,
+          "secondsToPrepared": 2.253396710380912,
+          "stages": [
+            {
+              "seconds": 0.056936003267765045,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.05041412636637688,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.02276609092950821,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.031855642795562744,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.026108847931027412,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.027797488495707512,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.21505799889564514,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.0410187803208828,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.11396482028067112,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.12447485327720642,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.02024717442691326,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.06999611295759678,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.14348110370337963,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.14985672943294048,
+              "stage": "analytics"
+            }
+          ]
+        }
+      ],
+      "reportRows": 120,
+      "reportsDigest": "2ccf3b5bd751a3c18492984c323ffdc629f6f146f8fe52c2f788a4b7e4d151ce",
+      "simulatedCoverageReadLatencyMs": 2.0,
+      "trial": 1
+    },
+    {
+      "active": 60,
+      "coverageDigest": "d8e6f0007bf018524c6ba1947858461b30d0b9b0a1171c31178e31b3973df50a",
+      "coverageRows": 160,
+      "cutoff": 172800,
+      "feeSummary": "24.0",
+      "implementation": "after",
+      "inactive": 60,
+      "initialFullyCovered": 40,
+      "initialPartiallyCovered": 40,
+      "initialUncovered": 40,
+      "inventory": 120,
+      "knownNetYieldUsd": "240.0",
+      "moduleSha256": "c5cce32a239b8625cb32207d15b4fc810808181e414b2343d173b047fdb8db62",
+      "phases": [
+        {
+          "coverageSelects": 10,
+          "phase": "extend",
+          "reportFetches": 80,
+          "secondsToFirstTvlDispatch": 1.195778138935566,
+          "secondsToPrepared": 2.711177473887801,
+          "stages": [
+            {
+              "seconds": 0.5775584597140551,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.05069323629140854,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.021287057548761368,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.1434476226568222,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.04206787794828415,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.046916207298636436,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.1965824980288744,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.0523658711463213,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.10503402724862099,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.1297152414917946,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.01978752389550209,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.07159564644098282,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.13859620690345764,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.14451167918741703,
+              "stage": "analytics"
+            }
+          ]
+        },
+        {
+          "coverageSelects": 10,
+          "phase": "covered-repeat",
+          "reportFetches": 0,
+          "secondsToFirstTvlDispatch": 0.6951260156929493,
+          "secondsToPrepared": 2.372502086684108,
+          "stages": [
+            {
+              "seconds": 0.06428462266921997,
+              "stage": "reports:eth"
+            },
+            {
+              "seconds": 0.06121460720896721,
+              "stage": "catalog:eth"
+            },
+            {
+              "seconds": 0.032321903854608536,
+              "stage": "tokenized:eth"
+            },
+            {
+              "seconds": 0.04460522346198559,
+              "stage": "canonical-fees"
+            },
+            {
+              "seconds": 0.04812416434288025,
+              "stage": "report-prices"
+            },
+            {
+              "seconds": 0.03941557556390762,
+              "stage": "fee-prices"
+            },
+            {
+              "seconds": 0.20897932723164558,
+              "stage": "tvl-collection"
+            },
+            {
+              "seconds": 0.042598577216267586,
+              "stage": "analytics-sources"
+            },
+            {
+              "seconds": 0.10692064464092255,
+              "stage": "earnings"
+            },
+            {
+              "seconds": 0.13826094940304756,
+              "stage": "fee-usd"
+            },
+            {
+              "seconds": 0.019365310668945312,
+              "stage": "pairing"
+            },
+            {
+              "seconds": 0.07005331106483936,
+              "stage": "tvl-manifest"
+            },
+            {
+              "seconds": 0.15043214336037636,
+              "stage": "history"
+            },
+            {
+              "seconds": 0.19308680295944214,
+              "stage": "analytics"
+            }
+          ]
+        }
+      ],
+      "reportRows": 120,
+      "reportsDigest": "2ccf3b5bd751a3c18492984c323ffdc629f6f146f8fe52c2f788a4b7e4d151ce",
+      "simulatedCoverageReadLatencyMs": 2.0,
+      "trial": 2
+    }
+  ]
+}
