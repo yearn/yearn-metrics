@@ -17,6 +17,7 @@ It does not reacquire historical observations or change accounting policy.
 | Accounting/preparation implementation revision | A new dataset identity and full history |
 | Catalog `updated_at` only, or identical selected evidence with a new run provenance ID | No recalculation of unchanged rows |
 | Reporting cutoff changes | Compare dates normally; current-close accounting still invalidates the affected closes |
+| Aggregate `observationRevision` changes | Compare dated evidence normally; the digest names captured inputs, not accounting policy |
 | No compatible durable input index | Full history; this includes first adoption and legacy prepared sources |
 
 The global context retains every manifest field except run inventory and known
@@ -31,6 +32,13 @@ When a bounded refresh supplies `reportingCutoff`, that field limits the reporti
 window rather than changing global accounting policy. Future-only collection
 runs remain retained but do not add false missing-chain gaps to that earlier
 window. Changing the current close still changes its dated input identity.
+
+`observationRevision` is the maintained refresh worker’s aggregate digest of
+captured TVL evidence. It gives corrected inputs a new immutable manifest ID.
+It is excluded from global invalidation because each selected snapshot and
+position is already hashed by date; a changed value still recalculates its full
+network frame. Accounting policy must use its own context fields, not this
+evidence-only digest. Unknown future context fields still invalidate history.
 
 New manifests include an `accountingRevision` digest over the accounting,
 selection, cache and incremental-preparation source files. A code change cannot
@@ -173,3 +181,7 @@ does not create gaps before that date. Targeted-backfill receipts record the
 requested inclusive bounds and matched dates; a range matching no captured date
 is rejected. A retry that completes interrupted totals reports `prepared`; only a
 retry with both rows and totals already complete reports `already-prepared`.
+
+If consolidation retires a newly prepared dataset before its final receipt is
+read, preparation raises an explicit retirement error. The CLI does not report
+`null` as a successful preparation; retry from the retained captured inputs.

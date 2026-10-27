@@ -24,6 +24,8 @@ def digest(value):
 
 def context_identity(dataset):
     from .tvl_api import accounting_revision
+    # observationRevision is the aggregate evidence identity used by refresh
+    # manifests, not accounting policy. input_identity still hashes each date.
     excluded = {'runs', 'datasetId', 'publishedAt', 'asOfTimestamp', 'reportingCutoff', 'observationRevision', 'diagnostics', 'priceRejections'}
     context = {k:v for k,v in dataset.manifest.items() if k not in excluded}
     # Acquisition timestamps do not affect accounting. Every other catalog field,

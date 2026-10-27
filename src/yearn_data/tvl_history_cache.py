@@ -171,7 +171,10 @@ def prepare(dataset,progress=None,*,full_rebuild=False,backfill=None):
     build(dataset, progress, full_rebuild=full_rebuild, backfill=backfill)
     prepare_totals(dataset)
     with closing(connect(dataset.database,readonly=True)) as conn:
-        return preparation(conn, dataset.id)
+        receipt = preparation(conn, dataset.id)
+        if receipt is None:
+            raise ValueError('prepared TVL dataset was retired before its receipt could be read; retry preparation')
+        return receipt
 
 
 def prepare_price_repair(dataset, previous):

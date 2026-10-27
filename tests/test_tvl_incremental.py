@@ -286,3 +286,25 @@ def test_targeted_backfill_records_matched_dates_and_rejects_unmatched_range(pos
     assert not ready(dataset)
     result=prepare(dataset,backfill=(DAY-1,DAY+1))
     assert result['requestedBackfill']==dict(fromTimestamp=DAY-1,toTimestamp=DAY+1,matchedDates=[DAY])
+
+
+
+def test_cli_rejects_dataset_retired_between_totals_commit_and_receipt(postgres_database,tmp_path,monkeypatch,capsys):
+    from yearn_data import cli,tvl_history_cache as cache
+    with closing(connect('staging')) as conn:
+        init_db(conn);run(conn,1,DAY,[(PARENT,'100')])
+    original=cache.prepare_totals
+    def consolidate_after_totals(dataset):
+        original(dataset)
+        with closing(connect('staging')) as conn,conn:
+            for table in ('tvl_chart_rows','tvl_chart_totals','tvl_chart_publications',
+                          'tvl_chart_inputs','tvl_chart_preparations'):
+                conn.execute(f'DELETE FROM {table} WHERE dataset_id=?',(dataset.id,))
+    monkeypatch.setattr(cache,'prepare_totals',consolidate_after_totals)
+    args=['--db','staging','tvl','prepare-history','--publication',str(tmp_path/'pub')]
+    with pytest.raises(ValueError,match='retired before its receipt'):
+        cli.main(args)
+    assert 'null' not in capsys.readouterr().out.splitlines()
+    monkeypatch.setattr(cache,'prepare_totals',original)
+    assert cli.main(args)==0
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])['status']=='prepared'
