@@ -350,3 +350,44 @@ def test_manifest_reuse_and_corrected_tvl_inputs_reprepare_history(workflow):
                     (result['result']['tvlDatasetId'],))}
             assert values=={expected}
     assert refresh.selection('staging') is None
+
+
+
+def test_discovered_inventory_resume_keeps_financial_ids_and_ignores_bookkeeping(workflow,monkeypatch):
+    from yearn_data.history_sources import inventory_targets
+    options,_=workflow
+    target=next(t for t in inventory_targets('eth') if t.version=='v3')
+    def inventory(self,selected,first,last,source):
+        if selected!=target or not first<=1<=last:return []
+        return [dict(chain_id=1,version='v3',vault_address=VAULT,source_kind=target.kind,
+            action='added',source_address=target.address,asset=ASSET,tx_hash='0x'+'44'*32,
+            log_index=0,block_number=1,block_timestamp=1000,
+            decoded_json=json.dumps(dict(vault=VAULT,api_version='3.0.2'))) ]
+    monkeypatch.setattr(Source,'inventory',inventory)
+    first=refresh.run_refresh(options)
+    assert first['status']=='prepared',first
+    with closing(connect('staging',readonly=True)) as conn:
+        assert conn.execute('SELECT count(*) FROM vault_inventory_events').fetchone()[0]==1
+    events=[]
+    resumed=refresh.run_refresh(options,resume=first['jobId'],progress=events.append)
+    assert resumed['status']=='prepared',resumed
+    assert 'reports:eth' in [e['stage'] for e in events if e['event']=='stage-reused']
+    fields=('earningsRunId','feesRunId','feeDatasetId','analyticsPublicationId')
+    assert all(resumed['result'][k]==first['result'][k] for k in fields)
+    worker=refresh.RefreshWorker(options,SimpleNamespace(id=first['jobId']))
+    before=worker.reports()
+    def mutate(sql,params=()):
+        with closing(connect('staging')) as conn,conn:conn.execute(sql,params)
+    mutate('UPDATE vaults SET updated_at=updated_at+60')
+    assert worker.reports()==before
+    mutate('UPDATE vaults SET asset_decimals=7')
+    assert worker.reports()!=before
+    mutate('UPDATE vaults SET asset_decimals=6')
+    mutate("UPDATE strategy_reports SET gain_raw='2000000'")
+    assert worker.reports()!=before
+    mutate("UPDATE strategy_reports SET gain_raw='1000000'")
+    events=[]
+    published=refresh.run_refresh(options,mode='publish',resume=first['jobId'],progress=events.append)
+    assert published['status']=='selected',published
+    assert 'reports:eth' in [e['stage'] for e in events if e['event']=='stage-reused']
+    assert all(published['result'][k]==first['result'][k] for k in fields)

@@ -102,7 +102,7 @@ class RefreshWorker:
         params=(self.options.cutoff,) if global_scope else (self.options.cutoff,*ids)
         return self.signature([
             ('strategy_reports','SELECT * FROM strategy_reports WHERE block_timestamp<?'+clause,params),
-            ('vaults','SELECT * FROM vaults'+('' if global_scope else f' WHERE chain_id IN ({marks})'),
+            ('vaults',"SELECT to_jsonb(v)-'updated_at' AS evidence FROM vaults v"+('' if global_scope else f' WHERE chain_id IN ({marks})'),
              () if global_scope else ids)])
 
     def canonical(self,partial=False,*,global_scope=False):

@@ -29,6 +29,19 @@ checks chain identity, finality, the selected source watermark and pinned block
 hashes. It does not silently replace an unavailable source with a different one.
 A finality head before the cutoff permits inspection but prevents publication.
 
+`--confirmations CHAIN:N` replaces that chain's finalized-head policy with
+`latest-minus-N` (for example `--confirmations eth:64`). Each count must be
+positive. The selected policy is stored in Tokenized range evidence; coverage
+acquired under a different finality policy is not reused. Confirmation settings
+are part of the checkpoint identity, so changing them requires a new job.
+
+`--deferred-manifest PATH` passes an explicitly reviewed fee-deferral manifest
+to the `fee-usd` analysis. Its entries determine which matching events retain a
+deferred-evidence disposition in the prepared/published fee outputs; they are
+not treated as accepted fees or invented zero values. The manifest content is
+hashed into checkpoint configuration and analysis provenance. Changing its
+contents requires a new job rather than resuming an older financial scope.
+
 The receipt records fixed per-chain bounds, code/inventory and configuration
 hashes. It excludes configuration values, endpoints and private filesystem paths.
 Use the same scope, root, flags and environment when resuming:
