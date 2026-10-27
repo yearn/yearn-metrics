@@ -50,6 +50,9 @@ BALANCER_VAULT = "0xBA12222222228d8Ba445958a75a0704d566BF2C8"
 
 BALANCER_CHAINS = {1, 137, 8453, 42161}
 
+# Recorded top-level contract provenance, excluding provider aliases and failed
+# attempts. pricing._adapter_refresh_sql uses these to refresh legacy stored results
+# without a migration; keep CONTRACT_SOURCE_NAMES consistent with that boundary.
 ONCHAIN_ADAPTER_SOURCES = CONTRACT_SOURCE_NAMES
 
 
@@ -739,7 +742,7 @@ def fetch_fallback_price(
         }, provider='local-adapter', requested_timestamp=timestamp)
 
 
-def fetch_defillama_prices_batch(requests_, timeout=30):
+def fetch_defillama_prices_batch(requests_, timeout=30) -> clients.PriceBatch:
     return clients.fetch_defillama_prices_batch(requests_, timeout=timeout)
 
 

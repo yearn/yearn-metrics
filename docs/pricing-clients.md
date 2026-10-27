@@ -22,7 +22,10 @@ It also exposes `value`, `status`, `reason`, `provider`, `requested_timestamp`,
 `evidence_timestamp` and `provenance` by name. A missing USD value is `None`, never
 a guessed zero. Evidence timestamps identify accepted observations and remain
 unavailable when no observation exists. Yearn requests use normalized UTC EOD;
-the jobs retain original report timestamps separately.
+earnings rows retain the original event time as `report_timestamp`, while
+`requested_timestamp` consistently names the normalized request day-end in both
+earnings and fee evidence. Existing stored rows are not rewritten; older earnings
+rows use `normalized_timestamp` for day-end and `requested_timestamp` for event time.
 
 `PriceBatch.target_results` includes every requested target, including unresolved
 Yearn targets that require exact verification. The ordinary mapping preserves

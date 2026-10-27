@@ -68,6 +68,8 @@ def price_result(value, status, provenance, *, provider, requested_timestamp) ->
 
 class PriceBatch(dict):
     """Accepted/supplied results remain mapping compatible; all targets are explicit."""
+    target_results: dict[tuple[int, str, int], PriceResult]
+
     def __init__(self, results, targets, *, provider):
         super().__init__(results)
         self.target_results = {target: self.get(target) or price_result(None, 'unresolved',
@@ -232,7 +234,7 @@ def _parse_yearn_price_point(
 def fetch_yearn_prices_batch(
     targets: list[tuple[int, str, int]],
     timeout: int = 10,
-) -> dict[tuple[int, str, int], tuple[float, str, dict[str, Any]]]:
+) -> PriceBatch:
     """Fetch normalized EOD targets from the Yearn Prices batch endpoint.
 
     Omitted targets are intentionally absent from the result. The caller verifies
@@ -438,7 +440,7 @@ def fetch_defillama_price(chain_id: int, token_address: str, timestamp: int, tim
 def fetch_defillama_prices_batch(
     requests_: list[tuple[int, str, int]],
     timeout: int = 30,
-) -> dict[tuple[int, str, int], tuple[float | None, str, dict[str, Any]]]:
+) -> PriceBatch:
     coins: dict[str, list[int]] = {}
     key_by_coin: dict[str, tuple[int, str]] = {}
     for chain_id, token_address, timestamp in requests_:

@@ -586,7 +586,8 @@ def _price_rows_with_yearn_prices(conn, rows) -> tuple[int, list]:
         if status != "ok":
             unresolved_rows.append(row)
         payload = dict(result_payload)
-        payload["requested_timestamp"] = report_timestamp
+        payload["requested_timestamp"] = normalized_timestamp
+        payload["report_timestamp"] = report_timestamp
         payload.setdefault("normalized_timestamp", normalized_timestamp)
         insert_rows.append(
             (

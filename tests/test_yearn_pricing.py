@@ -19,7 +19,7 @@ def test_invalid_retry_configuration_stops_before_http(monkeypatch, setting):
     with pytest.raises(pricing.YearnPricesConfigurationError, match='retry configuration'):
         pricing.fetch_yearn_price(1, '0x'+'1'*40, 86399)
 
-def testyearn_prices_batches_normalize_and_respect_route_limits():
+def test_yearn_prices_batches_normalize_and_respect_route_limits():
     first = "0x0000000000000000000000000000000000000001"
     second = "0x0000000000000000000000000000000000000002"
     targets = [(1, first, day * 86_400) for day in range(91)] + [(1, second, 100)]
@@ -114,7 +114,8 @@ def test_price_unpriced_reports_uses_yearn_prices_eod_and_exact_fallback(postgre
         (90_000, 2.0, "ok"),
     ]
     payloads = [from_json(row["raw_json"]) for row in rows]
-    assert [payload["requested_timestamp"] for payload in payloads] == [100, 200, 90_000]
+    assert [payload["report_timestamp"] for payload in payloads] == [100, 200, 90_000]
+    assert [payload["requested_timestamp"] for payload in payloads] == [86_399, 86_399, 172_799]
     assert [payload["normalized_timestamp"] for payload in payloads] == [86_399, 86_399, 172_799]
     assert [payload["adapter"] for payload in payloads] == [
         "batchHistorical",
