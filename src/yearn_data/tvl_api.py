@@ -109,7 +109,8 @@ def chart_response(result,top=None):
     return output
 
 
-def publish_tvl(database, publication, *, current_bridge_policy='none', before_timestamp=None):
+def publish_tvl(database, publication, *, current_bridge_policy='none', before_timestamp=None,
+                observation_revision=None):
     """Publishing the union of finished runs never selects one latest backfill."""
     if current_bridge_policy not in ('none', 'retired-registry'):
         raise ValueError('unsupported current bridge policy')
@@ -137,6 +138,8 @@ def publish_tvl(database, publication, *, current_bridge_policy='none', before_t
                'historicalBridgePolicy': 'dated-evidence-only', 'database': database_reference(database)}
     if before_timestamp is not None:
         context['reportingCutoff']=before_timestamp
+    if observation_revision is not None:
+        context['observationRevision'] = observation_revision
     dataset_id = hashlib.sha256(encoded(context).encode()).hexdigest()
     root = Path(publication)
     (root/'datasets').mkdir(parents=True, exist_ok=True)
@@ -155,6 +158,8 @@ def publish_tvl(database, publication, *, current_bridge_policy='none', before_t
         temp = target.with_suffix('.tmp')
         temp.write_text(encoded(manifest)+'\n')
         temp.replace(target)
+    else:
+        manifest = json.loads(target.read_text())
     temp = root/'.current.tmp'
     temp.write_text(encoded({'datasetId': dataset_id})+'\n')
     temp.replace(root/'current.json')

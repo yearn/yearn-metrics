@@ -122,3 +122,12 @@ publication is needed:
 ```bash
 python -m pytest -q tests/test_refresh_*.py
 ```
+
+TVL manifests include an `observationRevision` digest of the captured bounded
+inputs. An in-place correction therefore creates a new dataset identity and
+prepared history instead of reusing the earlier immutable rows. Re-reading an
+existing manifest returns its stored close and diagnostics. A previous failed
+publication does not count as unfinished preparation; repaired jobs can prepare
+and publish again, while incomplete acquisition or preparation still blocks
+selection. Tokenized acquisition honors `--chunk-size` and shares finality and
+end-header validation within each bounded work batch.

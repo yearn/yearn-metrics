@@ -121,8 +121,31 @@ def decode_tokenized_fee(vault, log, header):
             'inventory':vault}
 
 
+class TokenizedWindow:
+    """One validated finality/time window and header cache for a bounded batch."""
+    def __init__(self, client, chain, to_block, before_timestamp, confirmations=None):
+        self.client = client
+        self.chain_id = CHAINS[chain].chain_id
+        self.to_block = to_block
+        self.before_timestamp = before_timestamp
+        self.confirmations = confirmations
+        if client.eth.chain_id != self.chain_id:
+            raise ValueError('RPC chain mismatch')
+        if confirmations is not None and (isinstance(confirmations, bool) or confirmations <= 0):
+            raise ValueError('confirmations must be a positive block count')
+        self.policy = 'finalized' if confirmations is None else f'latest-minus-{confirmations}'
+        head = client.eth.get_block('finalized' if confirmations is None else 'latest')
+        self.boundary = _number(head['number']) - (confirmations or 0)
+        if to_block > self.boundary:
+            raise ValueError('requested range extends beyond selected finality boundary')
+        end = client.eth.get_block(to_block)
+        if _number(end['timestamp']) >= before_timestamp:
+            raise ValueError('requested range extends beyond exclusive time cutoff')
+        self.headers = {to_block: end}
+
+
 def index_tokenized_fees(conn, inventory, chain, from_block, to_block, before_timestamp,
-                         chunk_size=2000, max_vaults=10, client=None, confirmations=None):
+                         chunk_size=2000, max_vaults=10, client=None, confirmations=None, *, window=None):
     """Import explicit finalized ranges; commit each complete vault/chunk atomically."""
     if min(from_block,to_block)<0 or to_block<from_block or min(chunk_size,max_vaults,before_timestamp)<=0:
         raise ValueError('invalid bounded Tokenized indexing range')
@@ -135,20 +158,12 @@ def index_tokenized_fees(conn, inventory, chain, from_block, to_block, before_ti
     if len(vaults)>max_vaults:
         raise ValueError('inventory exceeds max-vaults; select a smaller inventory or raise the bound explicitly')
     client=client or web3_for(chain)
-    if client.eth.chain_id!=chain_id:
-        raise ValueError('RPC chain mismatch')
-    if confirmations is not None and (isinstance(confirmations, bool) or confirmations <= 0):
-        raise ValueError('confirmations must be a positive block count')
-    policy = 'finalized' if confirmations is None else f'latest-minus-{confirmations}'
-    head = client.eth.get_block('finalized' if confirmations is None else 'latest')
-    boundary = _number(head['number']) - (confirmations or 0)
-    if to_block > boundary:
-        raise ValueError('requested range extends beyond selected finality boundary')
-    end=client.eth.get_block(to_block)
-    if _number(end['timestamp'])>=before_timestamp:
-        raise ValueError('requested range extends beyond exclusive time cutoff')
+    window = window or TokenizedWindow(client, chain, to_block, before_timestamp, confirmations)
+    if (window.client is not client or window.chain_id != chain_id or to_block > window.to_block
+            or before_timestamp != window.before_timestamp or confirmations != window.confirmations):
+        raise ValueError('Tokenized batch window does not match request scope')
+    policy, boundary, headers = window.policy, window.boundary, window.headers
     counts={'vaults':len(vaults),'completed_chunks':0,'reused_chunks':0,'events':0,'finality_policy':policy,'finality_boundary':boundary}
-    headers={to_block:end}
     for vault in vaults:
         fingerprint=inventory_fingerprint(vault)
         start=max(from_block,int(vault['deployment_block']))

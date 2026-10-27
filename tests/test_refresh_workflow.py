@@ -308,3 +308,45 @@ def test_advancing_cutoff_collects_only_the_new_close_and_preserves_prepared_his
             assert [r[0] for r in rows]==expected
             assert {Decimal(r[1]) for r in rows}=={Decimal('200')}
     assert refresh.selection('staging') is None
+
+
+def test_failed_publication_can_prepare_and_publish_on_resume(workflow,monkeypatch):
+    options,_=workflow
+    publish=refresh.publish
+    def unavailable(*a,**k):raise RuntimeError('temporary storage failure')
+    monkeypatch.setattr(refresh,'publish',unavailable)
+    failed=refresh.run_refresh(options,mode='publish')
+    assert failed['status']=='failed' and failed['result']['failedStage']=='publication'
+    assert refresh.selection('staging') is None
+    monkeypatch.setattr(refresh,'publish',publish)
+    prepared=refresh.run_refresh(options,resume=failed['jobId'])
+    assert prepared['status']=='prepared' and prepared['result']['publishReady'] is True,prepared
+    assert prepared['result']['incompleteStages']==[]
+    selected=refresh.run_refresh(options,mode='publish',resume=failed['jobId'])
+    assert selected['status']=='selected',selected
+    assert selected['result']['releaseId']==refresh.selection('staging')
+
+
+def test_manifest_reuse_and_corrected_tvl_inputs_reprepare_history(workflow):
+    options,_=workflow
+    first=refresh.run_refresh(options)
+    assert first['status']=='prepared',first
+    root=options.publication_root/'refresh'/first['jobId']/'tvl'
+    old=json.loads((root/'datasets'/f"{first['result']['tvlDatasetId']}.json").read_text())
+    # The existing-file path must return the full persisted manifest.
+    again=refresh.tvl_api.publish_tvl('staging',root,current_bridge_policy='retired-registry',
+        before_timestamp=CUTOFF,observation_revision=old['observationRevision'])
+    assert again['datasetId']==old['datasetId'] and again['asOfTimestamp']==CUTOFF-1
+    with closing(connect('staging')) as conn,conn:
+        conn.execute("UPDATE tvl_snapshots SET data_json=jsonb_set(data_json::jsonb,'{tvl_usd}','\"300\"')::text")
+    events=[]
+    corrected=refresh.run_refresh(options,resume=first['jobId'],progress=events.append)
+    assert corrected['status']=='prepared' and corrected['result']['publishReady'] is True,corrected
+    assert corrected['result']['tvlDatasetId']!=first['result']['tvlDatasetId']
+    assert 'tvl-manifest' in [e['stage'] for e in events if e['event']=='stage-invalidated']
+    with closing(connect('staging',readonly=True)) as conn:
+        for result,expected in [(first,Decimal('200')),(corrected,Decimal('300'))]:
+            values={Decimal(r[0]) for r in conn.execute('SELECT tvl_usd FROM tvl_chart_rows WHERE dataset_id=?',
+                    (result['result']['tvlDatasetId'],))}
+            assert values=={expected}
+    assert refresh.selection('staging') is None

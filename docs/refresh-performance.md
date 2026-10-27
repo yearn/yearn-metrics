@@ -38,7 +38,13 @@ explicit harness supplies reproducible performance evidence.
 Configure the explicit disposable service from [Postgres tests](postgres.md#tests).
 Use the interpreter/dependencies from the README, then run:
 
+The after revision belongs to sibling PR #88. Fetch its pull-request ref before
+extracting the pinned commit (a shallow checkout must also fetch the before
+revision). GitHub pull refs remain usable after the source branch is deleted.
+
 ```bash
+git fetch origin refs/pull/88/head:refs/remotes/origin/benchmark-pr-88
+git fetch origin 3db530831ce79bec597a43f5ab795d45d1ed8ab7
 git show 3db530831ce79bec597a43f5ab795d45d1ed8ab7:src/yearn_data/catchup.py > /tmp/yearn-catchup-before-56.py
 git show 664c25c09f7be237d199cc0a5b6d1a2f9984f602:src/yearn_data/catchup.py > /tmp/yearn-catchup-after-56.py
 YEARN_BENCHMARK_BEFORE_CATCHUP=/tmp/yearn-catchup-before-56.py \

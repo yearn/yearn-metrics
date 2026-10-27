@@ -38,3 +38,38 @@ def test_explicit_fee_targets_filter_family_chain_and_day_without_losing_global_
     assert result['selected_asset_days']==1 and calls==[target]
     assert fee_valuation.price_fees(db,before_timestamp=cutoff,targets={target},chain_ids={1})['selected_asset_days']==0
     assert calls==[target]
+
+
+def test_tokenized_worker_shares_headers_across_configured_chunks(db,tmp_path,monkeypatch):
+    from types import SimpleNamespace
+    from yearn_data import refresh
+    from yearn_data.refresh_scope import RefreshOptions
+    from yearn_data.storage import connect
+    from contextlib import closing
+    import pytest
+    vault=dict(chain_id=1,address=OTHER,asset_address=ASSET,asset_decimals=6,api_version='3.0.2',
+        contract_family=tokenized_fees.FAMILY,classification_status='complete',
+        classification_source='offline-fixture',deployment_block=0)
+    headers=[];scans=[]
+    def block(number):
+        headers.append(number)
+        return dict(number=100 if number=='finalized' else number,timestamp=1000)
+    def logs(query):
+        scans.append((query['fromBlock'],query['toBlock']))
+        return []
+    client=SimpleNamespace(eth=SimpleNamespace(chain_id=1,get_block=block,get_logs=logs))
+    monkeypatch.setattr(refresh,'chain_source',lambda _:SimpleNamespace(w3=client))
+    monkeypatch.setattr(refresh,'PRODUCTS',[dict(chainId=1,memberAddresses=[OTHER],earningsAddress=ASSET)])
+    monkeypatch.setattr(tokenized_fees,'load_inventory',lambda:[vault])
+    options=RefreshOptions('staging',('eth',),172800,tmp_path/'pub',chunk_size=10)
+    job=SimpleNamespace(id='batch',bounds={'eth':{'toBlock':34}},checkpoint=lambda *a:None)
+    worker=refresh.RefreshWorker(options,job)
+    result=worker.acquire_tokenized('eth',{})
+    assert result['processed']==4 and result['batches']==1
+    assert headers==['finalized',34]
+    assert scans==[(0,9),(10,19),(20,29),(30,34)]
+    with closing(connect('staging')) as conn:
+        assert conn.execute('SELECT count(*) FROM tokenized_fee_ranges').fetchone()[0]==4
+        window=tokenized_fees.TokenizedWindow(client,'eth',34,172800)
+        with pytest.raises(ValueError,match='window does not match'):
+            tokenized_fees.index_tokenized_fees(conn,[vault],'eth',0,9,259200,client=client,window=window)

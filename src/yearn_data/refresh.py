@@ -211,12 +211,15 @@ class RefreshWorker:
         bounds=self.job.bounds[chain]
         with closing(connect(self.options.database)) as conn:
             work=tokenized_fees.pending_tokenized_ranges(conn,inventory,chain,0,bounds['toBlock'],self.options.cutoff,
-                                                       confirmations=self.options.confirmations.get(chain))
+                                                       confirmations=self.options.confirmations.get(chain),chunk_size=self.options.chunk_size)
             def apply(rows):
+                client=self.sources[chain].w3
+                window=tokenized_fees.TokenizedWindow(client,chain,bounds['toBlock'],
+                    self.options.cutoff,self.options.confirmations.get(chain))
                 for row in rows:
                     tokenized_fees.index_tokenized_fees(conn,[row['vault']],chain,row['fromBlock'],row['toBlock'],
                         self.options.cutoff,chunk_size=row['toBlock']-row['fromBlock']+1,max_vaults=1,
-                        confirmations=self.options.confirmations.get(chain),client=self.sources[chain].w3)
+                        confirmations=self.options.confirmations.get(chain),client=client,window=window)
             key=lambda r:(r['vault']['address'],r['fromBlock'])
             result=self.drain(saved,_page(work,key),apply,key)
         return result|{'maintainedVaults':len(inventory),'rangePolicy':'maintained-deployment-through-pin'}
@@ -310,7 +313,8 @@ class RefreshWorker:
 
     def make_tvl_manifest(self):
         manifest=tvl_api.publish_tvl(self.options.database,self.root/'tvl',
-            current_bridge_policy='retired-registry',before_timestamp=self.options.cutoff)
+            current_bridge_policy='retired-registry',before_timestamp=self.options.cutoff,
+            observation_revision=self.tvl(global_scope=True))
         return {'datasetId':manifest['datasetId'],'asOfTimestamp':manifest['asOfTimestamp']}
 
     def prepare_history(self,tvl):
@@ -393,7 +397,7 @@ class RefreshWorker:
         owned=self.stage('analytics',lambda:[pair,tvl,history,self.analytics_inputs()],
                          self.analytics_output,lambda _:self.prepare_analytics(pair,tvl))
         incomplete=[r['name'] for r in self.job.conn.execute(
-            "SELECT name FROM refresh_stages WHERE job_id=? AND status<>'complete'",(self.job.id,))]
+            "SELECT name FROM refresh_stages WHERE job_id=? AND name<>'publication' AND status<>'complete'",(self.job.id,))]
         ready=(not incomplete and all(b['cutoffReached'] for b in self.job.bounds.values())
                and owned['cutoffTimestamp']==self.options.cutoff and owned['tvlAsOfTimestamp']==self.options.cutoff-1
                and owned['feesDatasetId']==pair['datasetId'] and owned['tvlDatasetId']==tvl['datasetId'])
