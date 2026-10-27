@@ -157,7 +157,7 @@ def test_only_new_tail_earnings_contribute_to_redis_extrapolation(postgres_datab
     original = {'tx_hash': '0xreport', 'block_timestamp': 100, 'net_yield_usd': '100'}
     tail = {'tx_hash': '0xtail', 'block_timestamp': 86500, 'net_yield_usd': '5'}
     cases = [
-        ([original, tail], '105', 11_000, Decimal('0.5')),
+        ([original, tail], '105', 11_000, pytest.approx(5/86400)),
         # Historical repricing must not appear as newly earned yield.
         ([{**original, 'net_yield_usd': '110'}, tail], '115', 21_000, 0),
         # This late report is newer than the last stored report but inside the prior closed cutoff.
@@ -189,4 +189,35 @@ def test_rate_requires_comparable_historical_coverage(change):
         del old['valuation_complete']
     elif change == 'unknown_cutoff':
         old['coverage_through_timestamp'] = None
-    assert _comparable_previous(old, reports, 'policy') == (old if change == 'stable' else None)
+    assert _comparable_previous(old, _coverage_digest(reports), 'policy') == (old if change == 'stable' else None)
+
+
+@pytest.mark.parametrize('publication_gap', [0, 1, 1000000])
+@pytest.mark.parametrize('coverage_delta', [-1, 0, 86400])
+def test_covered_earnings_rate_is_independent_of_publication_gap(publication_gap, coverage_delta):
+    previous = dict(net_yield_usd='100', as_of_ms=1000, coverage_through_timestamp=86400)
+    payload = build_lifetime_yield_headline(
+        '105', previous, now_ms=1000+publication_gap, run_id='next',
+        coverage_through_timestamp=86400+coverage_delta,
+    )
+    assert payload['rate_usd_per_sec'] == (pytest.approx(5/86400) if coverage_delta > 0 else 0)
+    assert payload['as_of_ms'] >= previous['as_of_ms']
+
+
+def test_streamed_coverage_preserves_digests_and_rejects_invalid_rows(postgres_database, tmp_path):
+    from yearn_data.headline import _retained_coverage
+    conn, run_id = _db_with_lifetime_yield(tmp_path, value='100')
+    reports = [dict(tx_hash='0xreport', block_timestamp=100, net_yield_usd='100'),
+               dict(tx_hash='0xearlier', block_timestamp=50, net_yield_usd='5')]
+    write_output(conn, run_id, 'reports', reports[1])
+    conn.commit()
+    current, historical, latest = _retained_coverage(conn, run_id, 2, 75)
+    assert current == _coverage_digest(reports)
+    assert historical == _coverage_digest([reports[1]])
+    assert latest == 100
+    with pytest.raises(ValueError, match='incomplete report coverage'):
+        _retained_coverage(conn, run_id, 3, 75)
+    write_output(conn, run_id, 'reports', {'block_timestamp': True})
+    conn.commit()
+    with pytest.raises(ValueError, match='incomplete report coverage'):
+        _retained_coverage(conn, run_id, 3, 75)

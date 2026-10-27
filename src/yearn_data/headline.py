@@ -75,16 +75,45 @@ def _coverage_digest(reports):
     return hashlib.sha256('\n'.join(rows).encode()).hexdigest()
 
 
-def _comparable_previous(previous, reports, policy):
+def _comparable_previous(previous, historical_digest, policy):
     if not previous or previous.get('valuation_complete') is not True:
         return None
     cutoff = previous.get('coverage_through_timestamp')
     if type(cutoff) is not int or previous.get('valuation_policy') != policy:
         return None
-    historical = [row for row in reports if row['block_timestamp'] <= cutoff]
-    if _coverage_digest(historical) != previous.get('coverage_digest'):
+    if historical_digest != previous.get('coverage_digest'):
         return None
     return previous
+
+
+def _retained_coverage(conn, run_id, expected_count, previous_cutoff):
+    # Native outputs use canonical JSON. Sort in Postgres and stream bounded
+    # batches so both digests share one pass without retaining report history.
+    current, historical = hashlib.sha256(), hashlib.sha256()
+    count, historical_count, latest = 0, 0, 0
+    with conn.raw.transaction():
+        for output in conn.stream(
+            "SELECT row_json FROM analysis_outputs WHERE run_id=? AND name='reports' "
+            'ORDER BY row_json COLLATE "C"', (run_id,),
+        ):
+            report = from_json(output['row_json'])
+            timestamp = report.get('block_timestamp')
+            if type(timestamp) is not int:
+                raise ValueError(f"lifetime-yield analysis run {run_id} has incomplete report coverage")
+            encoded = json.dumps(report, sort_keys=True, separators=(',', ':')).encode()
+            if count:
+                current.update(b'\n')
+            current.update(encoded)
+            if type(previous_cutoff) is int and timestamp <= previous_cutoff:
+                if historical_count:
+                    historical.update(b'\n')
+                historical.update(encoded)
+                historical_count += 1
+            count += 1
+            latest = max(latest, timestamp)
+    if count != expected_count:
+        raise ValueError(f"lifetime-yield analysis run {run_id} has incomplete report coverage")
+    return current.hexdigest(), historical.hexdigest(), latest
 
 
 def build_lifetime_yield_headline(
@@ -93,6 +122,7 @@ def build_lifetime_yield_headline(
     *,
     now_ms: int | None = None,
     run_id: str,
+    coverage_through_timestamp: int | None = None,
 ) -> dict[str, Any]:
     """Build the Redis payload while preserving monotonic timestamps and non-negative rate."""
 
@@ -103,7 +133,10 @@ def build_lifetime_yield_headline(
         prev_as_of_ms = int(previous["as_of_ms"])
         now_ms = max(now_ms, prev_as_of_ms)
         prev_value = Decimal(str(previous["net_yield_usd"]))
-        dt_seconds = Decimal(now_ms - prev_as_of_ms) / Decimal(1000)
+        if coverage_through_timestamp is not None:
+            dt_seconds = Decimal(coverage_through_timestamp - previous['coverage_through_timestamp'])
+        else:
+            dt_seconds = Decimal(now_ms - prev_as_of_ms) / Decimal(1000)
         if dt_seconds > 0:
             rate = max(0.0, float((new_value - prev_value) / dt_seconds))
         else:
@@ -166,10 +199,6 @@ def publish_lifetime_yield_headline(
     net_yield_usd = Decimal(str(summary['net_yield_usd']))
     default_run_id = f"analysis-run-{row['id']}:{_iso_run_id(row['completed_at'] or row['started_at'])}"
     run_id = run_id or default_run_id
-    reports = [from_json(output['row_json']) for output in conn.execute(
-        "SELECT row_json FROM analysis_outputs WHERE run_id=? AND name='reports'", (row['id'],))]
-    if len(reports) != summary['reports'] or any(type(r.get('block_timestamp')) is not int for r in reports):
-        raise ValueError(f"lifetime-yield analysis run {row['id']} has incomplete report coverage")
     params = from_json(row['params_json'])
     closed_cutoff = params.get('before_timestamp')
     coverage_through = closed_cutoff-1 if type(closed_cutoff) is int else row['started_at']
@@ -189,11 +218,18 @@ def publish_lifetime_yield_headline(
 
     if previous:
         now_ms = max(int(time.time()*1000) if now_ms is None else int(now_ms), int(previous['as_of_ms']))
-    previous = _comparable_previous(previous, reports, policy)
-    payload = build_lifetime_yield_headline(net_yield_usd, previous, now_ms=now_ms, run_id=run_id)
-    payload.update(valuation_complete=True, coverage_through_timestamp=max(
-        coverage_through, max((r['block_timestamp'] for r in reports), default=0)),
-        coverage_digest=_coverage_digest(reports), valuation_policy=policy)
+    digest, historical_digest, latest = _retained_coverage(
+        conn, row['id'], summary['reports'],
+        previous.get('coverage_through_timestamp') if previous else None,
+    )
+    coverage_through = max(coverage_through, latest)
+    previous = _comparable_previous(previous, historical_digest, policy)
+    payload = build_lifetime_yield_headline(
+        net_yield_usd, previous, now_ms=now_ms, run_id=run_id,
+        coverage_through_timestamp=coverage_through,
+    )
+    payload.update(valuation_complete=True, coverage_through_timestamp=coverage_through,
+                   coverage_digest=digest, valuation_policy=policy)
     payload_json = lifetime_yield_headline_json(payload)
     if not dry_run:
         kwargs = {"ex": ttl} if ttl else {}
