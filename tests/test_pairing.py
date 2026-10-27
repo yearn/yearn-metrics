@@ -16,6 +16,38 @@ VAULT = '0x' + '22' * 20
 TOKENIZED = '0x' + '33' * 20
 
 
+def test_summary_preserves_global_family_precision_and_unavailable_amounts():
+    """Combined fee accumulation must not recombine rounded family subtotals."""
+    dataset = PairingDataset.__new__(PairingDataset)
+    dataset.id = 'a' * 64
+    dataset.cutoff = CUTOFF
+    dataset.chains = (1,)
+    dataset.vaults = frozenset(((1, VAULT),))
+    dataset.vault_names = {}
+    def row(amount, family):
+        return {'chain_id': 1, 'vault_address': VAULT, 'block_timestamp': DAY,
+                'contract_family': family, 'total_fees_paid_usd': amount,
+                'protocol_fee_usd': '0', 'manager_fee_usd': None}
+    dataset.fees = [row('1e400', 'yearn-v2-vault'), row('1', 'yearn-v3-allocator'),
+                    row('-1e400', 'yearn-v2-vault'), row('12', 'yearn-v3-allocator')]
+    dataset.earnings = [dict(row(amount, 'yearn-v2-vault'), net_yield_usd=amount)
+                        for amount in ('1e28', '1', '-1e28', '12')]
+    result = dataset.view('summary')
+    assert result['totalFeesPaidUsd'] == '12'
+    assert result['protocolFeesUsd'] == '0'
+    assert result['managerFeesUsd'] is None
+    assert result['netLifetimeEarningsUsd'] == '12'
+    assert result['grossGainsUsd'] is None
+    assert [(entry['contractFamily'], entry['totalFeesPaidUsd'])
+            for entry in result['byContractFamily']] == [
+                ('yearn-v2-vault', '0'), ('yearn-v3-allocator', '13')]
+    assert all(entry['protocolFeesUsd'] == '0' and entry['managerFeesUsd'] is None
+               for entry in result['byContractFamily'])
+    empty = dataset.view('summary', DAY + 1)
+    assert empty['totalFeesPaidUsd'] is None and empty['byContractFamily'] == []
+    assert empty['netLifetimeEarningsUsd'] is None
+
+
 def snapshots(db, *, fallback=None, fee_cutoff=CUTOFF, fee_price='1'):
     earnings = create_analysis_run(db, 'lifetime-yield', {
         'price_source': 'yearn-prices', 'fallback_price_source': fallback, 'before_timestamp': CUTOFF})
@@ -351,3 +383,135 @@ def test_pairing_compression_encoding_case(monkeypatch,encoding,compressed):
         return server
     monkeypatch.setattr(pairing,'ThreadingHTTPServer',create_server)
     pairing.serve_pairing('unused')
+
+
+@pytest.mark.parametrize('interval', ['monthly', 'weekly'])
+@pytest.mark.parametrize('scope', ['contract', 'product'])
+def test_grouped_vault_history_preserves_exact_month_views_and_empty_ranges(monkeypatch, interval, scope):
+    """One row read must replace fanout without changing scope or decimal order."""
+    from yearn_data import fee_products
+    from yearn_data.pairing import FEE_FIELDS, EARNINGS_FIELDS
+    dataset = PairingDataset.__new__(PairingDataset)
+    dataset.id = 'a' * 64
+    dataset.cutoff = DAY + 62 * 86400
+    dataset.chains = (1, 10)
+    dataset.vault_names = {}
+    dataset.vaults = frozenset(((1, VAULT), (1, TOKENIZED), (10, VAULT)))
+    monkeypatch.setattr(fee_products, 'PRODUCTS', ({
+        'id': 'test', 'chainId': 1, 'address': VAULT, 'name': 'Product',
+        'memberAddresses': (VAULT, TOKENIZED), 'earningsAddress': VAULT,
+    },))
+    def row(address, timestamp, amount, *, chain=1):
+        return {'chain_id': chain, 'vault_address': address, 'block_timestamp': timestamp,
+                'contract_family': 'yearn-v3-allocator', 'version': 'v3',
+                **{field: amount for field in (*FEE_FIELDS.values(), *EARNINGS_FIELDS.values())}}
+    dataset.fees = [row(VAULT, DAY, '0.123456789123456789123456789'),
+                    row(TOKENIZED, DAY + 86400, '0.000000000000000000000000001'),
+                    row(VAULT, DAY + 31 * 86400, '0'),
+                    row(TOKENIZED, DAY + 31 * 86400, None),
+                    row(VAULT, DAY, '999', chain=10)]
+    # At precision 28 the middle +1 is rounded away. Recombining exact or
+    # differently ordered subtotals would incorrectly produce 13 instead of 12.
+    dataset.earnings = [row(VAULT, DAY, '10000000000000000000000000000'),
+                        row(VAULT, DAY, '1'),
+                        row(VAULT, DAY, '-10000000000000000000000000000'),
+                        row(VAULT, DAY, '12'), row(TOKENIZED, DAY, '100'),
+                        row(VAULT, DAY + 31 * 86400, '0')]
+    reads = []
+    original = dataset.view_rows
+    def counted(*args):
+        reads.append(args)
+        return original(*args)
+    monkeypatch.setattr(dataset, 'view_rows', counted)
+    until = DAY + 92 * 86400
+    grouped = dataset.view('vault-history', DAY, until, (1,), interval, scope=scope)
+    assert len(reads) == 1
+    assert grouped['dataCutoffTimestamp'] == dataset.cutoff
+    assert grouped['datasetId'] == dataset.id and grouped['aggregationScope'] == scope
+    assert dataset.view('vault-history', DAY, until, (1,), interval, scope=scope) == grouped
+    assert len(reads) == 1
+    assert grouped['buckets'][-1]['count'] == 0
+    assert grouped['buckets'][-1]['vaults'] == []
+    for bucket in grouped['buckets']:
+        if bucket['startTimestamp'] < dataset.cutoff:
+            expected = dataset.view('vaults', bucket['startTimestamp'], bucket['endTimestamp'],
+                                    (1,), scope=scope)
+            metadata = {'chainId', 'address', 'name', 'contractFamily', 'productId',
+                        'memberAddresses', 'earningsAddress', 'totalFeesPaidUsd'}
+            assert bucket['vaults'] == [
+                {k: v for k, v in row.items() if k in metadata}
+                | {'lifetimeEarnings': {'netYieldUsd': row['lifetimeEarnings']['netYieldUsd']}}
+                for row in expected['vaults']]
+            assert bucket['count'] == expected['count']
+    first = grouped['buckets'][0]['vaults']
+    assert first[0]['totalFeesPaidUsd'] == ('0.123456789123456789123456790' if scope == 'product'
+                                         else '0.123456789123456789123456789')
+    assert first[0]['lifetimeEarnings'] == {'netYieldUsd': '12'}
+    assert set(first[0]) == ({'chainId', 'address', 'name', 'contractFamily',
+                              'totalFeesPaidUsd', 'lifetimeEarnings'}
+                             | ({'productId', 'memberAddresses', 'earningsAddress'}
+                                if scope == 'product' else set()))
+    february = next(b for b in grouped['buckets'] if b['startTimestamp'] <= DAY + 31 * 86400 < b['endTimestamp'])
+    assert february['vaults'][0]['totalFeesPaidUsd'] == '0'
+    if scope == 'contract':
+        assert february['vaults'][1]['totalFeesPaidUsd'] is None
+    clipped = dataset.view('vault-history', DAY + 1, DAY + 2 * 86400, (1,), interval, scope=scope)
+    assert clipped['buckets'][0]['startTimestamp'] == DAY + 1
+    assert clipped['buckets'][-1]['endTimestamp'] == DAY + 2 * 86400
+
+    huge = dataset.view('vault-history', DAY, 10**30, (1,), interval, scope=scope)
+    assert huge['buckets'] == grouped['buckets']
+
+
+@pytest.mark.parametrize('budget,limit', [(1200, 16), (10000, 2)])
+def test_grouped_history_cache_bounds_bytes_across_filters_and_datasets(monkeypatch, budget, limit):
+    """Large filter variants must evict globally, without retaining decoded trees."""
+    from collections import OrderedDict
+    from yearn_data import pairing
+    from yearn_data.hosted_fees import PublishedFees
+    monkeypatch.setattr(pairing, '_vault_history_cache', OrderedDict())
+    monkeypatch.setattr(pairing, '_vault_history_cache_bytes', 0)
+    monkeypatch.setattr(pairing, 'VAULT_HISTORY_CACHE_BYTES', budget)
+    monkeypatch.setattr(pairing, 'VAULT_HISTORY_CACHE_ENTRIES', limit)
+    first = PairingDataset.__new__(PairingDataset)
+    second = PublishedFees.__new__(PublishedFees)
+    first.id = second.id = 'first-publication'  # Equal pins must still isolate source instances.
+    calls = []
+    def compute(self, name, since, *args):
+        calls.append((self.id, since))
+        return {'datasetId': self.id, 'totalFeesPaidUsd': '0.123456789123456789',
+                'netLifetimeEarningsUsd': None, 'padding': 'x' * (20000 if since == 99 else 400)}
+    monkeypatch.setattr(PairingDataset, '_view', compute)
+    def request(dataset, since):
+        return dataset.view('vault-history', since=since)
+    initial = request(first, 1)
+    initial['totalFeesPaidUsd'] = 'caller mutation'
+    cached = request(first, 1)
+    assert cached['totalFeesPaidUsd'] == '0.123456789123456789'
+    assert cached['netLifetimeEarningsUsd'] is None
+    assert calls == [('first-publication', 1)]
+    request(second, 1)
+    request(first, 1)  # Touch first so the other publication is evicted next.
+    request(first, 2)
+    request(first, 1)
+    assert len(calls) == 3
+    request(second, 1)
+    assert len(calls) == 4
+    for since in range(3, 30):
+        result = request(first, since)
+        assert result['datasetId'] == first.id
+        assert pairing._vault_history_cache_bytes <= budget
+        assert len(pairing._vault_history_cache) <= limit
+        assert all(isinstance(value, bytes) for value in pairing._vault_history_cache.values())
+        assert pairing._vault_history_cache_bytes == sum(map(len, pairing._vault_history_cache.values()))
+    keys = list(pairing._vault_history_cache)
+    request(first, 99)
+    request(first, 99)
+    assert calls[-2:] == [(first.id, 99), (first.id, 99)]
+    assert list(pairing._vault_history_cache) == keys
+    import gc
+    import weakref
+    reference = weakref.ref(first)
+    del first
+    gc.collect()
+    assert reference() is None

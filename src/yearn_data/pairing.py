@@ -1,7 +1,7 @@
 """Read-only Powerglove views over explicitly selected completed analyses."""
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, localcontext
@@ -14,11 +14,19 @@ from pathlib import Path
 import re
 import threading
 import time
+import weakref
 from urllib.parse import parse_qs, urlsplit
 
 from .analysis import closed_cutoff
 from .fee_valuation import POLICY
 from .storage import connect, database_reference, DATABASE_ERRORS
+
+# Shared across datasets: large grouped responses cannot multiply per publication.
+VAULT_HISTORY_CACHE_BYTES = 8 * 1024 * 1024
+VAULT_HISTORY_CACHE_ENTRIES = 16
+_vault_history_cache = OrderedDict()
+_vault_history_cache_bytes = 0
+_vault_history_cache_lock = threading.Lock()
 
 FAMILIES = ('yearn-v2-vault', 'yearn-v3-allocator', 'yearn-v3-tokenized-strategy')
 FEE_FIELDS = {
@@ -58,8 +66,30 @@ def _sum(rows, field, precision=400):
         return format(sum((Decimal(str(value)) for value in values), Decimal(0)), 'f')
 
 
-def _fees(rows):
-    return {name: _sum(rows, field) for name, field in FEE_FIELDS.items()}
+def _fee_totals(rows):
+    """Accumulate overall and family amounts with one decimal conversion each."""
+    fields = tuple(FEE_FIELDS.values())
+    totals = [None] * len(fields)
+    families = {}
+    with localcontext() as ctx:
+        ctx.prec = 400
+        for row in rows:
+            family = families.setdefault(row['contract_family'], [None] * len(fields))
+            for index, field in enumerate(fields):
+                value = row.get(field)
+                if value is not None:
+                    amount = Decimal(str(value))
+                    # Start with Decimal(0), as _sum does: the first amount must
+                    # also undergo the declared precision's rounding.
+                    totals[index] = (totals[index] if totals[index] is not None else Decimal(0)) + amount
+                    family[index] = (family[index] if family[index] is not None else Decimal(0)) + amount
+    def formatted(values):
+        return {name: format(value, 'f') if value is not None else None
+                for name, value in zip(FEE_FIELDS, values)}
+    return formatted(totals) | {'byContractFamily': [
+        {'contractFamily': family} | formatted(families[family])
+        for family in FAMILIES if family in families
+    ]}
 
 
 def _earnings(rows):
@@ -177,11 +207,43 @@ class PairingDataset:
 
         return fees, earnings
 
-    @lru_cache(maxsize=128)
     def view(self, name, since=None, until=None, chains=(), interval='monthly', vault_address=None, scope='contract'):
+        global _vault_history_cache_bytes
+        args = (name, since, until, chains, interval, vault_address, scope)
+        if name != 'vault-history':
+            return self._cached_view(*args)
+        # Keep the source-instance namespace without retaining its source graph.
+        # Only serialized bytes are retained, never expanded response trees.
+        key = (weakref.ref(self), args)
+        with _vault_history_cache_lock:
+            payload = _vault_history_cache.get(key)
+            if payload is not None:
+                _vault_history_cache.move_to_end(key)
+        if payload is not None:
+            return json.loads(payload)
+        result = self._view(*args)
+        payload = json.dumps(result, separators=(',', ':'), allow_nan=False).encode()
+        if len(payload) <= VAULT_HISTORY_CACHE_BYTES:
+            with _vault_history_cache_lock:
+                previous = _vault_history_cache.pop(key, None)
+                if previous is not None:
+                    _vault_history_cache_bytes -= len(previous)
+                _vault_history_cache[key] = payload
+                _vault_history_cache_bytes += len(payload)
+                while (_vault_history_cache_bytes > VAULT_HISTORY_CACHE_BYTES or
+                       len(_vault_history_cache) > VAULT_HISTORY_CACHE_ENTRIES):
+                    _, removed = _vault_history_cache.popitem(last=False)
+                    _vault_history_cache_bytes -= len(removed)
+        return result
+
+    @lru_cache(maxsize=128)
+    def _cached_view(self, *args):
+        return self._view(*args)
+
+    def _view(self, name, since=None, until=None, chains=(), interval='monthly', vault_address=None, scope='contract'):
         if scope not in ('contract', 'product'):
             raise ValueError('scope must be contract or product')
-        if name not in ('summary', 'history', 'vaults'):
+        if name not in ('summary', 'history', 'vaults', 'vault-history'):
             raise ValueError('unsupported pairing view')
         if any(chain not in self.chains for chain in chains):
             raise ValueError('unsupported chain for this dataset')
@@ -217,14 +279,32 @@ class PairingDataset:
 
         def totals(fee_rows, report_rows):
             pnl = _earnings(report_rows)
-            return _fees(fee_rows) | {
+            return _fee_totals(fee_rows) | {
                 'grossGainsUsd': pnl['grossGainsUsd'], 'lossesUsd': pnl['lossesUsd'],
                 'netLifetimeEarningsUsd': pnl['netYieldUsd'], 'lifetimeEarnings': pnl,
-                'byContractFamily': [
-                    {'contractFamily': family} | _fees([row for row in fee_rows if row['contract_family'] == family])
-                    for family in FAMILIES if any(row['contract_family'] == family for row in fee_rows)
-                ],
             }
+        def vault_totals(fee_rows, report_rows, *, compact=False):
+            buckets = defaultdict(lambda: ([], []))
+            for kind, rows in enumerate((fee_rows, report_rows)):
+                for row in rows:
+                    buckets[(row['chain_id'], row['vault_address'].lower())][kind].append(row)
+            vaults = []
+            for (chain_id, address), (fee_rows, report_rows) in sorted(buckets.items()):
+                family = fee_rows[0]['contract_family'] if fee_rows else (
+                    FAMILIES[0] if report_rows[0]['version'] == 'v2' else FAMILIES[1])
+                product = product_for(chain_id, address) if scope == 'product' else None
+                metadata = ({'productId': product['id'], 'memberAddresses': list(product['memberAddresses']),
+                             'earningsAddress': product['earningsAddress']} if product else {})
+                if product:
+                    family = FAMILIES[1]  # The product is represented by its allocator, not by its staking contract.
+                amounts = ({'totalFeesPaidUsd': _sum(fee_rows, 'total_fees_paid_usd'),
+                            'lifetimeEarnings': {'netYieldUsd': _sum(report_rows, 'net_yield_usd', precision=28)}}
+                           if compact else totals(fee_rows, report_rows))
+                vaults.append(metadata | {'chainId': chain_id, 'address': address,
+                               'name': product['name'] if product else self.vault_names.get(f'{chain_id}:{address}'), 'contractFamily': family}
+                              | amounts)
+            return {'count': len(vaults), 'vaults': vaults}
+
         if name == 'summary':
             result = totals(fees, earnings)
         elif name == 'history':
@@ -246,24 +326,55 @@ class PairingDataset:
                     bucket |= {'startTimestamp': start, 'endTimestamp': start + 7 * 86400}
                 history.append(bucket | totals(*buckets[period]))
             result = {'interval': interval, 'buckets': history}
+        elif name == 'vaults':
+            result = vault_totals(fees, earnings)
         else:
+            # Read the bounded source rows once, then retain their original order
+            # within each calendar bucket for Decimal accumulation.
             buckets = defaultdict(lambda: ([], []))
             for kind, rows in enumerate((fees, earnings)):
                 for row in rows:
-                    buckets[(row['chain_id'], row['vault_address'].lower())][kind].append(row)
-            vaults = []
-            for (chain_id, address), (fee_rows, report_rows) in sorted(buckets.items()):
-                family = fee_rows[0]['contract_family'] if fee_rows else (
-                    FAMILIES[0] if report_rows[0]['version'] == 'v2' else FAMILIES[1])
-                product = product_for(chain_id, address) if scope == 'product' else None
-                metadata = ({'productId': product['id'], 'memberAddresses': list(product['memberAddresses']),
-                             'earningsAddress': product['earningsAddress']} if product else {})
-                if product:
-                    family = FAMILIES[1]  # The product is represented by its allocator, not by its staking contract.
-                vaults.append(metadata | {'chainId': chain_id, 'address': address,
-                               'name': product['name'] if product else self.vault_names.get(f'{chain_id}:{address}'), 'contractFamily': family}
-                              | totals(fee_rows, report_rows))
-            result = {'count': len(vaults), 'vaults': vaults}
+                    date = datetime.fromtimestamp(row['block_timestamp'], timezone.utc)
+                    start = date.replace(hour=0, minute=0, second=0, microsecond=0)
+                    if interval == 'weekly':
+                        start -= timedelta(days=start.weekday())
+                    else:
+                        start = start.replace(day=1)
+                    buckets[int(start.timestamp())][kind].append(row)
+            first = since if since is not None else min(
+                (row['block_timestamp'] for row in fees + earnings), default=None)
+            history = []
+            if first is not None:
+                start = datetime.fromtimestamp(first, timezone.utc).replace(
+                    hour=0, minute=0, second=0, microsecond=0)
+                if interval == 'weekly':
+                    start -= timedelta(days=start.weekday())
+                else:
+                    start = start.replace(day=1)
+                # Preserve calendar identities for a partial publication bucket,
+                # but never fabricate an unbounded future calendar from `until`.
+                final = datetime.fromtimestamp(self.cutoff - 1, timezone.utc).replace(
+                    hour=0, minute=0, second=0, microsecond=0)
+                if interval == 'weekly':
+                    final += timedelta(days=7 - final.weekday())
+                else:
+                    final = final.replace(day=1, year=final.year + (final.month == 12),
+                                          month=final.month % 12 + 1)
+                requested_end = min(until, int(final.timestamp())) if until is not None else self.cutoff
+                while int(start.timestamp()) < requested_end:
+                    if interval == 'weekly':
+                        following = start + timedelta(days=7)
+                    else:
+                        following = start.replace(year=start.year + (start.month == 12),
+                                                  month=start.month % 12 + 1)
+                    timestamp = int(start.timestamp())
+                    history.append({
+                        'period': start.strftime('%Y-%m-%d' if interval == 'weekly' else '%Y-%m'),
+                        'startTimestamp': max(timestamp, first),
+                        'endTimestamp': min(int(following.timestamp()), requested_end),
+                    } | vault_totals(*buckets[timestamp], compact=True))
+                    start = following
+            result = {'interval': interval, 'dataCutoffTimestamp': self.cutoff, 'buckets': history}
         return result | {'datasetId': self.id, 'aggregationScope': scope}
 
 
@@ -312,7 +423,8 @@ class PairingStore:
 def pairing_response(store, url):
     request = urlsplit(url)
     paths = {'/api/fees': 'summary', '/api/fees/': 'summary',
-             '/api/fees/history': 'history', '/api/fees/vaults': 'vaults'}
+             '/api/fees/history': 'history', '/api/fees/vaults': 'vaults',
+             '/api/fees/vaults/history': 'vault-history'}
     if request.path not in paths:
         return 404, {'error': 'Not found'}
     try:

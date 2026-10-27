@@ -164,6 +164,7 @@ def test_hosted_graph_uses_selected_tvl_release_and_rejects_retired_pin(publishe
 @pytest.mark.parametrize('url,status,expected', [
     ('/api/fees',200,'public, s-maxage=30'),
     ('/api/fees?datasetId='+'a'*64,200,'public, s-maxage=3600'),
+    ('/api/fees/vaults/history?datasetId='+'a'*64,200,'public, s-maxage=3600'),
     ('/api/profitability?datasetId='+'a'*64,200,'public, s-maxage=30'),
     ('/api/profitability?publicationId='+'a'*64,200,'public, s-maxage=3600'),
     ('/api/comparison',200,'public, s-maxage=30'),
@@ -261,6 +262,8 @@ def test_prepared_history_survives_removal_of_old_ingestion_rows(published):
 
 @pytest.mark.parametrize('route', [
     '/api/fees', '/api/fees/vaults', '/api/fees/history?interval=weekly',
+    '/api/fees/vaults/history?scope=product',
+    '/api/fees/vaults/history?chainId=1&interval=weekly',
     '/api/fees/history?chainId=1,10&interval=monthly',
     '/api/fees?chainId=10&since=1704153600&until=1704240000',
     '/api/fees?chainId=1&vaultAddress=0x'+'22'*20,
@@ -537,3 +540,73 @@ def test_publish_with_malformed_vault_valuation(published, field):
     publish(database, financial, history, prepare_analytics=True)
     code, payload = HostedAPI(database).response('/api/comparison/defillama-comparable')
     assert code == 200 and payload['reconciliation']['state'] == 'unavailable'
+
+
+def test_grouped_fee_history_rejects_stale_pin_before_loading_rows(selected_api):
+    api, selection = selected_api
+    status, body = api.response('/api/fees/vaults/history?datasetId=' + 'f'*64)
+    assert status == 410 and body['releaseId'] == selection['releaseId']
+
+
+def test_grouped_fee_history_discards_response_if_publication_changes(selected_api, monkeypatch):
+    from types import SimpleNamespace
+    api, selection = selected_api
+    def view(*args):
+        selection['releaseId'] = 'b'*64
+        return {'buckets': []}
+    monkeypatch.setattr(api.registry, 'fees', lambda _: SimpleNamespace(view=view))
+    status, body = api.response('/api/fees/vaults/history?datasetId=' + selection['feesDatasetId'])
+    assert status == 410 and body['releaseId'] == 'b'*64
+
+
+def test_legacy_fee_rows_keep_order_and_filters_across_json_batches(postgres_database):
+    from yearn_data.hosted_fees import PublishedFees, SCHEMA
+
+    # Sparse legacy ordinals and reversed inserts exercise ordering within and
+    # between batches without rebuilding the immutable publication.
+    vault = '0x' + 'ab' * 20
+    metadata = {'cutoff': 1000, 'chains': [1, 10], 'vaults': [[1, vault]], 'vaultNames': {}}
+    fee_values = [
+        {'ordinal': 0, 'amount': '123456789012345678901234567890.0000000001'},
+        {'ordinal': 1999, 'amount': None},
+        {'ordinal': 2000, 'amount': '0'},
+        {'ordinal': 4001, 'amount': '-0.0000000000000000000000000001'},
+    ]
+    earnings_values = [{'ordinal': 2000, 'amount': '0'}, {'ordinal': 2001, 'amount': None}]
+    with closing(connect('staging')) as conn, conn:
+        conn.executescript(SCHEMA)
+        conn.execute('INSERT INTO api_fee_datasets VALUES (?,?)', ('legacy', json.dumps(metadata)))
+        for kind, rows in (('fees', fee_values), ('earnings', earnings_values)):
+            for row in reversed(rows):
+                conn.execute('INSERT INTO api_fee_rows VALUES (?,?,?,?,?,?,?)',
+                             ('legacy', kind, row['ordinal'], 100, 1, vault,
+                              ' \n' + json.dumps(row) + '\t '))
+        for identity, ordinal, timestamp, chain, address in (
+            ('other', 0, 100, 1, vault),
+            ('legacy', 5000, 99, 1, vault),
+            ('legacy', 5001, 200, 1, vault),
+            ('legacy', 5002, 100, 10, vault),
+            ('legacy', 5003, 100, 1, '0x' + 'cd' * 20),
+        ):
+            conn.execute('INSERT INTO api_fee_rows VALUES (?,?,?,?,?,?,?)',
+                         (identity, 'fees', ordinal, timestamp, chain, address, '{"excluded":true}'))
+    reader = PublishedFees('staging', 'legacy')
+    assert reader.view_rows(100, 200, (1,), vault) == (fee_values, earnings_values)
+    assert reader.view_rows(200, 200, (1,), vault) == ([], [])
+
+
+@pytest.mark.parametrize('raw', ['', '{} , {}'])
+def test_published_fee_rows_reject_corrupt_individual_json(postgres_database, raw):
+    from yearn_data.hosted_fees import PublishedFees, SCHEMA
+    from yearn_data.storage import DATABASE_ERRORS
+
+    with closing(connect('staging')) as conn, conn:
+        conn.executescript(SCHEMA)
+        conn.execute('INSERT INTO api_fee_datasets VALUES (?,?)',
+                     ('legacy', json.dumps({'cutoff': 200, 'chains': [1],
+                                            'vaults': [], 'vaultNames': {}})))
+        conn.execute('INSERT INTO api_fee_rows VALUES (?,?,?,?,?,?,?)',
+                     ('legacy', 'fees', 0, 100, 1, 'vault', raw))
+    # Joining these corrupt values directly could silently remove or add rows.
+    with pytest.raises((json.JSONDecodeError, *DATABASE_ERRORS)):
+        PublishedFees('staging', 'legacy').view_rows(None, 200, (), None)
