@@ -167,9 +167,9 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
         notify('coverage-planned', target=scope.target, family=scope.family,
                reused_ranges=len(retained), pending_ranges=len(gaps))
         for lo, hi in gaps:
-            end_hash = _hex(client.block(hi)["hash"])
             notify('range-started', target=scope.target, family=scope.family, from_block=lo, to_block=hi)
             try:
+                end_hash = _hex(client.block(hi)["hash"])
                 rows = fetch(lo, hi)
                 client.verify_pin(dict(number=hi, hash=end_hash))
             except Exception:

@@ -122,15 +122,27 @@ def test_discovery_batches_missing_metadata_and_reuses_cached_values(db, monkeyp
     assert requests == []
 
 
-def test_failure_keeps_only_completed_ranges_then_resumes(db):
+@pytest.mark.parametrize('failure_stage', ['reports', 'header'])
+def test_failure_keeps_only_completed_ranges_then_resumes(db, monkeypatch, failure_stage):
     seed(db, NEW)
     client = Source()
     client.fail = NEW
+    if failure_stage == 'header':
+        block = client.block
+
+        def fetch_header(number):
+            if client.fail and number == 19 and client.calls and client.calls[-1] == (VAULT, 30, 30):
+                raise RuntimeError('provider unavailable https://private-rpc.invalid/secret')
+            return block(number)
+
+        monkeypatch.setattr(client, 'block', fetch_header)
     events = []
     with pytest.raises(RuntimeError, match='provider unavailable'):
         catchup.catch_up(db, 'op', 10, 30, chunk_size=10, client=client, progress=events.append)
     failed = json.loads(events[-1])
     assert failed['event'] == 'range-failed'
+    assert all('private-rpc' not in event and 'secret' not in event for event in events)
+    assert json.loads(events[-2])['event'] == 'range-started'
     assert (failed['target'], failed['from_block'], failed['to_block']) == (NEW, 10, 19)
     assert db.execute('SELECT DISTINCT target FROM history_coverage').fetchall()[0][0] == VAULT
     assert db.execute('SELECT COUNT(*) FROM strategy_reports').fetchone()[0] == 1
