@@ -41,7 +41,7 @@ def test_yearn_batch_exposes_accepted_evidence_and_unresolved_targets(monkeypatc
     assert (1, OTHER, 86399) not in result  # Sparse compatibility still requests exact verification.
 
 
-def test_defillama_provider_client_and_local_alias_policy_are_separate(monkeypatch):
+def test_defillama_provider_and_adapter_paths_require_observations(monkeypatch):
     monkeypatch.setattr(clients.requests, 'get', lambda *a, **kw: Response({'coins': {
         'ethereum:'+ASSET: {'prices': [{'timestamp': 101, 'price': 3}]},
     }}))
@@ -52,10 +52,10 @@ def test_defillama_provider_client_and_local_alias_policy_are_separate(monkeypat
     assert quote.requested_timestamp == 100 and quote.evidence_timestamp == 101
     missing = clients.fetch_defillama_price(1, USDC, 100)
     assert missing.value is None and missing.status == 'missing' and missing.evidence_timestamp is None
-    # Extraction preserves the caller's existing alias policy; #46 changes it separately.
+    # Neither layer can synthesize a parity quote for an unresolved token.
     legacy = adapters.fetch_defillama_price(1, USDC, 100)
-    assert legacy.value == 1 and legacy.provider == 'local-adapter'
-    assert legacy.provenance['source'] == 'canonical_ethereum_stable_fallback'
+    assert legacy.value is None and legacy.provider == 'defillama'
+    assert legacy.status == 'missing'
     assert legacy.evidence_timestamp is None
 
 

@@ -118,7 +118,7 @@ yearn-data price-volume --source defillama
 yearn-data price --source defillama --no-onchain-fallbacks
 ```
 
-Yearn Prices is the default earnings pricing source, with optional DefiLlama fallback; see [historical earnings pricing](docs/earnings-pricing.md). Volume and legacy fee analyses retain their DefiLlama policy. When DefiLlama cannot price a token directly, its pricing path can apply local deterministic fallbacks for canonical stablecoins, canonical wrapped/native equivalents, selected Curve/CRV derivative tokens, exchange-rate wrappers, and Aave aTokens. Use `--source defillama --no-onchain-fallbacks` to record only direct DefiLlama results. All source/status rows are stored in Postgres.
+Yearn Prices is the default earnings pricing source, with optional DefiLlama fallback; see [historical earnings pricing](docs/earnings-pricing.md). Volume and legacy fee analyses retain their DefiLlama source. Optional contract adapters use historical conversion/reserve evidence and accepted underlying quotes. Local fixed-parity estimates are retired: a missing provider quote does not become USD 1 or another token's price. Use `--source defillama --no-onchain-fallbacks` for direct DefiLlama results. See the [parity policy and coverage comparison](docs/parity-price-policy.md) for classifications and legacy-cache handling. All source/status rows are stored in Postgres.
 
 ## Backfill Efficiency
 
