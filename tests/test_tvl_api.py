@@ -776,6 +776,7 @@ def test_curation_v2_pass_through_resolves_child_chain(source, child_chain, fami
         'note': 'Potential V2 product attribution remains separate from V3 and Morpho products',
     }
     assert products['vaults'][0]['chainId'] == child_chain
+    assert store.get().curation(1)['potentialV2']==products['potentialV2']
 
 
 @pytest.mark.parametrize('format', ['full', 'chart'])
@@ -932,3 +933,72 @@ def test_chart_byte_limit_applies_after_projection(source,monkeypatch,top):
     assert tvl_response(store,url)==(200,expected)
     status,error=tvl_response(store,'/api/tvl/history/runs/latest/constant-price?groupBy=vault')
     assert status==400 and 'size limit' in error['error']
+
+
+def test_nested_price_quarantine_revalues_dependencies_and_prepared_references(source,monkeypatch):
+    from yearn_data import tvl_api as api
+    from yearn_data.tvl_history_cache import prepare,prepare_price_repair
+    conn,path,root=source
+    leaf='0x'+'44'*20;independent='0x'+'55'*20;zero='0x'+'66'*20;asset='0x'+'aa'*20
+    for vault in (leaf,independent,zero):
+        conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,active,updated_at) VALUES (1,'v3',?,1,1)",(vault,))
+    def observations(number,price):
+        run(conn,number,DAY,[(PARENT,str(25*price)),(CHILD,str(100*price)),
+                            (leaf,str(200*price)),(independent,'70'),(zero,'0')],[(CHILD,str(25*price))])
+        for stored in conn.execute('SELECT vault,data_json FROM tvl_snapshots WHERE run_id=?',(number,)).fetchall():
+            row=json.loads(stored['data_json']);v=stored['vault']
+            units,supply,token=((50,100,CHILD) if v==PARENT else (50,200,leaf) if v==CHILD else
+                                (200,100,asset) if v==leaf else (10,100,asset) if v==independent else (0,100,leaf))
+            row.update(asset=token,asset_units=str(units),total_assets_raw=str(units),total_supply_raw=str(supply),
+                       price_usd=str(float(row['tvl_usd'])/units) if units else None)
+            if v in (PARENT,CHILD,zero):row['pricing']={'source':'nested-share','child':token}
+            conn.execute('UPDATE tvl_snapshots SET data_json=? WHERE run_id=? AND vault=?',(json.dumps(row),number,v))
+        owned={'chain_id':1,'parent':CHILD,'strategy':leaf,'child':leaf,'timestamp':DAY,
+               'block_number':100+DAY,'status':'ok','debt_usd':str(100*price),'owned_usd':str(100*price),'ownership_ratio':'0.5'}
+        conn.execute('INSERT INTO tvl_positions VALUES (?,?,?,?,?,?,?)',(number,1,CHILD,leaf,leaf,DAY,json.dumps(owned)));conn.commit()
+    observations(1,2)
+    monkeypatch.setattr(api,'PRICE_REJECTIONS',[])
+    old=TvlStore(path,root).get();assert old.summary()['totalTvl']==470
+    prepare(old)
+    monkeypatch.setattr(api,'PRICE_REJECTIONS',[{'chainId':1,'asset':asset,'timestamp':DAY,'priceUsd':'2','reason':'rejected fixture quote'}])
+    rejected=TvlStore(path,root).get()
+    rows={r['vault']:r for r in rejected.frames((DAY,))[0][1]}
+    assert all(rows[v]['tvl_usd'] is None for v in (PARENT,CHILD,leaf))
+    assert rows[independent]['tvl_usd']=='70' and rows[zero]['tvl_usd']=='0'
+    assert rejected.summary()['totalTvl']==70
+    raw=rejected.history(constant=True)
+    assert {r['vault'] for r in raw['references']}=={'1:'+independent}
+    prepare_price_repair(rejected,old)
+    prepared=api.TvlDataset(dict(rejected.manifest))
+    assert prepared.history(constant=True)==raw
+    assert api.TvlDataset(dict(old.manifest)).summary()['totalTvl']==470
+    # A newer selected leaf must not resurrect old wrapper prices or USD holdings.
+    observations(2,3)
+    conn.execute('DELETE FROM tvl_snapshots WHERE run_id=2 AND vault<>?',(leaf,))
+    conn.execute('DELETE FROM tvl_positions WHERE run_id=2');conn.commit()
+    repaired=TvlStore(path,root).get()
+    rows={r['vault']:r for r in repaired.frames((DAY,))[0][1]}
+    assert [float(rows[v]['tvl_usd']) for v in (PARENT,CHILD,leaf)]==[75,300,600]
+    assert repaired.summary()['completeness']['status']=='incomplete'
+    observations(3,3)
+    recollected=TvlStore(path,root).get()
+    assert recollected.summary()['totalTvl']==670
+    assert recollected.summary()['completeness']['status']=='complete'
+
+
+def test_curation_completeness_distinguishes_unpriced_zero_and_empty(source):
+    conn,path,root=source
+    def record(number,amount):
+        run(conn,number,DAY,[(PARENT,amount)])
+        stored=conn.execute('SELECT data_json FROM tvl_snapshots WHERE run_id=?',(number,)).fetchone()[0]
+        row=json.loads(stored);row['category']='curation'
+        conn.execute('UPDATE tvl_snapshots SET data_json=? WHERE run_id=?',(json.dumps(row),number));conn.commit()
+        return TvlStore(path,root).get()
+    unknown=record(1,None).curation()
+    assert unknown['totalTvlUsd'] is None
+    assert unknown['completeness']['status']=='incomplete' and unknown['completeness']['valuedVaultCount']==0
+    dataset=record(2,'0');zero=dataset.curation()
+    assert zero['totalTvlUsd']==0 and zero['completeness']['status']=='complete'
+    assert zero['limitations']==[] and zero['completeness']['valuedVaultCount']==1
+    empty=dataset.curation(10)
+    assert empty['totalTvlUsd']==0 and empty['vaultCount']==0

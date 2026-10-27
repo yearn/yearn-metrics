@@ -17,7 +17,7 @@ import threading
 import time
 from urllib.parse import parse_qs, urlsplit
 
-from .tvl import account, decimal
+from .tvl import account, decimal, value_nested_shares
 from .tvl_policy import VAULT_POLICIES, TARGET_CORRECTIONS, classify_vault
 from .storage import connect, database_reference, table_exists, DATABASE_ERRORS
 
@@ -130,7 +130,7 @@ def publish_tvl(database, publication, *, current_bridge_policy='none'):
                'deductInternalCuration': True,
                'ownershipAccounting': 'all-yearn-v1',
                'vaultPolicies': VAULT_POLICIES, 'targetCorrections': TARGET_CORRECTIONS,
-               'currentBridgePolicy': current_bridge_policy, 'selectionPolicy': 'known-value-then-newest-finished-common-close-8', 'bridgeMigrations': BRIDGE_MIGRATIONS, 'priceRejections': PRICE_REJECTIONS,
+               'currentBridgePolicy': current_bridge_policy, 'selectionPolicy': 'known-value-then-newest-finished-common-close-9', 'bridgeMigrations': BRIDGE_MIGRATIONS, 'priceRejections': PRICE_REJECTIONS,
                'historicalBridgePolicy': 'dated-evidence-only', 'database': database_reference(database)}
     dataset_id = hashlib.sha256(encoded(context).encode()).hexdigest()
     root = Path(publication)
@@ -292,6 +292,11 @@ class TvlDataset:
             rejected.append("(s.chain_id=? AND s.timestamp=? AND lower(json_extract(s.data_json,'$.asset'))=? AND CAST(json_extract(s.data_json,'$.price_usd') AS NUMERIC)=CAST(? AS NUMERIC))")
             args += (chain,timestamp,asset,quote['priceUsd'])
         exclude = ' AND NOT ('+' OR '.join(rejected)+')' if rejected else ''
+        requested=set(timestamps)
+        affected=tuple(sorted({day for _,_,day in self.price_rejections if day in requested}))
+        if affected:
+            exclude+=' AND s.timestamp NOT IN ('+','.join('?' for _ in affected)+')'
+            args+=affected
         sql = f'''WITH winners AS (
             SELECT chain_id,vault,timestamp,MAX((CASE WHEN json_extract(data_json,'$.tvl_usd') IS NOT NULL THEN 2
                 WHEN json_extract(data_json,'$.asset_units') IS NOT NULL THEN 1 ELSE 0 END)*{self.base}+run_id) rank
@@ -305,8 +310,27 @@ class TvlDataset:
             SELECT s.data_json FROM candidates c JOIN tvl_snapshots s
             ON s.run_id=c.run_id AND s.chain_id=c.chain_id AND s.vault=c.vault AND s.timestamp=c.timestamp
             WHERE c.n<=7 ORDER BY c.timestamp'''
-        for row in conn.execute(sql,args):
-            yield self.validate_price(json.loads(row['data_json']))
+        records=conn.execute(sql,args).fetchall()
+        if not affected:
+            for row in records:
+                yield self.validate_price(json.loads(row['data_json']))
+            return
+        candidates=defaultdict(list)
+        def retain(row):
+            if (chain_id is None or row['chain_id']==chain_id) and decimal(row.get('asset_units')) and decimal(row.get('tvl_usd')):
+                values=candidates[key(row)]
+                values.append(row)
+                values.sort(key=lambda value:value['timestamp'])
+                del values[7:]
+        for row in records:
+            retain(self.validate_price(json.loads(row['data_json'])))
+        # Rejected dates need the full dependency context, not per-vault queries.
+        # Unaffected dates retain the bounded SQL reference-selection path.
+        for offset in range(0,len(affected),31):
+            for _,rows,_,_ in self.iter_frames(affected[offset:offset+31]):
+                for row in rows:retain(row)
+        yield from sorted((row for values in candidates.values() for row in values),
+                          key=lambda row:(row['timestamp'],row['chain_id'],row['vault']))
 
     def frames(self, timestamps, chain_id=None, include_curation=None, include_retired=True):
         # Normalize positional/keyword calls and share accounting across chains.
@@ -356,6 +380,17 @@ class TvlDataset:
 
     def account_frame(self, timestamp, points, positions, *, include_curation=None):
         """Account one captured close without accessing storage."""
+        if any(day==timestamp for _,_,day in self.price_rejections):
+            points=[dict(point) for point in points]
+            before={key(point):decimal(point.get('tvl_usd')) for point in points}
+            value_nested_shares({key(point):point for point in points},
+                                derived_only=True,require_same_block=True)
+            changed={key(point) for point in points if decimal(point.get('tvl_usd'))!=before[key(point)]}
+            # Stored USD ownership cannot be reused after its valuation basis changes.
+            positions=[dict(edge,status='unavailable',reason='nested_share_valuation_changed')
+                       if ((edge['chain_id'],edge['parent'].lower()) in changed or
+                           (edge.get('child_chain_id',edge['chain_id']),edge['child'].lower()) in changed)
+                       and decimal(edge.get('debt_usd'))!=0 else edge for edge in positions]
         canonical_ownership = self.manifest.get('ownershipAccounting') == 'all-yearn-v1'
         if include_curation is None:
             include_curation = canonical_ownership
@@ -752,22 +787,24 @@ class TvlDataset:
                                    for r in rows if 'bridge_excluded_usd' in r], 'datasetId':self.id}
 
     def curation(self, chain_id=None):
-        timestamp, all_rows, positions, _ = self.frames((self.as_of(),), chain_id, True)[0]
+        timestamp, all_rows, positions, _ = self.frames((self.as_of(),), None, True)[0]
         # Frames retain excluded bridge rows/edges for audit, not accounting.
         all_rows = [row for row in all_rows if 'bridge_excluded_usd' not in row]
         positions = [edge for edge in positions if edge.get('reason') != 'bridge_parent_excluded']
         selected = [r for r in all_rows if self.catalog.get(key(r),{}).get('active',1) and
                     (r.get('category')=='curation' or key(r) in self.allocators)]
-        rows, edges, _ = account(selected, positions, include_curation=True,
+        rows, edges, diagnostics = account(selected, positions, include_curation=True,
                                  require_complete_ownership=self.manifest.get('ownershipAccounting') == 'all-yearn-v1',
                                  vault_policies=self.manifest.get('vaultPolicies', []),
                                  target_corrections=self.manifest.get('targetCorrections', []))
+        rows = [row for row in rows if chain_id is None or row['chain_id']==chain_id]
         def family(row):
             return 'morpho_curated' if row.get('category')=='curation' else 'v3_allocator'
         def totals(rs):
             return {'grossTvlUsd':money(rs,'tvl_usd'),'knownInternalOverlapTvlUsd':money(rs,'overlap_usd'),
                     'netTvlUsd':money(rs,'external_tvl_usd'),'vaultCount':len(rs)}
-        v2 = [r for r in all_rows if r['version']=='v2' and self.catalog.get(key(r),{}).get('active',1)]
+        v2 = [r for r in all_rows if r['version']=='v2' and self.catalog.get(key(r),{}).get('active',1)
+              and (chain_id is None or r['chain_id']==chain_id)]
         product_keys = {key(r) for r in selected}
         v2_keys = {key(r) for r in v2}
         pass_through = [e for e in positions if (e['chain_id'],e['parent'].lower()) in v2_keys
@@ -775,7 +812,13 @@ class TvlDataset:
         passed = money(pass_through, 'overlap_usd')
         gross_v2 = money(v2, 'tvl_usd')
         incremental = max(0, gross_v2-passed) if gross_v2 is not None and passed is not None else None
-        return {'methodologyVersion':'yearn-data-1','asOf':datetime.fromtimestamp(timestamp,timezone.utc).isoformat(),
+        return {'methodologyVersion':'yearn-data-1',
+                'completeness':{'status':diagnostics['status'],'scope':'network-products',
+                                'totals':'known-subtotals','vaultCount':diagnostics['vault_count'],
+                                'valuedVaultCount':diagnostics['valued_vault_count'],
+                                'unresolvedPositions':diagnostics['unresolved_positions'],
+                                'issues':diagnostics['issues']},
+                'asOf':datetime.fromtimestamp(timestamp,timezone.utc).isoformat(),
                 'definition':{'headline':'Yearn curation products','includes':['V3 allocators with report evidence','Morpho curated products'],
                               'excludes':['Tokenized Strategy layer'],'accounting':'Stored product TVL less verified internal holdings'},
                 'grossTvlUsd':money(rows,'tvl_usd'),'knownInternalOverlapTvlUsd':money(rows,'overlap_usd'),
@@ -784,7 +827,9 @@ class TvlDataset:
                 'byChain':{CHAINS.get(c,f'Chain {c}'):money([r for r in rows if r['chain_id']==c],'external_tvl_usd') for c in {r['chain_id'] for r in rows}},
                 'vaults':[{'address':r['vault'],'chainId':r['chain_id'],'name':r.get('name'),'family':family(r),**{k:v for k,v in totals([r]).items() if k!='vaultCount'}} for r in rows],
                 'potentialV2':{'grossTvlUsd':gross_v2,'knownPassThroughTvlUsd':passed,'incrementalTvlUsd':incremental,'vaultCount':len(v2),
-                               'note':'Potential V2 product attribution remains separate from V3 and Morpho products'},'limitations':[], 'datasetId':self.id}
+                               'note':'Potential V2 product attribution remains separate from V3 and Morpho products'},'limitations':([] if diagnostics['status']=='complete' else
+                    ['Product totals are known subtotals: network product prices or ownership are incomplete.']),
+                'datasetId':self.id}
 
 class TvlStore:
     def __init__(self, database, publication, *, current_bridge_policy='none', refresh_seconds=30, auto_publish=True):

@@ -248,3 +248,18 @@ A first uncached history or reference window still performs a stored-data scan;
 subsequent group changes reuse those observations. These caches are in memory
 and are rebuilt after restart or a new dataset selection. No historical valuation,
 reference-price rule or reporting cutoff changes as a result of caching.
+
+Curation product totals carry a `completeness` object with `scope` set to
+`network-products` and `totals` set to `known-subtotals`. Its status, valued-vault
+count and unresolved-position count describe the network product universe even
+for a chain-filtered display. Incomplete prices or ownership also produce an
+explicit limitation. Product ownership is accounted across chains before display
+filtering; potential V2 pass-through is attributed to the V2 parent's chain.
+
+Quote rejection also invalidates explicitly derived nested-share valuations.
+On rejected dates, wrappers are recalculated from compatible selected child
+observations; unknown or incompatible children leave them unavailable. Previously
+stored USD ownership is unavailable when that valuation basis changes, until
+compatible ownership is recollected. References use the same dated valuation.
+New publications use selection policy 9 and prepared accounting version 2; old
+prepared rows must be rebuilt before they can serve this calculation.

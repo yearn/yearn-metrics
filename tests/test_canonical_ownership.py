@@ -203,3 +203,8 @@ def test_curation_preserves_unknown_corrected_destination_ownership(source, monk
     assert child['knownInternalOverlapTvlUsd'] is child['netTvlUsd'] is None
     assert products['grossTvlUsd'] == 300
     assert products['totalTvlUsd'] == dataset.summary()['totalTvl'] == 100
+    assert products['completeness']['status']=='incomplete'
+    assert products['completeness']['scope']=='network-products'
+    assert products['completeness']['totals']=='known-subtotals'
+    assert products['completeness']['unresolvedPositions']>0
+    assert products['limitations']

@@ -464,3 +464,23 @@ def test_tvl_export_curation_option(flags, expected, db, tmp_path, monkeypatch):
     monkeypatch.setattr(tvl, 'export_tvl', capture)
     assert main(argv) == 0
     assert calls == [expected]
+
+
+@pytest.mark.parametrize('child_state', ['missing','unknown-block','different-block','zero','valid'])
+def test_stored_nested_values_require_compatible_child_state(child_state):
+    from yearn_data.tvl import value_nested_shares
+    parent={'chain_id':1,'vault':address(1),'asset':address(2),'block_number':10,
+            'total_assets_raw':'50','asset_units':'50','total_supply_raw':'100',
+            'tvl_usd':'999','price_usd':'19.98','status':'ok',
+            'pricing':{'source':'nested-share','child':address(2)}}
+    independent=dict(parent,vault=address(3),pricing={'source':'provider'})
+    zero=dict(parent,vault=address(4),total_assets_raw='0',asset_units='0',tvl_usd='0',price_usd=None)
+    points={(1,row['vault']):row for row in (parent,independent,zero)}
+    if child_state!='missing':
+        points[(1,address(2))]={'vault':address(2),'asset':address(90),'block_number':11 if child_state=='different-block' else 10,
+                                'total_supply_raw':'100','tvl_usd':'0' if child_state=='zero' else '100','status':'ok'}
+    if child_state=='unknown-block':
+        parent['block_number']=points[(1,address(2))]['block_number']=None
+    value_nested_shares(points,derived_only=True,require_same_block=True)
+    assert parent['tvl_usd']==({'zero':'0','valid':'50'}.get(child_state))
+    assert independent['tvl_usd']=='999' and zero['tvl_usd']=='0'

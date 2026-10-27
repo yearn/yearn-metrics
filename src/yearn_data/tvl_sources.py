@@ -13,7 +13,7 @@ from .config import get_rpc_url_by_chain_id, TVL_EXCLUDED_CHAIN_IDS
 from .pricing import fetch_yearn_price, fetch_defillama_price
 from .pricing import YearnPricesAuthenticationError, YearnPricesConfigurationError
 from .storage import to_json
-from .tvl import asset_units, decimal
+from .tvl import asset_units, decimal, value_nested_shares
 from .tvl_policy import classify_vault, correct_catalog
 
 REGISTRY = json.loads((Path(__file__).parent / 'inventories/tvl-overlaps.json').read_text())
@@ -420,38 +420,6 @@ def _position(edge,timestamp,reader,snapshots,readers=None):
     return data
 
 
-def _value_nested_shares(points):
-    """Resolve tracked share-token assets only after their children are valued."""
-    pending = {key:(key[0],(p['asset'] or '').lower()) for key,p in points.items()
-               if (key[0],(p['asset'] or '').lower()) in points
-               and p['status'] != 'not_deployed' and p['total_assets_raw'] != '0'}
-    for key,child_key in pending.items():
-        p = points[key]
-        # Provider share-token quotes are provisional: unknown child state must
-        # not leave a seemingly complete parent valuation behind.
-        p.update(tvl_usd=None,price_usd=None)
-        if p['total_assets_raw'] is not None:
-            p.update(status='unavailable',reason='missing_nested_share_valuation',
-                     pricing={'source':'nested-share','child':points[child_key]['vault']})
-    while pending:
-        ready = [key for key,child in pending.items() if child not in pending]
-        if not ready:
-            # Cycles have no independently valued leaf. Leave them unknown.
-            break
-        for key in ready:
-            child = points[pending.pop(key)]
-            p = points[key]
-            supply = int(child['total_supply_raw'] or 0)
-            if child['tvl_usd'] is None or p['total_assets_raw'] is None or p['asset_units'] is None or not supply:
-                continue
-            with localcontext() as ctx:
-                ctx.prec = 78
-                value = decimal(child['tvl_usd'])*Decimal(p['total_assets_raw'])/Decimal(supply)
-                units = decimal(p['asset_units'])
-                p.update(tvl_usd=str(value),price_usd=str(value/units) if units else None,
-                         status='ok',pricing={'source':'nested-share','child':child['vault']})
-                p.pop('reason',None)
-
 
 def collect_tvl(conn,from_timestamp,to_timestamp,*,interval=86400,chain_ids=None,addresses=None,
                 price_source='yearn-prices',reader_factory=ArchiveReader,progress=None):
@@ -493,7 +461,7 @@ def collect_tvl(conn,from_timestamp,to_timestamp,*,interval=86400,chain_ids=None
                 if chain in reader_errors:
                     point.update(reason='archive_rpc_setup_failed',failure_class=reader_errors[chain])
                 points[(chain,vault['address'].lower())] = point
-            _value_nested_shares(points)
+            value_nested_shares(points)
             position_rows = [_position(e,timestamp,readers[e['chain_id']],points,readers) for e in edges]
             with conn:
                 # Pipeline each day's records across the remote DB connection

@@ -149,6 +149,44 @@ def decimal(value):
     return result
 
 
+
+def value_nested_shares(points, *, derived_only=False, require_same_block=False):
+    """Resolve tracked share-token assets only after their children are valued."""
+    pending = {key:(key[0],(p.get('asset') or '').lower()) for key,p in points.items()
+               if (p.get('pricing',{}).get('source')=='nested-share' if derived_only else
+                   (key[0],(p.get('asset') or '').lower()) in points)
+               and p.get('status') != 'not_deployed' and p.get('total_assets_raw') != '0'}
+    for key,child_key in pending.items():
+        p = points[key]
+        # Provider share-token quotes are provisional: unknown child state must
+        # not leave a seemingly complete parent valuation behind.
+        p.update(tvl_usd=None,price_usd=None)
+        if p.get('total_assets_raw') is not None:
+            p.update(status='unavailable',reason='missing_nested_share_valuation',
+                     pricing={'source':'nested-share','child':child_key[1]})
+    while pending:
+        ready = [key for key,child in pending.items() if child not in pending]
+        if not ready:
+            # Cycles have no independently valued leaf. Leave them unknown.
+            break
+        for key in ready:
+            child = points.get(pending.pop(key))
+            p = points[key]
+            if child is None or (require_same_block and (p.get('block_number') is None or
+                    p.get('block_number')!=child.get('block_number'))):
+                continue
+            supply = int(child.get('total_supply_raw') or 0)
+            if child['tvl_usd'] is None or p.get('total_assets_raw') is None or p.get('asset_units') is None or not supply:
+                continue
+            with localcontext() as ctx:
+                ctx.prec = 78
+                value = decimal(child['tvl_usd'])*Decimal(p['total_assets_raw'])/Decimal(supply)
+                units = decimal(p['asset_units'])
+                p.update(tvl_usd=str(value),price_usd=str(value/units) if units else None,
+                         status='ok',pricing={'source':'nested-share','child':child['vault']})
+                p.pop('reason',None)
+
+
 def asset_units(raw, decimals):
     if decimals is None:
         raise ValueError("missing asset decimals")

@@ -170,6 +170,11 @@ def test_cross_chain_graph_and_chain_summary_account_before_filtering(source, mo
        'method':'cross-chain-shares','debt_usd':'80','owned_usd':'90','status':'ok'}
     conn.execute('INSERT INTO tvl_positions VALUES (1,1,?,?,?,?,?)',(PARENT,HOLDER,CHILD,DAY,json.dumps(p)))
     conn.commit()
+    for stored in conn.execute('SELECT chain_id,vault,data_json FROM tvl_snapshots').fetchall():
+        row=json.loads(stored['data_json']);row['category']='curation'
+        conn.execute('UPDATE tvl_snapshots SET data_json=? WHERE chain_id=? AND vault=?',
+                     (json.dumps(row),stored['chain_id'],stored['vault']))
+    conn.commit()
     dataset=TvlStore(path,root).get()
     from yearn_data import tvl_api
     original_account=tvl_api.account
@@ -187,10 +192,13 @@ def test_cross_chain_graph_and_chain_summary_account_before_filtering(source, mo
     assert dataset.audit(10)['overlapTvl'] == 80
     assert dataset.summary(1)['totalTvl'] == 100
     assert len(calls) == 1  # Shared full-network accounting across equivalent calls.
-    dataset.curation(1); dataset.curation(10)
+    left=dataset.curation(1);right=dataset.curation(10)
     assert len(calls) == 4  # One curation frame, plus each endpoint's product-only accounting.
+    products=dataset.curation()
+    assert right['totalTvlUsd']==products['byChain']['Optimism']==120
+    assert left['totalTvlUsd']==products['byChain']['Ethereum']==100
     # A later selected receiver observation at another block cannot reuse old ownership.
-    remote['block_number']=51
+    remote.update(block_number=51,category='curation')
     conn.execute('INSERT INTO tvl_runs VALUES (2,2,2,?,?)',('complete',json.dumps({'from':DAY,'to':DAY})))
     conn.execute('INSERT INTO tvl_snapshots VALUES (2,10,?,?,51,?)',(CHILD,DAY,json.dumps(remote)))
     conn.commit()
@@ -203,6 +211,7 @@ def test_cross_chain_graph_and_chain_summary_account_before_filtering(source, mo
     assert revised.graph(1)['diagnostics']['unresolvedPositions'] == 1
     assert revised.graph(10)['diagnostics']['unresolvedPositions'] == 1
     assert revised.graph(137)['diagnostics']['unresolvedPositions'] == 0
+    assert revised.curation(10)['totalTvlUsd'] is None
 
 
 def test_graph_does_not_replace_unpriced_vault_with_synthetic_priced_strategy(source):

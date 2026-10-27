@@ -11,7 +11,7 @@ from decimal import Decimal,localcontext
 from .storage import connect, table_exists
 from .tvl import decimal
 
-VERSION = 'dated-accounting-1'
+VERSION = 'dated-accounting-2'
 FIELDS = ('chain_id','vault','name','category','version','asset_units','tvl_usd','external_tvl_usd')
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS tvl_chart_publications (
