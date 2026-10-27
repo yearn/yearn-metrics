@@ -24,7 +24,7 @@ def digest(value):
 
 def context_identity(dataset):
     from .tvl_api import accounting_revision
-    excluded = {'runs', 'datasetId', 'publishedAt', 'asOfTimestamp', 'reportingCutoff', 'diagnostics', 'priceRejections'}
+    excluded = {'runs', 'datasetId', 'publishedAt', 'asOfTimestamp', 'reportingCutoff', 'observationRevision', 'diagnostics', 'priceRejections'}
     context = {k:v for k,v in dataset.manifest.items() if k not in excluded}
     # Acquisition timestamps do not affect accounting. Every other catalog field,
     # including unknown future fields, conservatively invalidates global reuse.

@@ -162,7 +162,10 @@ def test_global_identity_keeps_future_catalog_and_accounting_fields():
     assert identity(catalog=[dict(updated_at=1,name='b')]) != original
     assert identity(catalog=[dict(updated_at=1,name='a',futureField='new')]) != original
     assert identity(futurePolicy='new') != original
-    assert identity(reportingCutoff=DAY+1) == identity(reportingCutoff=DAY+86401) == original
+    assert identity(reportingCutoff=DAY+1) == identity(reportingCutoff=DAY+86401)
+    # Refresh uses this whole-input identity for immutable manifests; daily
+    # input hashes still decide which dated rows actually need recalculation.
+    assert identity(observationRevision='old') == identity(observationRevision='new') == original
     from yearn_data.tvl_incremental import build
     with pytest.raises(ValueError,match='accounting revision differs'):
         build(SimpleNamespace(manifest=manifest|{'accountingRevision':'old-code'}))
