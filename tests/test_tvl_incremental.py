@@ -162,6 +162,7 @@ def test_global_identity_keeps_future_catalog_and_accounting_fields():
     assert identity(catalog=[dict(updated_at=1,name='b')]) != original
     assert identity(catalog=[dict(updated_at=1,name='a',futureField='new')]) != original
     assert identity(futurePolicy='new') != original
+    assert identity(reportingCutoff=DAY+1) == identity(reportingCutoff=DAY+86401) == original
     from yearn_data.tvl_incremental import build
     with pytest.raises(ValueError,match='accounting revision differs'):
         build(SimpleNamespace(manifest=manifest|{'accountingRevision':'old-code'}))
@@ -233,3 +234,23 @@ def test_totals_resume_after_copy_source_is_retired(postgres_database,tmp_path,m
     assert target.history(interval='daily')['chart']==[
         {'timestamp':DAY,'Ethereum':100.0},{'timestamp':DAY+86400,'Ethereum':200.0},
         {'timestamp':DAY+2*86400,'Ethereum':300.0}]
+
+
+def test_bounded_history_does_not_report_future_only_chains_as_historical_gaps(postgres_database,tmp_path):
+    with closing(connect('staging')) as conn:
+        init_db(conn)
+        run(conn,1,DAY,[(PARENT,'100')])
+        conn.execute('UPDATE tvl_runs SET params_json=? WHERE id=1',(json.dumps({'chain_ids':[1]}),))
+        conn.commit()
+    manifest=deepcopy(TvlStore('staging',tmp_path/'pub').get().manifest)
+    future=DAY+3*86400
+    with closing(connect('staging')) as conn,conn:
+        conn.execute('INSERT INTO tvl_runs VALUES(99,99,99,\'complete\',?)',(json.dumps({'chain_ids':[10]}),))
+        conn.execute('INSERT INTO tvl_snapshots VALUES(99,10,?,?,1,?)',
+            (CHILD,future,json.dumps(dict(chain_id=10,vault=CHILD,timestamp=future,asset_units='1',tvl_usd='1'))))
+        manifest['runs'].append(dict(conn.execute('SELECT * FROM tvl_runs WHERE id=99').fetchone()))
+    manifest.update(datasetId='9'*64,reportingCutoff=DAY+2*86400+1,asOfTimestamp=DAY+2*86400)
+    result=prepare(TvlDataset(manifest))
+    assert result['pendingChainDates']==[
+        {'timestamp':DAY+86400,'chainIds':[1]},
+        {'timestamp':DAY+2*86400,'chainIds':[1]}]

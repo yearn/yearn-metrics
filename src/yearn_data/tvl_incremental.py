@@ -24,7 +24,7 @@ def digest(value):
 
 def context_identity(dataset):
     from .tvl_api import accounting_revision
-    excluded = {'runs', 'datasetId', 'publishedAt', 'asOfTimestamp', 'diagnostics', 'priceRejections'}
+    excluded = {'runs', 'datasetId', 'publishedAt', 'asOfTimestamp', 'reportingCutoff', 'diagnostics', 'priceRejections'}
     context = {k:v for k,v in dataset.manifest.items() if k not in excluded}
     # Acquisition timestamps do not affect accounting. Every other catalog field,
     # including unknown future fields, conservatively invalidates global reuse.
@@ -94,10 +94,18 @@ def build(dataset, progress=None, *, full_rebuild=False, backfill=None):
             recompute, reuse, identities = [], [], []
             rows_read = written = 0
             known_by_day = {}
+            cutoff=dataset.manifest.get('reportingCutoff')
+            eligible=(set(dataset.run_ids) if cutoff is None else {r[0] for r in conn.execute(
+                f'SELECT DISTINCT run_id FROM tvl_snapshots WHERE run_id IN ({marks}) AND timestamp<?',
+                (*dataset.run_ids,cutoff))})
             expected_chains = {c for r in dataset.manifest['runs']
+                               if r['id'] in eligible
                                for c in json.loads(r['params_json']).get('chain_ids', [])}
             if not expected_chains:
-                expected_chains = {r[0] for r in conn.execute(f'SELECT DISTINCT chain_id FROM tvl_snapshots WHERE run_id IN ({marks})', dataset.run_ids)}
+                bounded=' AND timestamp<?' if cutoff is not None else ''
+                expected_chains = {r[0] for r in conn.execute(
+                    f'SELECT DISTINCT chain_id FROM tvl_snapshots WHERE run_id IN ({marks}){bounded}',
+                    (*dataset.run_ids,cutoff) if cutoff is not None else dataset.run_ids)}
             notify(f'History plan: {len(dates)} dates; full rebuild reason: {reason or "compare captured daily inputs"}')
             for offset in range(0, len(dates), 31):
                 batch = []

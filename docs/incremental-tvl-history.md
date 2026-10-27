@@ -16,6 +16,7 @@ It does not reacquire historical observations or change accounting policy.
 | Catalog metadata, allocator recognition, global accounting policy, unknown future context fields | Full history |
 | Accounting/preparation implementation revision | A new dataset identity and full history |
 | Catalog `updated_at` only, or identical selected evidence with a new run provenance ID | No recalculation of unchanged rows |
+| Reporting cutoff changes | Compare dates normally; current-close accounting still invalidates the affected closes |
 | No compatible durable input index | Full history; this includes first adoption and legacy prepared sources |
 
 The global context retains every manifest field except run inventory and known
@@ -25,6 +26,11 @@ and whether the date is the current close. They exclude only `source_run_id`,
 which is absent from the slim chart outputs and does not affect accounting.
 The native network accounting function handles each changed frame; preparation
 does not introduce a second financial calculation.
+
+When a bounded refresh supplies `reportingCutoff`, that field limits the reporting
+window rather than changing global accounting policy. Future-only collection
+runs remain retained but do not add false missing-chain gaps to that earlier
+window. Changing the current close still changes its dated input identity.
 
 New manifests include an `accountingRevision` digest over the accounting,
 selection, cache and incremental-preparation source files. A code change cannot
