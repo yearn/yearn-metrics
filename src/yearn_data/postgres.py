@@ -11,7 +11,7 @@ from ipaddress import ip_address
 import uuid
 
 import psycopg
-from psycopg.pq import TransactionStatus
+from psycopg.pq import PipelineStatus, TransactionStatus
 
 
 QUOTED = re.compile(r"('(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|--[^\n]*(?:\n|$)|/\*[\s\S]*?\*/)")
@@ -187,6 +187,11 @@ class Connection:
             self.raw.execute(statement)
 
     def commit(self):
+        # Queued BEGIN/writes may still report IDLE. Drain them before the
+        # driver's commit() decides whether there is a transaction to commit.
+        if self.raw.pgconn.pipeline_status != PipelineStatus.OFF:
+            with self.raw.pipeline() as pipeline:
+                pipeline.sync()
         self.raw.commit()
 
     def rollback(self):
