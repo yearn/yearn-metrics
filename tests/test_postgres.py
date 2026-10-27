@@ -313,15 +313,18 @@ def test_removed_comparison_selector_is_rejected_before_server_start(monkeypatch
 
 
 @pytest.mark.parametrize('url,mode,root', [
-    ('postgresql://db.example/test', 'verify-full', 'system'),
-    ('postgresql://db.example/test?sslmode=require', 'verify-full', 'system'),
-    ('postgresql://db.example/test?sslmode=disable', 'verify-full', 'system'),
+    ('postgresql://db.example/test', 'verify-full', '/system/ca.pem'),
+    ('postgresql://db.example/test?sslmode=require', 'verify-full', '/system/ca.pem'),
+    ('postgresql://db.example/test?sslmode=disable', 'verify-full', '/system/ca.pem'),
     ('postgresql://db.example/test?sslrootcert=/custom/ca.pem', 'verify-full', '/custom/ca.pem'),
     ('postgresql://127.0.0.1/test?sslmode=disable', 'disable', None),
     ('postgresql://[::1]/test?sslmode=disable', 'disable', None),
 ])
 def test_connection_authenticates_remote_servers(monkeypatch,url,mode,root):
+    from types import SimpleNamespace
+    from yearn_data import postgres
     from yearn_data.postgres import Connection
+    monkeypatch.setattr(postgres.ssl, 'get_default_verify_paths', lambda: SimpleNamespace(cafile='/system/ca.pem'))
     class Captured(Exception):pass
     def capture(**params):
         assert params['sslmode']==mode
@@ -399,3 +402,17 @@ def test_remote_tls_rejects_untrusted_or_wrong_hostname(tmp_path,monkeypatch,tru
                 Connection(dsn)
         finally:thread.join(10)
         assert not thread.is_alive() and not errors
+
+
+def test_remote_tls_has_packaged_roots_when_system_ca_file_is_absent(monkeypatch):
+    from types import SimpleNamespace
+    from yearn_data import postgres
+    from requests.certs import where
+    monkeypatch.setattr(postgres.ssl, 'get_default_verify_paths', lambda: SimpleNamespace(cafile=None))
+    class Captured(Exception):pass
+    def capture(**params):
+        assert params['sslmode']=='verify-full'
+        assert params['sslrootcert']==where()
+        raise Captured
+    monkeypatch.setattr(psycopg, 'connect', capture)
+    with pytest.raises(Captured):postgres.Connection('postgresql://db.example/test')
