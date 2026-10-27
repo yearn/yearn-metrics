@@ -8,10 +8,12 @@ from web3 import Web3
 from . import abis
 from .chains import web3_for
 from .config import CHAINS
-from .coverage import commit_range, missing_ranges
+from .coverage import commit_range, uncovered_ranges
 from .history_sources import HistoricalSource, inventory_targets, report_scope, route, write_rows
 from .indexing import _hex
 from .kong import vault_metadata_from_kong
+
+REPORT_COVERAGE_BATCH_SIZE = 100
 
 
 def inventory_vaults(conn, chain, end, experimental):
@@ -107,7 +109,7 @@ def check_release(vault):
 
 
 def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=None,
-             chunk_size=50_000, discover=False, experimental=False, client=None):
+             chunk_size=50_000, discover=False, experimental=False, client=None, progress=None):
     """Acquire an explicit window and reuse successfully committed ranges.
 
     The caller chooses historical bounds; existing observations are not treated
@@ -127,29 +129,54 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
     pin = client.pin(end=to_block, confirmations=confirmations, use_envio=report_source == "envio")
     summary = dict(chain=chain, from_block=from_block, pin=pin, source=report_source,
                    completed_ranges=0, inserted_rows=0, vaults=0, skipped_vaults=[],
-                   discovery="bounded" if discover else "stored inventory")
+                   discovery="bounded" if discover else "stored inventory",
+                   coverage_read_queries=0, report_work={})
+    started = time.monotonic()
+
+    def notify(event, **details):
+        if progress:
+            progress(json.dumps({'stage': 'report-acquisition', 'event': event, 'chain': chain,
+                                 'source': report_source, **details}, sort_keys=True))
+
+    notify('started', from_block=from_block, to_block=to_block)
 
     verified_coverage = {}
 
-    def acquire(scope, fetch, table, selected_source, report_metadata=None):
+    def acquire(scope, fetch, table, selected_source, report_metadata=None, retained=None, work=None):
         # Verify only reused coverage relevant to this request, not old unrelated
         # scans. New range rows and their coverage commit in one transaction.
-        for number, block_hash in conn.execute(
-            """SELECT DISTINCT to_block,end_hash FROM history_coverage
-               WHERE chain_id=? AND target=? AND family=? AND policy=?
-               AND to_block>=? AND from_block<=?""",
-            (*scope.key, from_block, to_block),
-        ):
+        if retained is None:
+            retained = list(conn.execute(
+                """SELECT from_block,to_block,end_hash FROM history_coverage
+                   WHERE chain_id=? AND target=? AND family=? AND policy=?
+                   AND to_block>=? AND from_block<=? ORDER BY from_block,to_block""",
+                (*scope.key, from_block, to_block),
+            ))
+            summary['coverage_read_queries'] += 1
+        for _, number, block_hash in retained:
             key = (chain_id, number)
             if key not in verified_coverage:
                 client.verify_pin(dict(number=number, hash=block_hash))
                 verified_coverage[key] = block_hash.lower()
             elif verified_coverage[key] != block_hash.lower():
                 raise ValueError("conflicting saved block hashes")
-        for lo, hi in list(missing_ranges(conn, scope, from_block, to_block, chunk_size)):
+        gaps = list(uncovered_ranges(((r[0], r[1]) for r in retained), from_block, to_block, chunk_size))
+        if work is not None:
+            work['reused_blocks'] += to_block-from_block+1-sum(hi-lo+1 for lo, hi in gaps)
+            work['reused_ranges'] += len(retained)
+        notify('coverage-planned', target=scope.target, family=scope.family,
+               reused_ranges=len(retained), pending_ranges=len(gaps))
+        for lo, hi in gaps:
             end_hash = _hex(client.block(hi)["hash"])
-            rows = fetch(lo, hi)
-            client.verify_pin(dict(number=hi, hash=end_hash))
+            notify('range-started', target=scope.target, family=scope.family, from_block=lo, to_block=hi)
+            try:
+                rows = fetch(lo, hi)
+                client.verify_pin(dict(number=hi, hash=end_hash))
+            except Exception:
+                # Provider exception text can contain private endpoints. A failed
+                # range is neither empty coverage nor a successful retry.
+                notify('range-failed', target=scope.target, family=scope.family, from_block=lo, to_block=hi)
+                raise
 
             def persist(db):
                 count = write_rows(db, table, rows, report_metadata=report_metadata)
@@ -165,6 +192,11 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
                                     write=persist)
             summary["completed_ranges"] += 1
             summary["inserted_rows"] += inserted
+            if work is not None:
+                work['scanned_blocks'] += hi-lo+1
+                work['completed_ranges'] += 1
+            notify('range-committed', target=scope.target, family=scope.family,
+                   from_block=lo, to_block=hi, observed_rows=len(rows), inserted_rows=inserted)
 
     if discover:
         for target in inventory_targets(chain, experimental):
@@ -185,7 +217,23 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
         metadata_by_address = vault_metadata_from_kong(chain_id, metadata_targets) if metadata_targets else {}
     except Exception:
         metadata_by_address = {}
-    for vault in vaults:
+    retained_reports = {}
+    for index, vault in enumerate(vaults):
+        if index % REPORT_COVERAGE_BATCH_SIZE == 0:
+            # One bounded read supplies both gap planning and saved-hash checks.
+            # Include all policies: enrichment below may change report_scope.
+            targets = [v['address'].lower() for v in vaults[index:index+REPORT_COVERAGE_BATCH_SIZE]]
+            marks = ','.join('?' for _ in targets)
+            retained_reports = {}
+            for target, policy, lo, hi, block_hash in conn.execute(
+                f"""SELECT target,policy,from_block,to_block,end_hash FROM history_coverage
+                    WHERE chain_id=? AND family='reports' AND target IN ({marks})
+                    AND to_block>=? AND from_block<=? ORDER BY target,policy,from_block,to_block""",
+                (chain_id, *targets, from_block, to_block),
+            ):
+                retained_reports.setdefault((target, policy), []).append((lo, hi, block_hash))
+            summary['coverage_read_queries'] += 1
+        vault_started = time.monotonic()
         check_release(vault)
         if not vault["asset"] or vault["asset_decimals"] is None or not vault["api_version"]:
             try:
@@ -200,8 +248,17 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
             vault = dict(conn.execute("SELECT * FROM vaults WHERE chain_id=? AND address=?",
                                       (chain_id, vault["address"])).fetchone())
         check_release(vault)
-        acquire(report_scope(vault), lambda lo, hi: client.reports(vault, lo, hi, report_source),
-                "strategy_reports", report_source, report_metadata=vault)
+        scope = report_scope(vault)
+        activity = 'active' if vault['active'] else 'inactive'
+        work = summary['report_work'].setdefault(activity, dict(
+            vaults=0, reused_blocks=0, reused_ranges=0, scanned_blocks=0, completed_ranges=0, seconds=0))
+        acquire(scope, lambda lo, hi: client.reports(vault, lo, hi, report_source),
+                "strategy_reports", report_source, report_metadata=vault,
+                retained=retained_reports.get((scope.target.lower(), scope.policy), []), work=work)
+        work['vaults'] += 1
+        work['seconds'] += time.monotonic()-vault_started
         summary["vaults"] += 1
     client.verify_pin(pin)
+    summary['seconds'] = time.monotonic()-started
+    notify('completed', **summary)
     return summary

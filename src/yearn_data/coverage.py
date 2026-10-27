@@ -60,14 +60,23 @@ def missing_ranges(conn, scope: Scope, start: int, end: int, chunk_size: int, *,
     if start < 0 or end < start or chunk_size < 1:
         raise ValueError("invalid coverage bounds or chunk size")
     table = _coverage_table(table)
-    cursor = start
     rows = conn.execute(
         f"""SELECT from_block, to_block FROM {table}
         WHERE chain_id=? AND target=? AND family=? AND policy=?
           AND to_block>=? AND from_block<=? ORDER BY from_block, to_block""",
         (*scope.key, start, end),
     )
+    yield from uncovered_ranges(rows, start, end, chunk_size)
+
+
+def uncovered_ranges(rows, start, end, chunk_size):
+    """Subtract ordered inclusive intervals, including overlapping saved scans."""
+    if start < 0 or end < start or chunk_size < 1:
+        raise ValueError("invalid coverage bounds or chunk size")
+    cursor = start
     for lo, hi in rows:
+        if lo > end:
+            break
         while cursor < lo:
             stop = min(lo - 1, cursor + chunk_size - 1, end)
             yield cursor, stop
