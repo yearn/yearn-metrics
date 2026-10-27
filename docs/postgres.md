@@ -15,8 +15,11 @@ a logical name so credentials cannot appear in manifests or status files.
 
 The pooled Neon URL works for ordinary jobs and APIs. Explicit direct operations
 use its direct endpoint. Local Postgres URLs need `?sslmode=disable`; hosted Neon
-uses `verify-full` with the system CA store by default, checking both certificate
-trust and hostname. Remote URLs cannot weaken this verification; `sslrootcert`
+uses `verify-full`, checking both certificate trust and hostname. The default
+CA file comes from Python's system trust configuration, with the Requests CA
+bundle as a fallback when no system CA file is available. This explicit path
+also works with binary libpq builds whose OpenSSL default paths differ from
+Python's. Remote URLs cannot weaken this verification; `sslrootcert`
 may select an explicit CA bundle. Only loopback or Unix-socket connections may
 explicitly use `sslmode=disable`. `YEARN_DATA_DB_SCHEMA` selects an already-created schema, defaulting
 to `public`. Use the same schema and logical database when reading a publication.

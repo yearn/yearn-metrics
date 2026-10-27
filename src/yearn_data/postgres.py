@@ -6,6 +6,7 @@ driver parameters; this module translates placeholders, not interpolated values.
 from __future__ import annotations
 
 import re
+import ssl
 from ipaddress import ip_address
 import uuid
 
@@ -135,7 +136,11 @@ class Connection:
         local = all(local_host(host) for host in hosts + addresses)
         if not local or params.get('sslmode') != 'disable':
             params['sslmode'] = 'verify-full'
-            params.setdefault('sslrootcert', 'system')
+            if 'sslrootcert' not in params:
+                from requests.certs import where
+                # Binary libpq may use different OpenSSL default paths than
+                # Python, leaving sslrootcert=system without usable roots.
+                params['sslrootcert'] = ssl.get_default_verify_paths().cafile or where()
         params['connect_timeout'] = '15'
         if direct and params.get('host', '').endswith('.neon.tech'):
             params['host'] = params['host'].replace('-pooler.', '.')
