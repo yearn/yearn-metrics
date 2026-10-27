@@ -55,10 +55,13 @@ calls or writes, and is not a claim about hosted Postgres latency.
 These timings measure **catch-up's contribution to the TVL-start barrier**.
 `scripts/update_postgres.py` waits for catch-up, fee acquisition, pricing and
 analysis before dispatching TVL collection. This optimization reduces the first
-stage's work; it does not make TVL run earlier in the dependency order. Full
-refresh timings through actual TVL dispatch, including later accounting stages,
-remain a validation gate with the maintained refresh workflow in #81. This PR
-therefore references #56 rather than declaring its entire investigation closed.
+stage's work; it does not make TVL run earlier in the dependency order. Supplementary full-worker measurements were subsequently added in
+[PR #90](https://github.com/yearn/yearn-metrics/pull/90), with twelve trials through
+actual TVL dispatch and complete preparation. Those measure the maintained
+refresh worker and its documented stage order, rather than the old update script
+end to end. Together with the catch-up evidence here, they complete the #56
+investigation; this PR therefore closes #56 on default-branch delivery. The
+refresh implementation remains separately reviewed in #90.
 No production update, publication or provider-limit experiment was run.
 
 ## Progress and recovery
@@ -112,3 +115,16 @@ assertion fails as expected (240 reads), after printing the receipt. The
 optimized run passes (2 reads). Later assertions additionally protect the new
 active/inactive diagnostic counters and CLI stderr routing; they do not alter
 the measured inventory, cutoff, quotes or acquired rows.
+
+To reproduce the historical baseline with this same committed harness:
+
+```bash
+git show 3db530831ce79bec597a43f5ab795d45d1ed8ab7:src/yearn_data/catchup.py > /tmp/yearn-coverage-baseline.py
+YEARN_BENCHMARK_BASELINE_MODULE=/tmp/yearn-coverage-baseline.py \
+python -m pytest -q -s tests/test_catchup_performance.py
+```
+
+This explicitly selected historical collector lacks activity diagnostics. Its
+receipt prints first, then the expected query-budget assertion fails on 240
+coverage reads. The default optimized run still requires and checks every
+active/inactive diagnostic counter; baseline mode does not change CI selection.

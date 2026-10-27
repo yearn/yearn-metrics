@@ -5,6 +5,7 @@ boundaries; optional simulated database latency is reported, never a live claim.
 """
 from contextlib import closing
 import hashlib
+import importlib.util
 import json
 import os
 import time
@@ -75,6 +76,12 @@ class MeasuredConnection:
 
 def test_retained_inventory_reuses_coverage_with_bounded_database_reads(postgres_database):
     delay = float(os.environ.get('YEARN_BENCHMARK_ROUNDTRIP_MS', '0')) / 1000
+    baseline_path = os.environ.get('YEARN_BENCHMARK_BASELINE_MODULE')
+    collector = catchup
+    if baseline_path:
+        spec = importlib.util.spec_from_file_location('yearn_data._coverage_baseline', baseline_path)
+        collector = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(collector)
     with closing(connect('staging')) as conn:
         init_db(conn)
         vaults = [dict(chain_id=10, version='v2', address=f'0x{i+1:040x}',
@@ -91,11 +98,12 @@ def test_retained_inventory_reuses_coverage_with_bounded_database_reads(postgres
                              db, 'strategy_reports', [report(v)] if i < 40 else [], report_metadata=v))
         measured = MeasuredConnection(conn, delay)
         receipts = []
+        diagnostics = []
         for phase in ('extend', 'resume'):
             client = MeasuredSource()
             reads_before = measured.coverage_reads
             started = time.perf_counter()
-            result = catchup.catch_up(measured, 'op', 10, 30, source='rpc', client=client)
+            result = collector.catch_up(measured, 'op', 10, 30, source='rpc', client=client)
             # Same update ordering as update_postgres.py: TVL cannot start before
             # catch-up returns (other accounting stages are excluded here).
             until_tvl = time.perf_counter() - started
@@ -103,11 +111,7 @@ def test_retained_inventory_reuses_coverage_with_bounded_database_reads(postgres
                 coverageReadQueries=measured.coverage_reads-reads_before,
                 providerBoundaryRequests=client.requests, completedRanges=result['completed_ranges'],
                 insertedRows=result['inserted_rows']))
-            for activity in ('active', 'inactive'):
-                work = result['report_work'][activity]
-                assert work['vaults'] == 60
-                assert work['reused_blocks'] == (620 if phase == 'extend' else 1260)
-                assert work['scanned_blocks'] == (640 if phase == 'extend' else 0)
+            diagnostics.append(result.get('report_work'))
         rows = [dict(r) for r in conn.execute('SELECT * FROM strategy_reports ORDER BY tx_hash')]
         coverage = [tuple(r) for r in conn.execute('''SELECT target,from_block,to_block,row_count
             FROM history_coverage ORDER BY target,from_block,to_block''')]
@@ -118,6 +122,17 @@ def test_retained_inventory_reuses_coverage_with_bounded_database_reads(postgres
                        reportsDigest=hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest(),
                        coverageDigest=hashlib.sha256(json.dumps(coverage).encode()).hexdigest(), runs=receipts)
         print('\nCOVERAGE_BENCHMARK=' + json.dumps(receipt, sort_keys=True))
+        # Historical collectors have no activity diagnostics. The default
+        # optimized run must retain and validate them; baseline runs reach the
+        # query-budget assertion only after printing their complete receipt.
+        if not baseline_path:
+            for phase, work_by_activity in zip(('extend', 'resume'), diagnostics):
+                assert work_by_activity is not None
+                for activity in ('active', 'inactive'):
+                    work = work_by_activity[activity]
+                    assert work['vaults'] == 60
+                    assert work['reused_blocks'] == (620 if phase == 'extend' else 1260)
+                    assert work['scanned_blocks'] == (640 if phase == 'extend' else 0)
         assert len(rows) == 120
         assert {r['gain_raw'] for r in rows} == {'12'}
         assert len(coverage) == 160
