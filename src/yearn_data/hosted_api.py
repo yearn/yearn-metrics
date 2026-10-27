@@ -105,11 +105,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             status, payload = application().response(self.path)
+            body = json.dumps(payload, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
         except (OSError, *DATABASE_ERRORS, ValueError, KeyError, TypeError, json.JSONDecodeError):
             # Provider/database exception messages can contain connection details.
             logging.getLogger(__name__).error('Hosted publication could not be read')
-            status, payload = 503, {'error': 'Published data is unavailable'}
-        body = json.dumps(payload, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+            status = 503
+            body = b'{"error":"Published data is unavailable"}'
         gzip_allowed = False
         for encoding in self.headers.get('Accept-Encoding', '').split(','):
             parts = encoding.strip().split(';')

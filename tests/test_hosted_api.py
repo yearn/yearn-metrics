@@ -207,18 +207,26 @@ def test_comparison_dataset_pin_does_not_freeze_analytics_republication(publishe
         assert cache_headers(url,200)['Vercel-CDN-Cache-Control']=='public, s-maxage=3600'
 
 
-def test_http_failure_does_not_expose_credentials(monkeypatch):
+@pytest.mark.parametrize('failure', ['read','nonfinite','unsupported'])
+def test_http_failure_does_not_expose_credentials(monkeypatch,caplog,failure):
     from yearn_data import hosted_api
-    def fail():raise ValueError('postgres://secret-password')
-    monkeypatch.setattr(hosted_api, 'application', fail)
+    def response(url):
+        if failure=='read':raise ValueError('postgres://secret-password')
+        return 200, {'private-detail':float('inf') if failure=='nonfinite' else object()}
+    from types import SimpleNamespace
+    monkeypatch.setattr(hosted_api,'application',lambda:SimpleNamespace(response=response))
     server = ThreadingHTTPServer(('127.0.0.1',0),Handler)
     thread = threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     try:
-        with pytest.raises(HTTPError) as caught:
-            urlopen(f'http://127.0.0.1:{server.server_port}/api/fees')
-        assert caught.value.code == 503
-        assert caught.value.headers['Cache-Control']=='no-store'
-        assert 'secret' not in caught.value.read().decode()
+        for path in ('/api/fees','/api/tvl','/api/analytics/publication'):
+            with pytest.raises(HTTPError) as caught:
+                urlopen(f'http://127.0.0.1:{server.server_port}'+path)
+            assert caught.value.code == 503
+            assert caught.value.headers['Cache-Control']=='no-store'
+            assert json.loads(caught.value.read())=={'error':'Published data is unavailable'}
+        records=[r for r in caplog.records if r.name==hosted_api.__name__]
+        assert len(records)==3
+        assert all(r.getMessage()=='Hosted publication could not be read' and r.exc_info is None for r in records)
     finally:
         server.shutdown();server.server_close();thread.join()
 
