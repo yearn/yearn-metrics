@@ -512,6 +512,18 @@ def test_compact_history_limits_emitted_series_preserving_rank_and_missing_price
         if metric is None else [{'timestamp': dates[0], b: 1000}, {'timestamp': dates[1], 'All other vaults': 1000}])
 
 
+@pytest.mark.parametrize(('group', 'constant'), [('chain', True), ('vault', False)])
+def test_internal_compact_history_rejects_unsupported_charts_before_reading(monkeypatch, group, constant):
+    dataset = object.__new__(TvlDataset)
+    def unexpected_read(*args):
+        pytest.fail('invalid compact chart reached history reads')
+    monkeypatch.setattr(dataset, 'dates', unexpected_read)
+    monkeypatch.setattr(dataset, 'history_rows', unexpected_read)
+    monkeypatch.setattr(dataset, 'streamed_history_rows', unexpected_read)
+    with pytest.raises(ValueError, match='top requires constant-price vault history'):
+        dataset.history(group=group, constant=constant, top=1)
+
+
 def test_compact_metric_requires_supported_top_history_contract():
     from yearn_data.tvl_api import tvl_response
     class UnusedStore:

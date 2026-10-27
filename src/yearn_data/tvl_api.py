@@ -525,6 +525,8 @@ class TvlDataset:
         return references, reference_prices
 
     def history(self, group='chain', mode='external', interval='weekly', start=None, end=None, chain_id=None, constant=False, *, max_points=None, top=None, top_metric=None):
+        if top is not None and (group != 'vault' or not constant):
+            raise ValueError('top requires constant-price vault history')
         # Canonicalize all-time bounds before caching: explicit first/last closes
         # and omitted bounds select the same observations and reference window.
         dates = self.dates()
