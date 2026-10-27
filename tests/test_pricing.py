@@ -447,7 +447,7 @@ def test_curve_lp_price_fails_closed_when_reserve_is_unpriced(monkeypatch):
     stable = "0x0000000000000000000000000000000000000001"
     unknown = "0x0000000000000000000000000000000000000002"
 
-    def fake_address(chain_id, address, signature, block_number, args_hex=""):
+    def fake_address(chain_id, address, signature, block_number, args_hex="", **kwargs):
         if address.lower() == lp and signature == "minter()":
             return pool
         if address.lower() == pool and signature == "coins(uint256)":
@@ -488,7 +488,7 @@ def test_erc4626_wrapper_price_uses_convert_to_assets(monkeypatch):
     token = "0x00000000000000000000000000000000000000e0"
     underlying = "0x00000000000000000000000000000000000000e1"
 
-    def fake_address(chain_id, address, signature, block_number, args_hex=""):
+    def fake_address(chain_id, address, signature, block_number, args_hex="", **kwargs):
         if address.lower() == token and signature == "asset()":
             return underlying
         return None
@@ -682,7 +682,7 @@ def test_reserve_decimals_must_be_known(monkeypatch, adapter, reserve_decimals):
     reserve = "0x0000000000000000000000000000000000000001"
     balance = 100 * 10 ** (reserve_decimals if reserve_decimals is not None else 6)
 
-    def fake_address(chain_id, address, signature, block_number, args_hex=""):
+    def fake_address(chain_id, address, signature, block_number, args_hex="", **kwargs):
         if signature == "minter()":
             return lp
         if signature == "coins(uint256)" and int(args_hex, 16) == 0:
@@ -727,7 +727,7 @@ def test_curve_zero_balance_does_not_require_valuation(monkeypatch, balance_gett
     funded = "0x0000000000000000000000000000000000000001"
     empty = "0x0000000000000000000000000000000000000002"
 
-    def fake_address(chain_id, address, signature, block_number, args_hex=""):
+    def fake_address(chain_id, address, signature, block_number, args_hex="", **kwargs):
         if signature == "minter()":
             return lp
         if signature == "coins(uint256)":
@@ -834,3 +834,42 @@ def test_volume_adapter_refresh_preserves_alias_quotes_chain_filter_and_target_l
     assert price_unpriced_volume(conn, refresh_onchain_fallbacks=True, chain_ids={1}, limit=1) == 1
     assert calls == [(1,tokens[1],100)]
     assert [r[0] for r in conn.execute('SELECT price_usd FROM prices ORDER BY timestamp')] == [0.5,2,0.5,0.5]
+
+
+@pytest.mark.parametrize('failure', ['transport','rpc','abi','complete','alternate'])
+def test_curve_reserve_enumeration_failure_cannot_accept_partial_price(monkeypatch,failure):
+    from eth_abi import encode
+    from yearn_data import pricing
+    lp='0x'+'a'*40;pool='0x'+'b'*40;coin='0x'+'c'*40
+    from types import SimpleNamespace
+    def post(url,json,timeout):
+        data=json['params'][0]['data']
+        result=None
+        if data==pricing._selector('minter()'):
+            result='0x'+encode(['address'],[pool]).hex()
+        elif data==pricing._selector('decimals()'):
+            result='0x'+encode(['uint256'],[18]).hex()
+        elif data==pricing._selector('totalSupply()') or data.startswith(pricing._selector('balances(uint256)')):
+            result='0x'+encode(['uint256'],[100*10**18]).hex()
+        elif data.startswith(pricing._selector('coins(uint256)')):
+            index=int(data[-64:],16)
+            if index==0 and failure!='alternate':result='0x'+encode(['address'],[coin]).hex()
+            elif failure=='transport':raise pricing.requests.Timeout('private RPC detail')
+            elif failure=='rpc':
+                return SimpleNamespace(raise_for_status=lambda:None,json=lambda:{
+                    'error':{'code':-32005,'message':'private RPC rate limit'}})
+            elif failure=='abi':result='0x01'
+        elif data.startswith(pricing._selector('coins(int128)')) and failure=='alternate' and int(data[-64:],16)==0:
+            result='0x'+encode(['address'],[coin]).hex()
+        body={'result':result} if result is not None else {
+            'error':{'code':3,'message':'execution reverted'}}
+        return SimpleNamespace(raise_for_status=lambda:None,json=lambda:body)
+    monkeypatch.setattr(pricing.requests,'post',post)
+    monkeypatch.setattr(pricing,'get_rpc_url',lambda chain:'offline-test')
+    monkeypatch.setattr(pricing,'_resolve_reserve_price',lambda *a:(1,{}))
+    pricing._curve_lp_price.cache_clear()
+    try:
+        price,payload=pricing._curve_lp_price(1,lp,100,10)
+        assert price==(1 if failure in ('complete','alternate') else None)
+        assert 'private' not in str(payload)
+    finally:pricing._curve_lp_price.cache_clear()

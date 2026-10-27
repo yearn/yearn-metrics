@@ -615,7 +615,7 @@ def _selector(signature: str) -> str:
     return "0x" + function_signature_to_4byte_selector(signature).hex()
 
 
-def _eth_call(chain_id: int, address: str, data: str, block_number: int, timeout: int = 30) -> str | None:
+def _eth_call(chain_id: int, address: str, data: str, block_number: int, timeout: int = 30, *, strict: bool = False) -> str | None:
     chain = next(c.key for c in CHAINS.values() if c.chain_id == int(chain_id))
     payload = {
         "jsonrpc": "2.0",
@@ -627,6 +627,14 @@ def _eth_call(chain_id: int, address: str, data: str, block_number: int, timeout
     response.raise_for_status()
     body = response.json()
     result = body.get("result")
+    if strict and body.get('error'):
+        error = body['error']
+        if isinstance(error, dict) and (error.get('code') == 3 or
+                'execution reverted' in str(error.get('message', '')).lower()):
+            return None  # Unsupported signature or a completed array getter.
+        raise ValueError('RPC call failed')
+    if strict and (not isinstance(result, str) or not result.startswith('0x')):
+        raise ValueError('invalid RPC call result')
     if not isinstance(result, str) or result == "0x":
         return None
     return result
@@ -642,9 +650,10 @@ def _call_uint256(chain_id: int, address: str, signature: str, block_number: int
         return None
 
 
-def _call_address(chain_id: int, address: str, signature: str, block_number: int, args_hex: str = "") -> str | None:
+def _call_address(chain_id: int, address: str, signature: str, block_number: int, args_hex: str = "", *, strict: bool = False) -> str | None:
     try:
-        result = _eth_call(chain_id, address, _selector(signature) + args_hex, block_number)
+        result = (_eth_call(chain_id, address, _selector(signature) + args_hex, block_number, strict=True)
+                  if strict else _eth_call(chain_id, address, _selector(signature) + args_hex, block_number))
         if not result:
             return None
         decoded = abi_decode(["address"], bytes.fromhex(result[2:]))[0]
@@ -652,6 +661,8 @@ def _call_address(chain_id: int, address: str, signature: str, block_number: int
             return None
         return Web3.to_checksum_address(decoded)
     except Exception:
+        if strict:
+            raise ValueError('reserve address unavailable') from None
         return None
 
 
@@ -842,10 +853,14 @@ def _curve_lp_price(
     coins: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     for idx in range(8):
-        coin = (
-            _call_address(chain_id, pool, "coins(uint256)", block_number, _uint_arg(idx))
-            or _call_address(chain_id, pool, "coins(int128)", block_number, _uint_arg(idx))
-        )
+        try:
+            coin = (
+                _call_address(chain_id, pool, "coins(uint256)", block_number, _uint_arg(idx), strict=True)
+                or _call_address(chain_id, pool, "coins(int128)", block_number, _uint_arg(idx), strict=True)
+            )
+        except ValueError:
+            return None, {'source':'curve_lp_fallback','status':'missing_reserve_address',
+                          'pool':pool,'reserve_index':idx}
         if not coin:
             break
         balance = _call_uint256(chain_id, pool, "balances(uint256)", block_number, _uint_arg(idx))
@@ -1576,6 +1591,10 @@ def _unpriced_volume_rows(
         chain_filter = f"AND f.chain_id IN ({','.join('?' for _ in chain_ids)})"
         chain_params = sorted(chain_ids)
     price_filter = _existing_price_filter(retry_missing)
+    price_params = []
+    if source == 'yearn-prices' and not retry_missing:
+        price_filter = "p.token_address IS NULL OR (p.status = 'pending' AND f.block_timestamp < ?)"
+        price_params = [int(time.time()) // 86_400 * 86_400]
     refresh_join, refresh_match = _adapter_refresh_sql(refresh_onchain_fallbacks, 'f')
     for table in ("vault_flows", "strategy_debt_flows"):
         table_rows = conn.execute(
@@ -1599,7 +1618,7 @@ def _unpriced_volume_rows(
             GROUP BY f.chain_id, f.asset, f.block_timestamp
             ORDER BY f.block_timestamp
             """,
-            (source, *chain_params),
+            (source, *chain_params, *price_params),
         ).fetchall()
         for row in table_rows:
             key = (int(row["chain_id"]), row["asset"], int(row["block_timestamp"]))

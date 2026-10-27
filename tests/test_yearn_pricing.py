@@ -781,3 +781,36 @@ def test_volume_routes_only_unresolved_yearn_prices_to_requested_fallback(monkey
     count=pricing.price_unpriced_volume(connection,source='yearn-prices',fallback=fallback,onchain_fallbacks=False)
     assert count==(2 if fallback else 1)
     assert calls==([rows[1:]] if fallback else [])
+
+
+def test_volume_pending_prices_retry_after_close_without_repricing_accepted(postgres_database,monkeypatch):
+    from yearn_data import pricing
+    conn=connect('staging');init_db(conn);seed_chains(conn,CHAINS)
+    day=20000*86400;clock=[day+3600];timestamp=day+1200
+    monkeypatch.setattr(pricing.time,'time',lambda:clock[0])
+    assets=['0x'+'a'*40,'0x'+'b'*40]
+    conn.execute("""INSERT INTO vault_flows
+        (chain_id,version,vault_address,direction,tx_hash,log_index,block_number,
+         block_timestamp,asset,asset_decimals,assets_raw,shares_raw)
+        VALUES (1,'v3','vault','deposit','deposit',0,10,?,?,6,'10','10')""",(timestamp,assets[0]))
+    conn.execute("""INSERT INTO strategy_debt_flows
+        (chain_id,version,vault_address,strategy_address,direction,tx_hash,log_index,
+         block_number,block_timestamp,asset,asset_decimals,debt_delta_raw,source_event)
+        VALUES (1,'v3','vault','strategy','increase','debt',0,10,?,?,6,'10','DebtUpdated')""",(timestamp,assets[1]))
+    conn.commit();calls=[]
+    def batch(targets):
+        calls.extend(targets)
+        return {t:(2,'ok',{'normalized_timestamp':t[2],'provider':'yearn-prices'}) for t in targets}
+    monkeypatch.setattr(pricing,'fetch_yearn_prices_batch',batch)
+    options=dict(source='yearn-prices',onchain_fallbacks=False)
+    try:
+        assert pricing.price_unpriced_volume(conn,**options)==2
+        assert calls==[]
+        assert [r[0] for r in conn.execute('SELECT status FROM prices')]==['pending','pending']
+        assert pricing.price_unpriced_volume(conn,**options)==0
+        clock[0]=day+86400+3600
+        assert pricing.price_unpriced_volume(conn,**options)==2
+        assert set(calls)=={(1,a,day+86399) for a in assets}
+        assert [(r['price_usd'],r['status']) for r in conn.execute('SELECT * FROM prices')]==[(2,'ok'),(2,'ok')]
+        assert pricing.price_unpriced_volume(conn,**options)==0
+    finally:conn.close()
