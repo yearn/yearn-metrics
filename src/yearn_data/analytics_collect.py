@@ -1,0 +1,461 @@
+"""Owned external references, membership evidence and current declared fee metadata."""
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
+import hashlib
+import json
+import re
+import time
+
+import requests
+from eth_abi import decode, encode
+from eth_abi.exceptions import DecodingError
+from web3 import Web3
+
+from .analytics import SCHEMA, put_input, selected_input
+from .config import get_rpc_url_by_chain_id
+from .multicall import MULTICALL3, MULTICALL3_ABI, selector
+from .storage import connect
+
+ADAPTER_URL='https://raw.githubusercontent.com/DefiLlama/DefiLlama-Adapters/main/projects/yearn/index.js'
+FACTORIES_URL='https://raw.githubusercontent.com/DefiLlama/DefiLlama-Adapters/main/projects/helper/curators/configs.js'
+CURATION_URL='https://raw.githubusercontent.com/DefiLlama/DefiLlama-Adapters/main/registries/curators.js'
+FINANCE_CHAINS={1:'ethereum',10:'optimism',137:'polygon',250:'fantom',8453:'base',42161:'arbitrum',747474:'katana'}
+CURATION_CHAINS={1:'ethereum',8453:'base',747474:'katana',42161:'arbitrum',999:'hyperliquid'}
+
+
+def fetch(url):
+    r=requests.get(url,timeout=45);r.raise_for_status();return r
+
+
+def js_array(source,name):
+    match=re.search(r'\b(?:const|let)\s+'+re.escape(name)+r'\s*=\s*\[([\s\S]*?)\]',source)
+    if not match:raise ValueError('unsupported adapter: missing '+name)
+    return set(a.lower() for a in re.findall(r'0x[0-9a-fA-F]{40}',match[1]))
+
+
+def curation_addresses(text, name, *, required=False):
+    """Parse a supported literal array; missing or changed evidence is not empty."""
+    match=re.search(r'\b'+name+r':\s*\[([^]]*)\]',text)
+    if not match:
+        if required or re.search(r'\b'+name+r'\s*:',text):
+            raise ValueError('unsupported curation configuration: '+name)
+        return set()
+    values=match[1].strip().rstrip(',').split(',') if match[1].strip() else []
+    addresses=set()
+    for value in values:
+        item=re.fullmatch(r"['\"](0x[0-9a-fA-F]{40})['\"]",value.strip())
+        if not item:raise ValueError('unsupported curation address array: '+name)
+        addresses.add(item[1].lower())
+    return addresses
+
+
+def finance_routes(source):
+    """Parse every registered route, rejecting unsupported JavaScript shapes."""
+    declarations=re.findall(r'\b(?:const|let)\s+registeredNestedVaults\s*=\s*\[([^]]*)\]',source)
+    if len(declarations)!=1:
+        raise ValueError('unsupported finance routes: registeredNestedVaults declaration')
+    body=re.sub(r'/\*[\s\S]*?\*/|//[^\n]*','',declarations[0])
+    entries=re.findall(r'\{([^{}]*)\}',body)
+    if re.sub(r'\{[^{}]*\}','',body).strip(' \t\r\n,'):
+        raise ValueError('unsupported finance routes: nonliteral or nested entry')
+    cross={};routes={}
+    addresses={'parent','strategy','child','parentAsset','childAsset'}
+    for entry in entries:
+        fields={};unresolved={}
+        text=entry.strip()
+        if text.endswith(','):text=text[:-1]
+        for item in text.split(','):
+            match=re.fullmatch(r'\s*(\w+)\s*:\s*(.*?)\s*',item)
+            if not match or match[1] in fields:
+                raise ValueError('unsupported finance route fields')
+            name,raw=match.groups()
+            literal=re.fullmatch(r"(['\"])(.*?)\1",raw)
+            if name in addresses:
+                if literal and re.fullmatch(r'0x[0-9a-f]{40}',literal[2],re.I):
+                    fields[name]=literal[2].lower()
+                elif name in ('parentAsset','childAsset') and re.fullmatch(r'ADDRESSES\.\w+\.\w+',raw):
+                    # Do not guess values from an external JavaScript module.
+                    fields[name]=None;unresolved[name]=raw
+                else:
+                    raise ValueError('unsupported finance route address: '+name)
+            elif name=='getter' and literal and re.fullmatch(r'[A-Za-z_]\w*',literal[2]):
+                fields[name]=literal[2]
+            elif name in ('chainId','parentDecimals','childDecimals') and re.fullmatch(r'\d+',raw):
+                fields[name]=int(raw)
+                if name!='chainId' and fields[name]>255:
+                    raise ValueError('unsupported finance route decimals')
+            else:
+                raise ValueError('unsupported finance route field: '+name)
+        if not {'chainId','parent','strategy','child'}<=fields.keys() or fields['chainId'] not in FINANCE_CHAINS:
+            raise ValueError('unsupported finance route identity')
+        key=(fields.pop('chainId'),fields['parent'],fields['strategy'])
+        if key in cross:
+            raise ValueError('unsupported finance routes: duplicate parent/strategy')
+        if unresolved:fields['unresolvedFields']=unresolved
+        cross[key]=fields['child'];routes[key]=fields
+    return cross,routes
+
+
+def rules(source,curation):
+    # Fail closed when the supported accounting contract is no longer present.
+    for marker in ('buildNestedDebtByVault','subtractNestedDebt','get_default_queue','withdrawalQueue','list/vaults/${api.chainId}?origin=yearn'):
+        if marker not in source:raise ValueError('unsupported finance adapter: '+marker)
+    declared=re.search(r"const chains = \[([^]]+)\]",source)
+    if not declared or set(re.findall(r"'([^']+)'",declared[1]))!=set(FINANCE_CHAINS.values()):
+        raise ValueError('unsupported finance adapter chain scope')
+    cross,routes=finance_routes(source)
+    # Chain names repeat across curators; only inspect the Yearn entry.
+    section=re.search(r'^  "yearn-curating":\s*\{([\s\S]*?)(?=^  \},?\s*$)',curation,re.MULTILINE)
+    if not section:raise ValueError('unsupported curation registry: missing yearn-curating')
+    curation=re.sub(r'//[^\n]*','',section[1])
+    owners={};explicit={}
+    for chain,name in CURATION_CHAINS.items():
+        block=re.search(r'\b'+name+r':\s*\{([^{}]*)\}',curation)
+        if not block:raise ValueError('unsupported curation registry: missing or unparsed '+name)
+        text=block[1]
+        fields=set(re.findall(r'\b(\w+)\s*:',text))
+        if fields-{'morphoVaultOwners','morpho','erc4626','turtleclub_erc4626'}:
+            raise ValueError('unsupported curation configuration fields: '+name)
+        owners[chain]=curation_addresses(text,'morphoVaultOwners',required=True)
+        explicit[chain]=set().union(*(curation_addresses(text,field)
+                                    for field in ('morpho','erc4626','turtleclub_erc4626')))
+    return {'v1':js_array(source,'v1Vaults'),'blacklist':js_array(source,'blacklist')|js_array(source,'v1Vaults'),
+            'cross':cross,'routes':routes,'owners':owners,'explicit':explicit}
+
+
+class Reader:
+    def __init__(self,chain):
+        self.w3=Web3(Web3.HTTPProvider(get_rpc_url_by_chain_id(chain).split(',')[0],request_kwargs={'timeout':30}))
+        if chain!=1:
+            from web3.middleware import ExtraDataToPOAMiddleware
+            self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware,layer=0)
+        if self.w3.eth.chain_id!=chain:raise ValueError('RPC chain mismatch')
+        self.block=self.w3.eth.get_block('latest' if chain==250 else 'finalized')
+        self.contract=self.w3.eth.contract(address=Web3.to_checksum_address(MULTICALL3),abi=MULTICALL3_ABI)
+    def call(self,calls):
+        results=[]
+        for start in range(0,len(calls),100):
+            batch=calls[start:start+100]
+            raw=self.contract.functions.aggregate3([(Web3.to_checksum_address(address),True,selector(signature)+encode(types,args))
+                for address,signature,types,args,output in batch]).call(block_identifier=self.block['number'])
+            for (ok,data),entry in zip(raw,batch):
+                try:results.append(decode(entry[4],data) if ok and data else None)
+                except (ValueError,OverflowError,DecodingError):results.append(None)
+        return results
+
+
+
+def curator_factories(source):
+    source=re.sub(r'//[^\n]*','',source)
+    section=re.search(r'const MorphoConfigs\s*=\s*\{([\s\S]*?)\n\}',source)
+    if not section:raise ValueError('unsupported curation factory source: MorphoConfigs')
+    factories=[]
+    for chain,name in CURATION_CHAINS.items():
+        block=re.search(r'\n  '+name+r': \{([\s\S]*?)(?=\n  [a-z_]+: \{|$)',section[1])
+        if not block:raise ValueError('unsupported curation factory source: '+name)
+        parsed=False
+        for array,family in [('vaultFactories','morpho-v1'),('vaultFactoriesV2','morpho-v2')]:
+            entries=re.search(r'\b'+array+r':\s*\[([^]]*)\]',block[1])
+            if not entries:
+                if re.search(r'\b'+array+r'\s*:',block[1]):
+                    raise ValueError('unsupported curation factory array: '+name+' '+array)
+                continue
+            parsed=True
+            pattern=r"\{\s*address:\s*['\"](0x[0-9a-fA-F]{40})['\"],\s*fromBlock:\s*(\d+)\s*,?\s*\}"
+            if re.sub(pattern,'',entries[1]).strip(' \n\r\t,'):
+                raise ValueError('unsupported curation factory entries: '+name+' '+array)
+            for address,start in re.findall(pattern,entries[1]):
+                factories.append({'chain_id':chain,'address':address.lower(),'family':family,'from_block':int(start)})
+        if not parsed:raise ValueError('unsupported curation factory arrays: '+name)
+    return factories
+
+
+def creation_owner(chain,row,factories):
+    from .tvl_discovery import DiscoveryReader, FACTORY_EVENTS
+    reader=DiscoveryReader(chain)
+    number=row.get('deployment_block') or reader.deployment_block(row['address'])
+    family=row.get('version')
+    if family not in FACTORY_EVENTS:return None
+    for factory in factories:
+        if factory['chain_id']!=chain or factory['family']!=family:continue
+        try:logs=reader.logs(factory['address'],FACTORY_EVENTS[family],number,number)
+        except Exception:continue
+        for log in logs:
+            args=log['args'];address=args.get('metaMorpho',args.get('newVaultV2'))
+            if address and address.lower()==row['address'].lower():
+                return {'owner':args.get('initialOwner',args.get('owner')),'factory':factory['address'],
+                        'blockNumber':number,'transactionHash':Web3.to_hex(log['transactionHash']),
+                        'logIndex':int(log['logIndex']),'event':FACTORY_EVENTS[family]['name']}
+    return None
+
+
+def membership_chain(chain,local,candidates,policy,creation):
+    if chain not in FINANCE_CHAINS and chain not in CURATION_CHAINS:
+        return [{'chainId':chain,'address':r['address'].lower(),'included':None,
+                 'reason':'chain outside finance and curation adapter scope'} for r in local]
+    observations=[]
+    reader=Reader(chain)
+    addresses=[r['address'].lower() for r in local]
+    finance={r['address'].lower():r for r in candidates if r.get('chainId')==chain and r['address'].lower() not in policy['blacklist']}
+    calls=[(a,'totalAssets()',[],[],['uint256']) for a in finance]
+    balances=dict(zip(finance,reader.call(calls)))
+    active={a:r for a,r in finance.items() if balances[a] and balances[a][0]>0}
+    debts=default_debts(reader,active)
+    from .finance_membership import contributions
+    net,deductions=contributions(reader,chain,active,balances,debts,policy)
+    remote_targets={e.get('contributionVault',e['parent']) for e in deductions if e['method']=='cross-chain-shares'}
+    def finance_included(address):
+        if chain not in FINANCE_CHAINS:return False,'chain outside finance adapter'
+        if chain==1 and address in policy['v1']:
+            supply,pps=reader.call([(address,'totalSupply()',[],[],['uint256']),(address,'getPricePerFullShare()',[],[],['uint256'])])
+            return (supply[0]*pps[0]>0 if supply and pps else None),'v1 onchain supply and PPS'
+        if address not in finance:return False,'not in adapter Kong candidates or explicitly excluded'
+        balance=balances[address]
+        if balance is None:return None,'totalAssets read unavailable'
+        if balance[0]==0:return False,'zero assets'
+        if strategy_count(finance[address]) is None:return None,'strategy count unavailable'
+        value=net.get(address)
+        if value is None:return None,'adapter contribution unavailable after nested or applicable remote checks'
+        reason=('adapter contribution after verified nested and cross-chain deductions' if address in remote_targets
+                else 'adapter contribution after verified nested deductions')
+        return value>0,reason
+    for row,address in zip(local,addresses):
+        finance_state,reason=finance_included(address)
+        curation_state=False
+        curated=(row.get('tvl_category')=='curation' or row.get('category')=='curation'
+                 or row.get('protocol')=='curation' or row.get('version','').startswith('morpho'))
+        if curated and chain not in CURATION_CHAINS:
+            curation_state=None
+            reason='chain outside curation adapter scope'
+        if chain in CURATION_CHAINS:
+            if address in policy['explicit'][chain]:curation_state=True
+            elif curated:
+                event=creation.get((chain,address))
+                if event is None:
+                    try:event=creation_owner(chain,row,policy['factories'])
+                    except Exception:pass
+                    if event:creation[(chain,address)]=event
+                curation_state=(event['owner'].lower() in policy['owners'][chain]) if event and event.get('owner') else None
+                if curation_state is None:reason='curation initial-owner evidence unavailable'
+        state=True if finance_state is True or curation_state is True else None if finance_state is None or curation_state is None else False
+        observations.append({'chainId':chain,'address':address,'included':state,'reason':reason,
+                             'evidence':{'candidate':address in finance,'assetBalance':str(balances[address][0]) if balances.get(address) else None,'strategyDebts':debts.get(address),'creation':creation.get((chain,address)), 'curationExplicit':address in policy['explicit'].get(chain,set())},
+                             'blockNumber':int(reader.block['number']),'blockTimestamp':int(reader.block['timestamp'])})
+    return observations
+
+
+def strategy_count(row):
+    value=row.get('strategiesCount')
+    if type(value) is int and value>=0:return value
+    if isinstance(value,str) and re.fullmatch('[0-9]+',value):return int(value)
+    return None
+
+
+def default_debts(reader,active):
+    calls=[];slots=[];result={a:[] for a in active}
+    for address,row in active.items():
+        count=strategy_count(row)
+        if count is None:
+            result[address]=None
+            continue
+        if count==0:continue
+        v3=str(row.get('apiVersion','')).startswith('3')
+        if v3:
+            slots.append((address,True));calls.append((address,'get_default_queue()',[],[],['address[]']))
+        else:
+            for slot in range(min(count,20)):
+                slots.append((address,False));calls.append((address,'withdrawalQueue(uint256)',['uint256'],[slot],['address']))
+    debts=[];debt_slots=[]
+    for (address,v3),value in zip(slots,reader.call(calls)):
+        if value is None:result[address]=None;continue
+        queue=value[0] if v3 else [value[0]]
+        for strategy in queue:
+            strategy=strategy.lower()
+            if int(strategy,16)==0:continue
+            count=4 if v3 else 9
+            debts.append((address,'strategies(address)',['address'],[strategy],['uint256']*count));debt_slots.append((address,strategy,2 if v3 else 6))
+    for (address,strategy,index),value in zip(debt_slots,reader.call(debts)):
+        if value is None:result[address]=None
+        elif result[address] is not None:result[address].append((strategy,int(value[index])))
+    return result
+
+
+
+
+class AccountantVerificationError(ValueError):
+    """Observed accountant evidence contradicts a pinned product constraint."""
+
+
+def custom_accountant_config(reader, config):
+    """Recognize product accountants by pinned code and recipient/asset evidence."""
+    from eth_utils import keccak
+    from .ybold_fees import VAULT as YBOLD, ACCOUNTANT, STAKER, CODE_HASH
+    from .yvusd_fees import VAULT as YVUSD
+    locked = '0xaaafea48472f77563961cdb53291dedfb46f9040'
+    locked_hash = '0x237ca0cef5a652adde023f9a80e5dbd8535e4a36cfd216bd42bfa7af31e8ebf1'
+    address, accountant = config['address'].lower(), config.get('accountant', '').lower()
+    if config['chainId'] != 1 or address not in (YBOLD, YVUSD):
+        return None
+    expected = ACCOUNTANT if address == YBOLD else locked
+    if accountant != expected:
+        raise AccountantVerificationError('unknown product accountant')
+    block = reader.block['hash']
+    code_hash = '0x' + keccak(reader.w3.eth.get_code(Web3.to_checksum_address(accountant), block_identifier=block)).hex()
+    if code_hash != (CODE_HASH if address == YBOLD else locked_hash):
+        raise AccountantVerificationError('unknown product accountant implementation')
+    if address == YBOLD:
+        recipient = reader.call([(accountant, 'feeRecipient()', [], [], ['address'])])[0]
+        if not recipient:
+            raise ValueError('unavailable yBOLD distribution recipient')
+        if recipient[0].lower() != STAKER:
+            raise AccountantVerificationError('unknown yBOLD distribution recipient')
+        amounts = {'managementFee': 0, 'performanceFee': 0, 'stakerRecipient': STAKER}
+    else:
+        asset, rates = reader.call([(accountant, 'asset()', [], [], ['address']),
+                                   (accountant, 'feeConfig()', [], [], ['uint16'] * 3)])
+        if not asset or rates is None:
+            raise ValueError('unavailable yvUSD accountant configuration')
+        if asset[0].lower() != YVUSD:
+            raise AccountantVerificationError('unknown yvUSD accountant asset')
+        amounts = {'managementFee': rates[0], 'performanceFee': rates[1], 'lockerBonus': rates[2]}
+    return amounts | {'fixedRateSupported': True, 'availability': 'available',
+                      'source': 'verified-product-accountant-config', 'accountantCodeHash': code_hash,
+                      'blockHash': '0x' + bytes(block).hex()}
+
+def observed_configs(chain, local, declared):
+    reader=Reader(chain)
+    calls=[]
+    for row in local:
+        address=row['address']
+        for signature,output in [('performanceFee()',['uint256']),('managementFee()',['uint256']),('fee()',['uint256']),('accountant()',['address'])]:
+            calls.append((address,signature,[],[],output))
+    values=reader.call(calls)
+    by_address={r['address']:r for r in declared}
+    accountants=[];slots=[]
+    for index,row in enumerate(local):
+        address=row['address'].lower();perf,mgmt,morpho,accountant=values[index*4:index*4+4]
+        config=by_address.get(address,{'chainId':chain,'address':address})
+        config.update(declaredPerformanceFee=config.get('performanceFee'),declaredManagementFee=config.get('managementFee'),
+                      performanceFee=None,managementFee=None,fixedRateSupported=False,
+                      source='onchain-current-fee-config',blockNumber=int(reader.block['number']),observedAt=int(reader.block['timestamp']))
+        version=row.get('version','');api=row.get('api_version') or ''
+        config.update(apiVersion=api or config.get('apiVersion'),contractFamily=None)
+        if version=='morpho-v1' and morpho:
+            config.update(performanceFee=morpho[0]/10**14,managementFee=0,fixedRateSupported=True,contractFamily='morpho-v1')
+        elif version=='morpho-v2' and perf and mgmt:
+            config.update(performanceFee=perf[0]/10**14,managementFee=mgmt[0]/10**14,fixedRateSupported=True,contractFamily='morpho-v2')
+        elif (version=='v2' or api.startswith('0.')) and perf and mgmt:
+            config.update(performanceFee=perf[0],managementFee=mgmt[0],fixedRateSupported=True,contractFamily='v2')
+        elif accountant:
+            config['accountant']=accountant[0].lower()
+            config['contractFamily']='v3_allocator'
+            if int(accountant[0],16)==0:
+                config.update(performanceFee=0,managementFee=0,fixedRateSupported=True)
+            else:
+                try:
+                    custom = custom_accountant_config(reader, config)
+                except AccountantVerificationError as error:
+                    custom = {'fixedRateSupported': False, 'availability': 'unavailable',
+                              'failureKind': 'verification_rejected', 'failureReason': str(error)}
+                except Exception as error:
+                    # Keep provider details (which can include credentials) out of stored evidence.
+                    custom = {'fixedRateSupported': False, 'availability': 'unavailable',
+                              'failureKind': 'acquisition_failed', 'failureReason': type(error).__name__}
+                if custom is not None:
+                    config.update(custom)
+                else:
+                    accountants.append((accountant[0],'getVaultConfig(address)',['address'],[address],['uint16']*6+['bool']))
+                    slots.append(config)
+        elif perf and api.startswith('3.'):
+            config.update(performanceFee=perf[0],managementFee=0,fixedRateSupported=True,contractFamily='tokenized_strategy')
+        config['availability']='available' if config['fixedRateSupported'] else 'unavailable'
+        by_address[address]=config
+    for config,value in zip(slots,reader.call(accountants)):
+        if value:
+            config.update(performanceFee=value[1],managementFee=value[0],refundRatio=value[2],maxFee=value[3],
+                          maxGain=value[4],maxLoss=value[5],customVaultConfig=value[6],fixedRateSupported=True,availability='available')
+    for config in by_address.values():
+        if any(config.get(k) is not None and not math_is_rate(config[k]) for k in ('performanceFee','managementFee')):
+            config.update(performanceFee=None,managementFee=None,fixedRateSupported=False,availability='unavailable',failureKind='verification_rejected')
+    return list(by_address.values())
+
+
+def collect(database,progress=print):
+    now=int(time.time())
+    with closing(connect(database)) as conn:
+        conn.executescript(SCHEMA)
+        catalog=[dict(r) for r in conn.execute('SELECT * FROM tvl_vaults')]
+        creation={}
+        for observation in selected_input(conn,'membership')['body'].get('vaults',[]):
+            if observation.get('evidence',{}).get('creation'):
+                creation[(observation['chainId'],observation['address'])]=observation['evidence']['creation']
+        for r in conn.execute("SELECT chain_id,vault_address,decoded_json FROM tvl_inventory_events WHERE source_kind='tvl-curation-factory'"):
+            creation[(r['chain_id'],r['vault_address'].lower())]=json.loads(r['decoded_json'])
+    snapshots=[];failures=[]
+    for protocol in ('yearn-finance','yearn-curating'):
+        try:
+            response=fetch('https://api.llama.fi/protocol/'+protocol);body=response.json()
+            latest=body.get('tvl',[])[-1]
+            by_chain={('HyperEVM' if name=='Hyperliquid L1' else name):rows['tvl'][-1] for name,rows in body.get('chainTvls',{}).items() if not '-' in name and rows.get('tvl')}
+            snapshots.append({'protocol':protocol,'timestamp':latest['date'],'total':latest['totalLiquidityUSD'],
+                              'byChain':{k:v['totalLiquidityUSD'] for k,v in by_chain.items()},
+                              'byChainTimestamps':{k:v['date'] for k,v in by_chain.items()},'source':'https://api.llama.fi/protocol/'+protocol,'payloadSha256':hashlib.sha256(response.content).hexdigest()})
+        except (requests.RequestException,ValueError,KeyError,IndexError):failures.append(protocol)
+    with closing(connect(database)) as conn:
+        ref_id=put_input(conn,'defillama',{'snapshots':snapshots,'failedProtocols':failures},'partial' if failures else 'available',now)
+    source=fetch(ADAPTER_URL).text;curation=fetch(CURATION_URL).text;factory_source=fetch(FACTORIES_URL).text;policy=rules(source,curation);policy['factories']=curator_factories(factory_source)
+    configs=[];membership=[]
+    grouped={c:[r for r in catalog if r['chain_id']==c] for c in sorted({r['chain_id'] for r in catalog})}
+    def acquire(chain):
+        progress(f'Collecting fee metadata and membership for chain {chain}')
+        try:
+            response=fetch(f'https://kong.yearn.fi/api/rest/list/vaults/{chain}?origin=yearn')
+            candidates=response.json()
+            if not isinstance(candidates,list):raise ValueError('invalid Kong vault array')
+            by_address={r['address'].lower():r for r in candidates}
+            config=[]
+            for r in grouped[chain]:
+                metadata=by_address.get(r['address'].lower(),{});fees=metadata.get('fees') or {}
+                perf=fees.get('performanceFee');mgmt=fees.get('managementFee')
+                def rate(v):return float(v) if isinstance(v,(int,float)) and math_is_rate(v) else None
+                config.append({'chainId':chain,'address':r['address'].lower(),'performanceFee':rate(perf),'managementFee':rate(mgmt),
+                    'source':'kong-declared-current-fees','observedAt':now,'apiVersion':metadata.get('apiVersion'),
+                    'availability':'available' if rate(perf) is not None and rate(mgmt) is not None else 'unavailable'})
+            try:config=observed_configs(chain,grouped[chain],config)
+            except Exception:
+                for row in config:row.update(performanceFee=None,managementFee=None,fixedRateSupported=False,availability='unavailable')
+            try:members=membership_chain(chain,grouped[chain],candidates,policy,creation)
+            except Exception:
+                members=[{'chainId':chain,'address':r['address'].lower(),'included':None,'reason':'RPC membership acquisition unavailable'} for r in grouped[chain]]
+            return config,members
+        except (requests.RequestException,ValueError,KeyError):
+            config=[{'chainId':chain,'address':r['address'].lower(),'performanceFee':None,
+                     'managementFee':None,'fixedRateSupported':False,'availability':'unavailable',
+                     'observedAt':now,'failureKind':'acquisition_failed',
+                     'failureReason':'Kong configuration candidates unavailable'} for r in grouped[chain]]
+            return config,[{'chainId':chain,'address':r['address'].lower(),'included':None,'reason':'Kong membership candidates unavailable'} for r in grouped[chain]]
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        for config,members in executor.map(acquire,grouped):configs.extend(config);membership.extend(members)
+    source_info={'financeAdapter':ADAPTER_URL,'financeAdapterSha256':hashlib.sha256(source.encode()).hexdigest(),
+                 'curationAdapter':CURATION_URL,'curationAdapterSha256':hashlib.sha256(curation.encode()).hexdigest(),
+                 'financeSource':source,'curationSource':curation,'curationFactoriesSource':factory_source,'curationFactoriesUrl':FACTORIES_URL,
+                 'curationFactoriesSha256':hashlib.sha256(factory_source.encode()).hexdigest(),
+                 'curationMethod':'current Yearn curator registry; creation-owner evidence',
+                 'universe':'selected local catalogue evaluated against adapter membership rules'}
+    with closing(connect(database)) as conn:
+        fee_id=put_input(conn,'fee-config',{'vaults':configs,'expectedVaults':len(catalog)},'available' if len(configs)==len(catalog) and all(r['availability']=='available' for r in configs) else 'partial',now)
+        membership_id=put_input(conn,'membership',{'vaults':membership,'source':source_info},'available' if all(r['included'] is not None for r in membership) else 'partial',now)
+        stored_configs=json.loads(conn.execute('SELECT body_json FROM analytics_inputs WHERE id=?',(fee_id,)).fetchone()[0])['vaults']
+        stored_membership=json.loads(conn.execute('SELECT body_json FROM analytics_inputs WHERE id=?',(membership_id,)).fetchone()[0])['vaults']
+    return {'referenceId':ref_id,'configurationId':fee_id,'membershipId':membership_id,
+            'configuredVaults':sum(r['availability']=='available' for r in stored_configs),
+            'verifiedMembershipVaults':sum(r['included'] is not None for r in stored_membership),
+            'expectedVaults':len(catalog),
+            'attemptCoverage':{'configuredVaults':sum(r['availability']=='available' for r in configs),
+                               'verifiedMembershipVaults':sum(r['included'] is not None for r in membership)}}
+
+
+
+def math_is_rate(value):
+    import math
+    return math.isfinite(value) and 0<=value<=10000

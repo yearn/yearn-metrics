@@ -8,7 +8,7 @@ from eth_abi import decode
 from eth_utils import function_signature_to_4byte_selector
 from web3 import Web3
 
-from .chains import chain_config, web3_for
+from .chains import web3_for
 
 
 MULTICALL3 = "0xcA11bde05977b3631167028862bE2a173976CA11"

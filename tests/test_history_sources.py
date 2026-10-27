@@ -72,7 +72,7 @@ def test_envio_outage_does_not_fallback_and_watermark_bounds():
         source.pin(end=80)
 
 
-def test_optimism_registry_decoding_and_deduplication(tmp_path):
+def test_optimism_registry_decoding_and_deduplication(postgres_database, tmp_path):
     target = next(inventory_targets('op'))
     values = dict(token=ASSET, vault_id=0, vault=ADDRESS, api_version='0.4.6')
     log = registry_log(target.abi, values)
@@ -81,7 +81,7 @@ def test_optimism_registry_decoding_and_deduplication(tmp_path):
     rows = source.inventory(target, 0, 50, 'rpc')
     assert rows[0]['vault_address'] == ADDRESS
     assert rows[0]['block_number'] == 20
-    conn = connect(tmp_path / 'test.sqlite')
+    conn = connect('staging')
     init_db(conn)
     with conn:
         assert write_rows(conn, 'vault_inventory_events', rows) == 1
@@ -110,13 +110,13 @@ def test_rpc_result_at_common_cap_is_not_complete_history():
         list(source.rpc_logs(ADDRESS, abis.V2_STRATEGY_REPORTED_EVENTS, 0, 100))
 
 
-def test_legacy_envio_inventory_payload_agrees_with_rpc(tmp_path):
+def test_legacy_envio_inventory_payload_agrees_with_rpc(postgres_database, tmp_path):
     target = next(inventory_targets('op'))
     values = dict(token=ASSET, vault_id=1, vault=ADDRESS, api_version='0.4.6')
     log = registry_log(target.abi, values)
     log['address'] = target.address
     rows = HistoricalSource('op', client(logs=[log])).inventory(target, 0, 50, 'rpc')
-    conn = connect(tmp_path/'legacy.sqlite')
+    conn = connect('staging')
     init_db(conn)
     import json
     legacy = {**rows[0], 'decoded_json': json.dumps(dict(token=ASSET, deployment_id='1', vault=ADDRESS,
@@ -146,10 +146,10 @@ def test_envio_finds_both_producer_address_formats(stored_case):
     assert list(source.envio_nodes('StrategyReported', 'chainId', 'vaultAddress', emitter.lower(), 20, 20)) == [node]
 
 
-def test_corrected_address_policy_does_not_reuse_old_empty_coverage(tmp_path):
+def test_corrected_address_policy_does_not_reuse_old_empty_coverage(postgres_database, tmp_path):
     from yearn_data.coverage import Scope, commit_range, missing_ranges, fingerprint
     from yearn_data.history_sources import report_scope
-    conn=connect(tmp_path/'coverage.sqlite');init_db(conn)
+    conn=connect('staging');init_db(conn)
     target=next(inventory_targets('eth'))
     old=Scope(target.chain_id,target.address,'inventory:'+target.entity)
     commit_range(conn,old,0,50,source='envio',end_hash=HASH,run_id=None,write=lambda _:0)

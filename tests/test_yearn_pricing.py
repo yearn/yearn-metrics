@@ -5,6 +5,18 @@ from yearn_data.config import CHAINS
 from yearn_data.pricing import _yearn_prices_batches, fetch_yearn_price, normalize_yearn_price_timestamp, price_unpriced_reports
 from yearn_data.storage import connect, from_json, init_db, seed_chains
 
+
+@pytest.mark.parametrize('setting', ['YEARN_PRICE_HTTP_ATTEMPTS', 'YEARN_PRICE_HTTP_RETRY_BASE_SECONDS'])
+def test_invalid_retry_configuration_stops_before_http(monkeypatch, setting):
+    from yearn_data import pricing
+    monkeypatch.setenv('YEARN_PRICE_PROD_KEY', 'test-only')
+    monkeypatch.setenv(setting, 'invalid')
+    def unexpected(*args, **kwargs):
+        pytest.fail('invalid local configuration must not make an HTTP request')
+    monkeypatch.setattr(pricing.requests, 'get', unexpected)
+    with pytest.raises(pricing.YearnPricesConfigurationError, match='retry configuration'):
+        pricing.fetch_yearn_price(1, '0x'+'1'*40, 86399)
+
 def test_yearn_prices_batches_normalize_and_respect_route_limits():
     first = "0x0000000000000000000000000000000000000001"
     second = "0x0000000000000000000000000000000000000002"
@@ -22,8 +34,8 @@ def test_yearn_prices_batches_normalize_and_respect_route_limits():
         assert all(len(timestamps) <= 90 for timestamps in by_token.values())
 
 
-def test_price_unpriced_reports_uses_yearn_prices_eod_and_exact_fallback(monkeypatch, tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+def test_price_unpriced_reports_uses_yearn_prices_eod_and_exact_fallback(postgres_database, monkeypatch, tmp_path):
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     asset = "0x0000000000000000000000000000000000000002"
@@ -110,9 +122,10 @@ def test_price_unpriced_reports_uses_yearn_prices_eod_and_exact_fallback(monkeyp
 
 
 def test_price_unpriced_reports_uses_defillama_only_for_unresolved_yearn_prices(
+    postgres_database,
     monkeypatch, tmp_path
 ):
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     first_asset = "0x0000000000000000000000000000000000000002"
@@ -188,11 +201,12 @@ def test_price_unpriced_reports_uses_defillama_only_for_unresolved_yearn_prices(
 
 
 def test_price_unpriced_reports_falls_back_after_yearn_prices_transport_failure(
+    postgres_database,
     monkeypatch, tmp_path
 ):
     from yearn_data.pricing import YearnPricesRequestError
 
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     asset = "0x0000000000000000000000000000000000000002"
@@ -309,29 +323,25 @@ def test_yearn_authentication_stops_without_fallback(monkeypatch, status):
     assert len(calls) == 1
 
 
-def test_yearn_only_command_disables_both_fallbacks(tmp_path, monkeypatch):
+def test_yearn_only_command_disables_both_fallbacks(postgres_database, tmp_path, monkeypatch):
     from yearn_data import cli
     calls = []
     monkeypatch.setattr(cli, 'price_unpriced_reports', lambda conn, **kw: calls.append(kw) or 0)
-    assert cli.main(['--db', str(tmp_path / 'prices.sqlite'), 'price', '--source', 'yearn-prices',
+    assert cli.main(['--db', 'staging', 'price', '--source', 'yearn-prices',
                      '--no-provider-fallback', '--no-onchain-fallbacks']) == 0
     assert calls[0]['source'] == 'yearn-prices'
     assert calls[0]['fallback'] is None
     assert calls[0]['onchain_fallbacks'] is False
 
 
-def test_gnosis_price_namespace_requires_no_rpc():
-    from yearn_data.pricing import yearn_prices_token_key
-    assert yearn_prices_token_key(100, '0x' + '2' * 40) == 'gnosis:0x' + '2' * 40
-
-
 @pytest.mark.parametrize("exact_outcome", ["ok", "missing", "invalid"])
 def test_malformed_batch_preserves_other_targets_and_exact_provider_fallbacks(
+    postgres_database,
     tmp_path, monkeypatch, exact_outcome
 ):
     from yearn_data import pricing
 
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     assets = ["0x" + "2" * 40, "0x" + "4" * 40]
@@ -392,10 +402,10 @@ def test_malformed_batch_preserves_other_targets_and_exact_provider_fallbacks(
         assert rows[assets[0], "defillama"]["price_usd"] == 7.0
 
 
-def test_yearn_only_pricing_rejects_enabled_onchain_fallbacks_before_requests(monkeypatch, tmp_path):
+def test_yearn_only_pricing_rejects_enabled_onchain_fallbacks_before_requests(postgres_database, monkeypatch, tmp_path):
     from yearn_data import pricing
 
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     monkeypatch.setattr(pricing, "_price_rows_with_yearn_prices",
                         lambda *_: pytest.fail("Must reject unsupported policy before fetching"))
@@ -405,11 +415,12 @@ def test_yearn_only_pricing_rejects_enabled_onchain_fallbacks_before_requests(mo
 
 @pytest.mark.parametrize("failure", ["batch-auth", "exact-auth", "missing-key"])
 def test_response_error_recovery_preserves_fatal_authentication_and_configuration(
+    postgres_database,
     monkeypatch, tmp_path, failure
 ):
     from yearn_data import pricing
 
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     row = {"chain_id": 1, "asset": "0x" + "2" * 40,
            "block_timestamp": 100, "block_number": 10}
@@ -432,10 +443,10 @@ def test_response_error_recovery_preserves_fatal_authentication_and_configuratio
 
 
 @pytest.mark.parametrize("problem", ["invalid_price", "duplicate", "wrong_day", "missing_source", "malformed_point"])
-def test_default_batch_preserves_valid_points_and_only_verifies_invalid_target(monkeypatch, tmp_path, problem):
+def test_default_batch_preserves_valid_points_and_only_verifies_invalid_target(postgres_database, monkeypatch, tmp_path, problem):
     from yearn_data import pricing
 
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     first, second = "0x" + "2" * 40, "0x" + "4" * 40
     rows = [{"chain_id": 1, "asset": asset, "block_timestamp": timestamp, "block_number": 10}
@@ -511,22 +522,22 @@ def test_numeric_zero_price_still_means_missing_instead_of_a_usable_zero_price(m
 
 
 @pytest.mark.parametrize("event_source", ["rpc", "envio"])
-def test_run_rejects_unsupported_fallback_flags_before_discovery_or_indexing(monkeypatch, tmp_path, event_source):
+def test_run_rejects_unsupported_fallback_flags_before_discovery_or_indexing(postgres_database, monkeypatch, tmp_path, event_source):
     from yearn_data import cli
 
     monkeypatch.setattr(cli, "get_event_source", lambda: event_source)
     for name in ["discover", "discover_from_envio", "index_all_reports", "import_reports_from_envio"]:
         monkeypatch.setattr(cli, name, lambda *_args, **_kwargs: pytest.fail("Must reject before writes"))
     with pytest.raises(ValueError, match="onchain.*DefiLlama"):
-        cli.main(["--db", str(tmp_path / "test.sqlite"), "run", "lifetime-yield", "--no-provider-fallback"])
+        cli.main(["--db", 'staging', "run", "lifetime-yield", "--no-provider-fallback"])
 
 
 @pytest.mark.parametrize("fallback_status", ["missing", "retryable", "invalid", "ok"])
-def test_yearn_fallback_does_not_replace_good_stored_prices_with_failures(monkeypatch, tmp_path, fallback_status):
+def test_yearn_fallback_does_not_replace_good_stored_prices_with_failures(postgres_database, monkeypatch, tmp_path, fallback_status):
     from yearn_data import pricing
     from yearn_data.analysis import run_lifetime_yield
 
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     assets = ["0x" + digit * 40 for digit in ["2", "4", "6"]]
@@ -574,12 +585,13 @@ def test_yearn_fallback_does_not_replace_good_stored_prices_with_failures(monkey
 @pytest.mark.parametrize("fallback", [None, "defillama"])
 @pytest.mark.parametrize("ordinary_invocation", ["price", "run"])
 def test_open_day_prices_wait_until_close_and_retry_on_an_ordinary_run(
+    postgres_database,
     monkeypatch, tmp_path, fallback, ordinary_invocation
 ):
     from yearn_data import pricing
     from yearn_data.analysis import run_lifetime_yield
 
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     asset = "0x" + "2" * 40
@@ -638,10 +650,10 @@ def test_open_day_prices_wait_until_close_and_retry_on_an_ordinary_run(
 
 
 @pytest.mark.parametrize("unsupported_chain", [100, 999999])
-def test_unsupported_chain_stays_unpriced_without_aborting_configured_chains(monkeypatch, tmp_path, unsupported_chain):
+def test_unsupported_chain_stays_unpriced_without_aborting_configured_chains(postgres_database, monkeypatch, tmp_path, unsupported_chain):
     from yearn_data import pricing
 
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     asset = "0x" + "2" * 40
@@ -678,6 +690,7 @@ def test_unsupported_chain_stays_unpriced_without_aborting_configured_chains(mon
 @pytest.mark.parametrize("source,has_key", [("yearn-prices", False), ("yearn-prices", True), ("defillama", False)])
 @pytest.mark.parametrize("event_source", ["envio", "rpc"])
 def test_run_checks_yearn_credentials_before_discovery_and_allows_configured_runs(
+    postgres_database,
     monkeypatch, tmp_path, source, has_key, event_source
 ):
     from yearn_data import cli
@@ -699,7 +712,7 @@ def test_run_checks_yearn_credentials_before_discovery_and_allows_configured_run
         monkeypatch.setattr(cli, name, stage(name))
     monkeypatch.setattr(cli, "_run_analysis", lambda *_args, **_kwargs: 1)
     monkeypatch.setattr(cli, "export_analysis", lambda *_args, **_kwargs: [])
-    command = ["--db", str(tmp_path / "test.sqlite"), "run", "lifetime-yield"]
+    command = ["--db", 'staging', "run", "lifetime-yield"]
     if source == "defillama":
         command.extend(["--price-source", source])
     if source == "yearn-prices" and not has_key:
@@ -711,9 +724,9 @@ def test_run_checks_yearn_credentials_before_discovery_and_allows_configured_run
         assert calls[-1] == "price_unpriced_reports"
 
 
-def test_report_pricing_uses_the_client_chain_capability(monkeypatch, tmp_path):
+def test_report_pricing_uses_the_client_chain_capability(postgres_database, monkeypatch, tmp_path):
     from yearn_data import pricing
-    conn = connect(tmp_path / 'chain-capability.sqlite')
+    conn = connect('staging')
     init_db(conn)
     asset = '0x' + '2' * 40
     conn.execute("""INSERT INTO strategy_reports (
@@ -732,3 +745,72 @@ def test_report_pricing_uses_the_client_chain_capability(monkeypatch, tmp_path):
     pricing.price_unpriced_reports(conn, fallback=None, onchain_fallbacks=False)
     assert calls == [(12345, asset, 86399)]
     assert tuple(conn.execute('SELECT price_usd,status FROM prices').fetchone()) == (2.0, 'ok')
+
+
+def test_hyperevm_batch_uses_canonical_namespace(monkeypatch):
+    asset = '0xb88339cb7199b77e23db6e890353e22632ba630f'
+    timestamp = 1791503999
+
+    def get(path, *, params, timeout):
+        import json
+        assert json.loads(params['coins']) == {f'hyperliquid:{asset}': [timestamp]}
+        return {'coins': {f'hyperliquid:{asset}': {'symbol': 'USDC', 'prices': [
+            {'timestamp': timestamp, 'price': 0.9998, 'source': 'defillama', 'confidence': 0.99}
+        ]}}}
+
+    monkeypatch.setattr('yearn_data.pricing._yearn_prices_get', get)
+    from yearn_data.pricing import fetch_yearn_prices_batch
+    result = fetch_yearn_prices_batch([(999, asset, timestamp)])
+    assert result[(999, asset, timestamp)][:2] == (0.9998, 'ok')
+
+
+@pytest.mark.parametrize('fallback', [None,'defillama'])
+def test_volume_routes_only_unresolved_yearn_prices_to_requested_fallback(monkeypatch,fallback):
+    from yearn_data import pricing
+    connection=object()
+    rows=[{'asset':'priced'},{'asset':'missing'}]
+    monkeypatch.setattr(pricing,'_unpriced_volume_rows',lambda *a,**kw:rows)
+    monkeypatch.setattr(pricing,'_refresh_adapter_rows',lambda conn,targets,**kw:(0,targets))
+    monkeypatch.setattr(pricing,'_price_rows_with_yearn_prices',lambda conn,targets:(1,targets[1:]))
+    calls=[]
+    def secondary(conn,targets,fallback,onchain_fallbacks):
+        assert conn is connection and fallback is None and onchain_fallbacks is False
+        calls.append(targets)
+        return 1
+    monkeypatch.setattr(pricing,'_price_unpriced_reports_defillama_batched',secondary)
+    count=pricing.price_unpriced_volume(connection,source='yearn-prices',fallback=fallback,onchain_fallbacks=False)
+    assert count==(2 if fallback else 1)
+    assert calls==([rows[1:]] if fallback else [])
+
+
+def test_volume_pending_prices_retry_after_close_without_repricing_accepted(postgres_database,monkeypatch):
+    from yearn_data import pricing
+    conn=connect('staging');init_db(conn);seed_chains(conn,CHAINS)
+    day=20000*86400;clock=[day+3600];timestamp=day+1200
+    monkeypatch.setattr(pricing.time,'time',lambda:clock[0])
+    assets=['0x'+'a'*40,'0x'+'b'*40]
+    conn.execute("""INSERT INTO vault_flows
+        (chain_id,version,vault_address,direction,tx_hash,log_index,block_number,
+         block_timestamp,asset,asset_decimals,assets_raw,shares_raw)
+        VALUES (1,'v3','vault','deposit','deposit',0,10,?,?,6,'10','10')""",(timestamp,assets[0]))
+    conn.execute("""INSERT INTO strategy_debt_flows
+        (chain_id,version,vault_address,strategy_address,direction,tx_hash,log_index,
+         block_number,block_timestamp,asset,asset_decimals,debt_delta_raw,source_event)
+        VALUES (1,'v3','vault','strategy','increase','debt',0,10,?,?,6,'10','DebtUpdated')""",(timestamp,assets[1]))
+    conn.commit();calls=[]
+    def batch(targets):
+        calls.extend(targets)
+        return {t:(2,'ok',{'normalized_timestamp':t[2],'provider':'yearn-prices'}) for t in targets}
+    monkeypatch.setattr(pricing,'fetch_yearn_prices_batch',batch)
+    options=dict(source='yearn-prices',onchain_fallbacks=False)
+    try:
+        assert pricing.price_unpriced_volume(conn,**options)==2
+        assert calls==[]
+        assert [r[0] for r in conn.execute('SELECT status FROM prices')]==['pending','pending']
+        assert pricing.price_unpriced_volume(conn,**options)==0
+        clock[0]=day+86400+3600
+        assert pricing.price_unpriced_volume(conn,**options)==2
+        assert set(calls)=={(1,a,day+86399) for a in assets}
+        assert [(r['price_usd'],r['status']) for r in conn.execute('SELECT * FROM prices')]==[(2,'ok'),(2,'ok')]
+        assert pricing.price_unpriced_volume(conn,**options)==0
+    finally:conn.close()

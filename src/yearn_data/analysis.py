@@ -17,6 +17,14 @@ from .pricing import (
 from .storage import from_json, to_json
 
 
+def closed_cutoff(before_timestamp=None, now=None):
+    today = int(time.time() if now is None else now) // 86400 * 86400
+    cutoff = today if before_timestamp is None else int(before_timestamp)
+    if cutoff <= 0 or cutoff % 86400 or cutoff > today:
+        raise ValueError('before_timestamp must be a closed UTC midnight, no later than today')
+    return cutoff
+
+
 def _usd(raw_value: str, decimals: int | None, price: float | None) -> Decimal | None:
     if int(raw_value) == 0:
         return Decimal(0)
@@ -27,11 +35,12 @@ def _usd(raw_value: str, decimals: int | None, price: float | None) -> Decimal |
 
 def create_analysis_run(conn, name: str, params: dict[str, Any] | None = None) -> int:
     cur = conn.execute(
-        "INSERT INTO analysis_runs (name, started_at, status, params_json) VALUES (?, ?, 'running', ?)",
+        "INSERT INTO analysis_runs (name, started_at, status, params_json) VALUES (?, ?, 'running', ?) RETURNING id",
         (name, int(time.time()), to_json(params or {})),
     )
+    run_id = int(cur.fetchone()[0])
     conn.commit()
-    return int(cur.lastrowid)
+    return run_id
 
 
 def complete_analysis_run(conn, run_id: int, status: str = "complete") -> None:
@@ -77,7 +86,11 @@ def run_lifetime_yield(
     conn,
     price_source: str = DEFAULT_PRICE_SOURCE,
     fallback_price_source: str | None = DEFAULT_FALLBACK_PRICE_SOURCE,
+    *,
+    before_timestamp: int | None = None,
 ) -> int:
+    if before_timestamp is not None:
+        before_timestamp = closed_cutoff(before_timestamp)
     if price_source not in SUPPORTED_SOURCES:
         raise ValueError(f"unsupported price source {price_source!r}")
     if fallback_price_source is not None and fallback_price_source not in SUPPORTED_SOURCES:
@@ -95,6 +108,7 @@ def run_lifetime_yield(
         {
             "price_source": price_source,
             "fallback_price_source": fallback_price_source,
+            "before_timestamp": before_timestamp,
         },
     )
     rows = conn.execute(
@@ -128,8 +142,9 @@ def run_lifetime_yield(
                 CASE p2.source {priority} ELSE {len(price_sources)} END
             LIMIT 1
          )
+        WHERE (CAST(? AS BIGINT) IS NULL OR r.block_timestamp < ?)
         """,
-        (*price_sources, *price_sources),
+        (*price_sources, *price_sources, before_timestamp, before_timestamp),
     ).fetchall()
 
     totals: dict[tuple[str, str], dict[str, Any]] = {}
@@ -393,9 +408,9 @@ def run_vault_fees(conn) -> int:
         {_selected_price_join("r")}
         WHERE r.version='v3'
           AND (
-            CAST(COALESCE(r.protocol_fees_raw, '0') AS INTEGER) > 0
-            OR CAST(COALESCE(r.total_fees_raw, '0') AS INTEGER) > 0
-            OR CAST(COALESCE(r.total_refunds_raw, '0') AS INTEGER) > 0
+            CAST(COALESCE(r.protocol_fees_raw, '0') AS NUMERIC) > 0
+            OR CAST(COALESCE(r.total_fees_raw, '0') AS NUMERIC) > 0
+            OR CAST(COALESCE(r.total_refunds_raw, '0') AS NUMERIC) > 0
           )
         ORDER BY r.chain_id, r.block_number, r.log_index
         """
@@ -454,7 +469,7 @@ def run_vault_fees(conn) -> int:
           ON v.chain_id = fe.chain_id AND v.address = fe.vault_address
         {_selected_price_join("fe")}
         WHERE fe.version='v2'
-          AND CAST(fe.fee_raw AS INTEGER) > 0
+          AND CAST(fe.fee_raw AS NUMERIC) > 0
         ORDER BY fe.chain_id, fe.block_number, fe.log_index
         """
     ).fetchall()

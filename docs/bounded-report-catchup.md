@@ -23,7 +23,7 @@ The command does not switch sources after a provider error.
 Set `FROM_BLOCK` and `TO_BLOCK` before you run this example:
 
 ```bash
-yearn-data --db data/yearn.sqlite catch-up --chain op \
+yearn-data --db neon catch-up --chain op \
   --from-block "$FROM_BLOCK" --to-block "$TO_BLOCK" --discover
 ```
 
@@ -39,7 +39,7 @@ Envio must also have processed the requested range when it is the selected sourc
 If the RPC finalized block is unavailable or stale, you can select a confirmation buffer:
 
 ```bash
-yearn-data --db data/yearn.sqlite catch-up --chain kat \
+yearn-data --db neon catch-up --chain kat \
   --from-block "$FROM_BLOCK" --to-block "$TO_BLOCK" --confirmations 1000
 ```
 

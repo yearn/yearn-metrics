@@ -11,8 +11,8 @@ from yearn_data.storage import connect, init_db
 
 
 @pytest.fixture
-def db(tmp_path):
-    conn = connect(tmp_path / 'runtime.sqlite')
+def db(postgres_database, tmp_path):
+    conn = connect('staging')
     init_db(conn)
     yield conn
     conn.close()

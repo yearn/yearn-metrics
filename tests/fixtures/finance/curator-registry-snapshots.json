@@ -1,0 +1,26 @@
+{
+  "snapshots": {
+    "legacy": {
+      "sourceUrl": "https://github.com/DefiLlama/DefiLlama-Adapters/blob/main/registries/curators.js",
+      "sourceSha256": "7f23eeb5c4c7e58c158efb12a5ed1afb7a2df305f9d2c0a4e35794b7b3dd291c",
+      "yearnEntrySha256": "d9cda556dc3ac4f8311120dd684a7b0b2aa88ad6b5fc3cccadafc1f9c9fc0404",
+      "yearnEntry": "  \"yearn-curating\": {\n    config: {\n      methodology: 'Counts all assets that are deposited in all vaults curated by Yearn.',\n      blockchains: {\n        ethereum: {\n          morphoVaultOwners: [\n            '0xFc5F89d29CCaa86e5410a7ad9D9d280d4455C12B',\n            '0x50B75d586929Ab2F75dC15f07E1B921b7C4Ba8fA',\n            '0x75a1253432356f90611546a487b5350CEF08780D',\n          ],\n        },\n        base: {\n          morphoVaultOwners: [\n            '0xFc5F89d29CCaa86e5410a7ad9D9d280d4455C12B',\n            '0x50b75d586929ab2f75dc15f07e1b921b7c4ba8fa',\n            '0x75a1253432356f90611546a487b5350CEF08780D',\n          ],\n        },\n        katana: {\n          morphoVaultOwners: [\n            '0xFc5F89d29CCaa86e5410a7ad9D9d280d4455C12B',\n            '0x518C21DC88D9780c0A1Be566433c571461A70149',\n            '0x50b75d586929ab2f75dc15f07e1b921b7c4ba8fa',\n            '0x75a1253432356f90611546a487b5350CEF08780D',\n          ],\n          // ausd: [  // already counted as part of yearn\n          //   '0x93Fec6639717b6215A48E5a72a162C50DCC40d68'\n          // ],\n          // morphoSushi: [\n          //   '0x9A6bd7B6Fd5C4F87eb66356441502fc7dCdd185B',\n          //   '0x8Fb1c10Ad4417EcA341a1D903Ff437d25ff87a4e',\n          //   '0xAa0362eCC584B985056E47812931270b99C91f9d',\n          //   '0x80c34BD3A3569E126e7055831036aa7b212cB159',\n          //   '0xE007CA01894c863d7898045ed5A3B4Abf0b18f37',\n          // ],\n        },\n        arbitrum: {\n          morphoVaultOwners: [\n            '0xFc5F89d29CCaa86e5410a7ad9D9d280d4455C12B',\n            '0x50b75d586929ab2f75dc15f07e1b921b7c4ba8fa',\n            '0x75a1253432356f90611546a487b5350CEF08780D',\n          ],\n        },\n        hyperliquid: {\n          morphoVaultOwners: [\n            '0xFc5F89d29CCaa86e5410a7ad9D9d280d4455C12B',\n            '0x50b75d586929ab2f75dc15f07e1b921b7c4ba8fa',\n            '0x75a1253432356f90611546a487b5350CEF08780D',\n          ],\n        },\n      }\n    },\n  },"
+    },
+    "current": {
+      "sourceUrl": "https://github.com/DefiLlama/DefiLlama-Adapters/blob/main/registries/curators.js",
+      "sourceSha256": "ba341896a16f189846fd315983b052c22bb19c0d65693bedd63634238bc1b67c",
+      "yearnEntrySha256": "e5b8492a2eea2f6b669937b1cf1efbcb71fda97bacc51511ad05681b0f2b0d47",
+      "yearnEntry": "  \"yearn-curating\": {\n    config: {\n      methodology: 'Counts all assets that are deposited in all vaults curated by Yearn.',\n      blockchains: {\n        ethereum: {\n          morphoVaultOwners: [\n            '0x0Dca0FDC170baA4CA9c1dCd37Ffe01f97bCfD504',\n            '0xFc5F89d29CCaa86e5410a7ad9D9d280d4455C12B',\n            '0x50B75d586929Ab2F75dC15f07E1B921b7C4Ba8fA',\n            '0x75a1253432356f90611546a487b5350CEF08780D',\n          ],\n        },\n        base: {\n          morphoVaultOwners: [\n            '0xFc5F89d29CCaa86e5410a7ad9D9d280d4455C12B',\n            '0x50b75d586929ab2f75dc15f07e1b921b7c4ba8fa',\n            '0x75a1253432356f90611546a487b5350CEF08780D',\n          ],\n        },\n        katana: {\n          morphoVaultOwners: [\n            '0xFc5F89d29CCaa86e5410a7ad9D9d280d4455C12B',\n            '0x518C21DC88D9780c0A1Be566433c571461A70149',\n            '0x50b75d586929ab2f75dc15f07e1b921b7c4ba8fa',\n            '0x75a1253432356f90611546a487b5350CEF08780D',\n          ],\n          // ausd: [  // already counted as part of yearn\n          //   '0x93Fec6639717b6215A48E5a72a162C50DCC40d68'\n          // ],\n          // morphoSushi: [\n          //   '0x9A6bd7B6Fd5C4F87eb66356441502fc7dCdd185B',\n          //   '0x8Fb1c10Ad4417EcA341a1D903Ff437d25ff87a4e',\n          //   '0xAa0362eCC584B985056E47812931270b99C91f9d',\n          //   '0x80c34BD3A3569E126e7055831036aa7b212cB159',\n          //   '0xE007CA01894c863d7898045ed5A3B4Abf0b18f37',\n          // ],\n        },\n        arbitrum: {\n          morphoVaultOwners: [\n            '0xFc5F89d29CCaa86e5410a7ad9D9d280d4455C12B',\n            '0x50b75d586929ab2f75dc15f07e1b921b7c4ba8fa',\n            '0x75a1253432356f90611546a487b5350CEF08780D',\n          ],\n        },\n        hyperliquid: {\n          morphoVaultOwners: [\n            '0xFc5F89d29CCaa86e5410a7ad9D9d280d4455C12B',\n            '0x50b75d586929ab2f75dc15f07e1b921b7c4ba8fa',\n            '0x75a1253432356f90611546a487b5350CEF08780D',\n          ],\n        },\n      }\n    },\n  },"
+    }
+  },
+  "verifiedHyperEvm": [
+    {
+      "address": "0x0fb7e41a0a85eb0bca55172b73942cc6685e2b2e",
+      "owner": "0xfc5f89d29ccaa86e5410a7ad9d9d280d4455c12b"
+    },
+    {
+      "address": "0x7bdb0f32cee4847407bfd391594e19b23f5519d0",
+      "owner": "0xfc5f89d29ccaa86e5410a7ad9d9d280d4455c12b"
+    }
+  ]
+}

@@ -1,16 +1,120 @@
+import pytest
+
+from eth_abi import encode as abi_encode
+
 from yearn_data.config import CHAINS
 from yearn_data.pricing import (
     _aave_atoken_price,
+    _balancer_bpt_price,
+    _curve_lp_price,
     _curve_pool_from_registry,
+    _erc4626_wrapper_price,
     _exchange_rate_wrapped_price,
+    fetch_defillama_prices_batch,
+    _yearn_v1_vault_price,
+    fetch_defillama_price,
     price_unpriced_reports,
     price_unpriced_volume,
 )
 from yearn_data.storage import connect, init_db, seed_chains
 
 
-def test_price_unpriced_reports_records_defillama_missing_without_fallback(monkeypatch, tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+class FakeResponse:
+    status_code = 200
+    headers = {}
+
+    def __init__(self, payload):
+        self.payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self.payload
+
+
+def test_defillama_batch_accepts_only_samples_within_twelve_hours(monkeypatch):
+    asset = "0x0000000000000000000000000000000000000002"
+    coin = f"ethereum:{asset}"
+
+    def fake_get(url, *, params, timeout):
+        assert url.endswith("/batchHistorical")
+        assert timeout == 30
+        return FakeResponse(
+            {
+                "coins": {
+                    coin: {
+                        "prices": [
+                            {"timestamp": 143_200, "price": 2.0},
+                            {"timestamp": 243_201, "price": 3.0},
+                        ]
+                    }
+                }
+            }
+        )
+
+    monkeypatch.setattr("yearn_data.pricing.requests.get", fake_get)
+
+    results = fetch_defillama_prices_batch([(1, asset, 100_000), (1, asset, 200_000)])
+
+    accepted = results[(1, asset, 100_000)]
+    rejected = results[(1, asset, 200_000)]
+    assert accepted[0:2] == (2.0, "ok")
+    assert accepted[2]["matched_offset_seconds"] == 43_200
+    assert accepted[2]["maximum_accepted_offset_seconds"] == 43_200
+    assert rejected[0:2] == (None, "missing")
+
+
+def test_defillama_batch_can_reuse_an_observation_for_nearby_reports(monkeypatch):
+    asset = "0x0000000000000000000000000000000000000002"
+    coin = f"ethereum:{asset}"
+
+    monkeypatch.setattr(
+        "yearn_data.pricing.requests.get",
+        lambda *args, **kwargs: FakeResponse(
+            {"coins": {coin: {"prices": [{"timestamp": 1_500, "price": 2.0}]}}}
+        ),
+    )
+
+    results = fetch_defillama_prices_batch([(1, asset, 1_000), (1, asset, 2_000)])
+
+    assert results[(1, asset, 1_000)][0:2] == (2.0, "ok")
+    assert results[(1, asset, 2_000)][0:2] == (2.0, "ok")
+
+
+def test_fetch_defillama_price_retries_rate_limit(monkeypatch):
+    coin = "ethereum:0x0000000000000000000000000000000000000001"
+    responses = [
+        type("Response", (), {"status_code": 429, "headers": {"Retry-After": "0"}})(),
+        type(
+            "Response",
+            (),
+            {
+                "status_code": 200,
+                "headers": {},
+                "raise_for_status": lambda self: None,
+                "json": lambda self: {"coins": {coin: {"prices": [{"timestamp": 100, "price": 1.25}]}}},
+            },
+        )(),
+    ]
+    calls = []
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append((url, params, timeout))
+        return responses.pop(0)
+
+    monkeypatch.setattr("yearn_data.pricing.requests.get", fake_get)
+    monkeypatch.setattr("yearn_data.pricing.time.sleep", lambda _: None)
+
+    price, status, _ = fetch_defillama_price(1, coin.split(":", 1)[1], 100)
+
+    assert price == 1.25
+    assert status == "ok"
+    assert len(calls) == 2
+
+
+def test_price_unpriced_reports_records_defillama_missing_without_fallback(postgres_database, monkeypatch, tmp_path):
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     conn.execute(
@@ -41,8 +145,8 @@ def test_price_unpriced_reports_records_defillama_missing_without_fallback(monke
     assert row["status"] == "error"
 
 
-def test_price_unpriced_volume_uses_flow_tables(monkeypatch, tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+def test_price_unpriced_volume_uses_flow_tables(postgres_database, monkeypatch, tmp_path):
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     conn.execute(
@@ -74,8 +178,8 @@ def test_price_unpriced_volume_uses_flow_tables(monkeypatch, tmp_path):
     assert row["status"] == "ok"
 
 
-def test_price_unpriced_volume_can_retry_missing_with_polygon_stable_fallback(monkeypatch, tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+def test_price_unpriced_volume_can_retry_missing_with_polygon_stable_fallback(postgres_database, monkeypatch, tmp_path):
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     usdt = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
@@ -131,8 +235,8 @@ def test_price_unpriced_volume_can_retry_missing_with_polygon_stable_fallback(mo
     assert "canonical_polygon_stable_fallback" in row["raw_json"]
 
 
-def test_price_unpriced_reports_retries_missing_with_v3_alias(monkeypatch, tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+def test_price_unpriced_reports_retries_missing_with_v3_alias(postgres_database, monkeypatch, tmp_path):
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     usdt = "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9"
@@ -183,8 +287,8 @@ def test_price_unpriced_reports_retries_missing_with_v3_alias(monkeypatch, tmp_p
     assert "canonical_arbitrum_stable_fallback" in row["raw_json"]
 
 
-def test_price_unpriced_reports_uses_curve_lp_fallback(monkeypatch, tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+def test_price_unpriced_reports_uses_curve_lp_fallback(postgres_database, monkeypatch, tmp_path):
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     lp = "0x06325440D014e39736583c165C2963BA99fAf14E"
@@ -307,8 +411,221 @@ def test_aave_atoken_price_uses_underlying_value(monkeypatch):
     assert payload["source"] == "aave_atoken_fallback"
 
 
-def test_price_unpriced_reports_uses_crv_derivative_fallback(monkeypatch, tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+def test_yearn_v1_vault_price_uses_historical_share_price(monkeypatch):
+    token = "0x00000000000000000000000000000000000000b0"
+    underlying = "0x00000000000000000000000000000000000000d0"
+
+    monkeypatch.setattr(
+        "yearn_data.pricing._call_address",
+        lambda chain_id, address, signature, block_number, args_hex="": (
+            underlying if address == token and signature == "token()" else None
+        ),
+    )
+    monkeypatch.setattr(
+        "yearn_data.pricing._call_uint256",
+        lambda chain_id, address, signature, block_number, args_hex="": (
+            1_025_000_000_000_000_000
+            if address == token and signature == "getPricePerFullShare()"
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        "yearn_data.pricing._direct_or_alias_price",
+        lambda *args: (1.0, {"source": "canonical_stable"}),
+    )
+
+    price, payload = _yearn_v1_vault_price(1, token, 100, 10)
+
+    assert price == 1.025
+    assert payload["source"] == "yearn_v1_vault_fallback"
+
+
+def test_curve_lp_price_fails_closed_when_reserve_is_unpriced(monkeypatch):
+    _curve_lp_price.cache_clear()
+    lp = "0x00000000000000000000000000000000000000aa"
+    pool = "0x00000000000000000000000000000000000000ab"
+    stable = "0x0000000000000000000000000000000000000001"
+    unknown = "0x0000000000000000000000000000000000000002"
+
+    def fake_address(chain_id, address, signature, block_number, args_hex="", **kwargs):
+        if address.lower() == lp and signature == "minter()":
+            return pool
+        if address.lower() == pool and signature == "coins(uint256)":
+            return [stable, unknown][int(args_hex, 16)] if int(args_hex, 16) < 2 else None
+        return None
+
+    def fake_uint(chain_id, address, signature, block_number, args_hex=""):
+        if address.lower() == lp and signature == "decimals()":
+            return 18
+        if address.lower() == lp and signature == "totalSupply()":
+            return 1000 * 10**18
+        if address.lower() == pool and signature == "balances(uint256)":
+            return [100 * 10**6, 5 * 10**18][int(args_hex, 16)]
+        if signature == "decimals()":
+            return 6 if address.lower() == stable else 18
+        return None
+
+    monkeypatch.setattr("yearn_data.pricing._call_address", fake_address)
+    monkeypatch.setattr("yearn_data.pricing._call_uint256", fake_uint)
+    monkeypatch.setattr(
+        "yearn_data.pricing._resolve_reserve_price",
+        lambda chain_id, address, timestamp, block_number, depth: (
+            (1.0, {"source": "stable"})
+            if address.lower() == stable
+            else (None, {"source": "missing"})
+        ),
+    )
+
+    price, payload = _curve_lp_price(1, lp, 100, 10)
+
+    assert price is None
+    assert payload["status"] == "missing_reserve_price"
+    assert payload["missing_reserves"][0]["coin"].lower() == unknown
+    _curve_lp_price.cache_clear()
+
+
+def test_erc4626_wrapper_price_uses_convert_to_assets(monkeypatch):
+    token = "0x00000000000000000000000000000000000000e0"
+    underlying = "0x00000000000000000000000000000000000000e1"
+
+    def fake_address(chain_id, address, signature, block_number, args_hex="", **kwargs):
+        if address.lower() == token and signature == "asset()":
+            return underlying
+        return None
+
+    def fake_uint(chain_id, address, signature, block_number, args_hex=""):
+        if signature == "decimals()":
+            return 18
+        if address.lower() == token and signature == "convertToAssets(uint256)":
+            return 105 * 10**16
+        return None
+
+    monkeypatch.setattr("yearn_data.pricing._call_address", fake_address)
+    monkeypatch.setattr("yearn_data.pricing._call_uint256", fake_uint)
+    monkeypatch.setattr(
+        "yearn_data.pricing._resolve_reserve_price",
+        lambda *args: (2.0, {"source": "underlying"}),
+    )
+
+    price, payload = _erc4626_wrapper_price(1, token, 100, 10)
+
+    assert price == 2.1
+    assert payload["rate_method"] == "convertToAssets(uint256)"
+
+
+def test_wrapper_price_uses_normalized_get_rate(monkeypatch):
+    token = "0x00000000000000000000000000000000000000e0"
+    underlying = "0x00000000000000000000000000000000000000e1"
+
+    monkeypatch.setattr(
+        "yearn_data.pricing._call_address",
+        lambda chain_id, address, signature, block_number, args_hex="": (
+            underlying if address.lower() == token and signature == "asset()" else None
+        ),
+    )
+
+    def fake_uint(chain_id, address, signature, block_number, args_hex=""):
+        if address.lower() == token and signature == "decimals()":
+            return 18
+        if address.lower() == underlying and signature == "decimals()":
+            return 6
+        if address.lower() == token and signature == "getRate()":
+            return 1_010_000_000_000_000_000
+        return None
+
+    monkeypatch.setattr("yearn_data.pricing._call_uint256", fake_uint)
+    monkeypatch.setattr(
+        "yearn_data.pricing._resolve_reserve_price",
+        lambda *args: (1.0, {"source": "stable"}),
+    )
+
+    price, payload = _erc4626_wrapper_price(1, token, 100, 10)
+
+    assert price == 1.01
+    assert payload["rate_method"] == "getRate()"
+
+
+def test_balancer_bpt_price_uses_actual_supply_for_phantom_pool(monkeypatch):
+    bpt = "0x00000000000000000000000000000000000000f0"
+    stable = "0x0000000000000000000000000000000000000001"
+    pool_id = "0x" + "ab" * 32
+
+    def fake_eth_call(chain_id, address, data, block_number, timeout=30):
+        if address.lower() == bpt:
+            return pool_id
+        return "0x" + abi_encode(
+            ["address[]", "uint256[]", "uint256"],
+            ([stable, bpt], [100 * 10**6, 700 * 10**18], 1),
+        ).hex()
+
+    def fake_uint(chain_id, address, signature, block_number, args_hex=""):
+        if address.lower() == bpt and signature == "decimals()":
+            return 18
+        if address.lower() == bpt and signature == "totalSupply()":
+            return 10**30
+        if address.lower() == bpt and signature == "getActualSupply()":
+            return 100 * 10**18
+        if address.lower() == stable and signature == "decimals()":
+            return 6
+        return None
+
+    monkeypatch.setattr("yearn_data.pricing._eth_call", fake_eth_call)
+    monkeypatch.setattr("yearn_data.pricing._call_uint256", fake_uint)
+    monkeypatch.setattr(
+        "yearn_data.pricing._resolve_reserve_price",
+        lambda *args: (1.0, {"source": "stable"}),
+    )
+
+    price, payload = _balancer_bpt_price(1, bpt, 100, 10)
+
+    assert price == 1.0
+    assert payload["supply_method"] == "getActualSupply()"
+
+
+@pytest.mark.parametrize('source', ['defillama', 'yearn-prices'])
+def test_refresh_onchain_fallbacks_uses_adapter_provenance_without_widening_retries(postgres_database, monkeypatch, source):
+    import json
+    from yearn_data import pricing
+    conn = connect('staging'); init_db(conn); seed_chains(conn, CHAINS)
+    tokens = ['0x'+f'{index:040x}' for index in range(2, 7)]
+    # Adapter result, provider alias, permanent miss, closed pending, open pending.
+    for index, token in enumerate(tokens):
+        conn.execute("""INSERT INTO strategy_reports
+            (chain_id,version,vault_address,strategy_address,tx_hash,log_index,
+             block_number,block_timestamp,asset,asset_decimals,gain_raw,loss_raw,net_raw)
+            VALUES (1,'v2',?,? ,?,0,10,?,?,18,'1','0','1')""",
+            (tokens[0],tokens[1],f'0x{index}',100+index,token))
+        payload = ({'source':'curve_lp_balance_fallback'} if index == 0 else
+                   {'fallback_coin':'coingecko:ethereum','fallback_payload':{'price':3}})
+        conn.execute("INSERT INTO prices VALUES (1,?,?,10,'defillama',0.5,?,?)",
+                     (token,100+index,'missing' if index == 2 else 'ok',json.dumps(payload)))
+        conn.execute("INSERT INTO prices VALUES (1,?,?,10,'yearn-prices',1,?, '{}')",
+                     (token,100+index,('ok','ok','missing','pending','pending')[index]))
+    conn.commit()
+    monkeypatch.setattr(pricing.time, 'time', lambda:86400)
+    # Move only the final pending timestamp into the current (unclosed) day.
+    conn.execute('UPDATE strategy_reports SET block_timestamp=86400 WHERE asset=?',(tokens[4],))
+    conn.execute('UPDATE prices SET timestamp=86400 WHERE token_address=?',(tokens[4],)); conn.commit()
+    provider_calls=[]; primary_calls=[]
+    def provider(requests_):
+        provider_calls.extend(requests_)
+        return {target:(2.0,'ok',{'source':'defillama'}) for target in requests_}
+    def primary(database, rows):
+        primary_calls.extend((r['asset'],r['block_timestamp']) for r in rows)
+        return 0, []
+    monkeypatch.setattr(pricing, 'fetch_defillama_prices_batch', provider)
+    monkeypatch.setattr(pricing, '_price_rows_with_yearn_prices', primary)
+    assert price_unpriced_reports(conn, source=source, refresh_onchain_fallbacks=True) == 1
+    assert provider_calls == [(1,tokens[0],100)]
+    assert primary_calls == ([(tokens[3],103)] if source == 'yearn-prices' else [])
+    quotes = {r['token_address']:r for r in conn.execute("SELECT * FROM prices WHERE source='defillama'")}
+    assert quotes[tokens[0]]['price_usd'] == 2
+    assert quotes[tokens[1]]['price_usd'] == 0.5
+    assert 'fallback_coin' in json.loads(quotes[tokens[1]]['raw_json'])
+
+
+def test_price_unpriced_reports_uses_crv_derivative_fallback(postgres_database, monkeypatch, tmp_path):
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     ycrv = "0xFCc5c47bE19d06BF83eB04298b026F81069ff65b"
@@ -356,3 +673,203 @@ def test_price_unpriced_reports_uses_crv_derivative_fallback(monkeypatch, tmp_pa
     assert row["price_usd"] == 0.42
     assert row["status"] == "ok"
     assert "curve_get_dy_fallback" in row["raw_json"]
+
+
+@pytest.mark.parametrize("adapter", [_curve_lp_price, _balancer_bpt_price])
+@pytest.mark.parametrize("reserve_decimals", [None, 0, 6])
+def test_reserve_decimals_must_be_known(monkeypatch, adapter, reserve_decimals):
+    lp = "0x00000000000000000000000000000000000000aa"
+    reserve = "0x0000000000000000000000000000000000000001"
+    balance = 100 * 10 ** (reserve_decimals if reserve_decimals is not None else 6)
+
+    def fake_address(chain_id, address, signature, block_number, args_hex="", **kwargs):
+        if signature == "minter()":
+            return lp
+        if signature == "coins(uint256)" and int(args_hex, 16) == 0:
+            return reserve
+        return None
+
+    def fake_uint(chain_id, address, signature, block_number, args_hex=""):
+        if signature == "decimals()":
+            return 18 if address.lower() == lp else reserve_decimals
+        if signature == "totalSupply()":
+            return 100 * 10**18
+        if signature == "balances(uint256)":
+            return balance
+        return None
+
+    def fake_eth_call(chain_id, address, data, block_number):
+        if address.lower() == lp:
+            return "0x" + "ab" * 32
+        return "0x" + abi_encode(
+            ["address[]", "uint256[]", "uint256"], ([reserve], [balance], 1)
+        ).hex()
+
+    monkeypatch.setattr("yearn_data.pricing._call_address", fake_address)
+    monkeypatch.setattr("yearn_data.pricing._call_uint256", fake_uint)
+    monkeypatch.setattr("yearn_data.pricing._eth_call", fake_eth_call)
+    monkeypatch.setattr("yearn_data.pricing._resolve_reserve_price", lambda *args: (1.0, {}))
+    _curve_lp_price.cache_clear()
+    try:
+        price, payload = adapter(1, lp, 100, 10)
+        if reserve_decimals is None:
+            assert price is None
+            assert payload["missing_reserves"][0]["reason"] == "missing_decimals"
+        else:
+            assert price == 1.0
+    finally:
+        _curve_lp_price.cache_clear()
+
+
+@pytest.mark.parametrize("balance_getter", ["balances(uint256)", "balances(int128)"])
+def test_curve_zero_balance_does_not_require_valuation(monkeypatch, balance_getter):
+    lp = "0x00000000000000000000000000000000000000aa"
+    funded = "0x0000000000000000000000000000000000000001"
+    empty = "0x0000000000000000000000000000000000000002"
+
+    def fake_address(chain_id, address, signature, block_number, args_hex="", **kwargs):
+        if signature == "minter()":
+            return lp
+        if signature == "coins(uint256)":
+            idx = int(args_hex, 16)
+            return [funded, empty][idx] if idx < 2 else None
+        return None
+
+    def fake_uint(chain_id, address, signature, block_number, args_hex=""):
+        if signature == "decimals()":
+            assert address.lower() != empty
+            return 18
+        if signature == "totalSupply()":
+            return 100 * 10**18
+        if signature == balance_getter:
+            return [100 * 10**18, 0][int(args_hex, 16)]
+        return None
+
+    def reserve_price(chain_id, address, *args):
+        assert address.lower() == funded
+        return 1.0, {}
+
+    monkeypatch.setattr("yearn_data.pricing._call_address", fake_address)
+    monkeypatch.setattr("yearn_data.pricing._call_uint256", fake_uint)
+    monkeypatch.setattr("yearn_data.pricing._resolve_reserve_price", reserve_price)
+    _curve_lp_price.cache_clear()
+    try:
+        price, _ = _curve_lp_price(1, lp, 100, 10)
+        assert price == 1.0
+    finally:
+        _curve_lp_price.cache_clear()
+
+
+def test_yearn_only_missing_price_never_calls_optional_adapters(postgres_database, tmp_path, monkeypatch):
+    from yearn_data import pricing
+    conn = connect('staging')
+    init_db(conn)
+    asset = '0x' + '2' * 40
+    conn.execute('''INSERT INTO strategy_reports (
+        chain_id,version,vault_address,strategy_address,tx_hash,log_index,
+        block_number,block_timestamp,asset,asset_decimals,gain_raw,loss_raw,net_raw,extra_json)
+        VALUES (1,'v3',?,?, '0xabc',0,10,100,?,6,'1','0','1','{}')''', (asset, asset, asset))
+    monkeypatch.setattr(pricing, 'fetch_yearn_prices_batch', lambda _: {})
+    monkeypatch.setattr(pricing, 'fetch_yearn_price', lambda *a: (None, 'missing', {}))
+    def forbidden(*args, **kwargs):
+        pytest.fail('Yearn-only pricing called an optional provider or adapter')
+    monkeypatch.setattr(pricing, 'fetch_defillama_prices_batch', forbidden)
+    monkeypatch.setattr(pricing, '_row_level_fallback_price', forbidden)
+    assert pricing.price_unpriced_reports(conn, fallback=None, onchain_fallbacks=False) == 1
+    assert tuple(conn.execute('SELECT source,status,price_usd FROM prices').fetchone()) == ('yearn-prices', 'missing', None)
+
+
+def test_exhausted_defillama_target_does_not_abort_other_targets(postgres_database, tmp_path, monkeypatch):
+    from yearn_data import pricing
+    conn = connect('staging')
+    init_db(conn)
+    asset = '0x' + '2' * 40
+    for timestamp in (100, 200):
+        conn.execute("""INSERT INTO strategy_reports (
+            chain_id,version,vault_address,strategy_address,tx_hash,log_index,
+            block_number,block_timestamp,asset,asset_decimals,gain_raw,loss_raw,net_raw)
+            VALUES (1,'v3',?,?,?,0,1,?,?,6,'1','0','1')""", (asset, asset, str(timestamp), timestamp, asset))
+    def failed_batch(*args, **kwargs):
+        raise pricing.requests.Timeout('batch unavailable')
+    def exact(chain, token, timestamp):
+        if timestamp == 100:
+            raise pricing.requests.Timeout('target unavailable')
+        return 2.0, 'ok', {'timestamp': timestamp}
+    monkeypatch.setattr(pricing, 'fetch_defillama_prices_batch', failed_batch)
+    monkeypatch.setattr(pricing, 'fetch_defillama_price', exact)
+    pricing.price_unpriced_reports(conn, source='defillama', fallback=None, onchain_fallbacks=False)
+    rows = conn.execute('SELECT price_usd,status FROM prices ORDER BY timestamp').fetchall()
+    assert [tuple(row) for row in rows] == [(None, 'retryable'), (2.0, 'ok')]
+
+
+@pytest.mark.parametrize('operation', [price_unpriced_reports, price_unpriced_volume])
+def test_adapter_refresh_cannot_bypass_yearn_only_policy(operation):
+    with pytest.raises(ValueError, match='requires DefiLlama provider fallback'):
+        operation(None, source='yearn-prices', fallback=None, onchain_fallbacks=False,
+                  refresh_onchain_fallbacks=True)
+
+
+def test_volume_adapter_refresh_preserves_alias_quotes_chain_filter_and_target_limit(postgres_database, monkeypatch):
+    import json
+    from yearn_data import pricing
+    conn = connect('staging'); init_db(conn); seed_chains(conn, CHAINS)
+    records = [(10,99,'curve_lp_balance_fallback'), (1,100,'curve_lp_balance_fallback'),
+               (1,101,None), (1,102,'balancer_bpt_fallback')]
+    tokens = ['0x'+f'{index:040x}' for index in range(10,14)]
+    for index, (chain,timestamp,adapter) in enumerate(records):
+        payload = {'source':adapter} if adapter else {'fallback_coin':'coingecko:ethereum'}
+        conn.execute("""INSERT INTO vault_flows
+            (chain_id,version,vault_address,direction,tx_hash,log_index,block_number,
+             block_timestamp,asset,asset_decimals,assets_raw,shares_raw,decoded_json)
+            VALUES (?,'v3',?,'deposit',?,0,10,?,?,6,'1','1','{}')""",
+            (chain,tokens[0],f'0x{index}',timestamp,tokens[index]))
+        conn.execute("INSERT INTO prices VALUES (?,?,?,10,'defillama',0.5,'ok',?)",
+                     (chain,tokens[index],timestamp,json.dumps(payload)))
+    conn.commit()
+    calls=[]
+    def provider(requests_):
+        calls.extend(requests_)
+        return {target:(2.0,'ok',{'source':'defillama'}) for target in requests_}
+    monkeypatch.setattr(pricing, 'fetch_defillama_prices_batch', provider)
+    assert price_unpriced_volume(conn, refresh_onchain_fallbacks=True, chain_ids={1}, limit=1) == 1
+    assert calls == [(1,tokens[1],100)]
+    assert [r[0] for r in conn.execute('SELECT price_usd FROM prices ORDER BY timestamp')] == [0.5,2,0.5,0.5]
+
+
+@pytest.mark.parametrize('failure', ['transport','rpc','abi','complete','alternate'])
+def test_curve_reserve_enumeration_failure_cannot_accept_partial_price(monkeypatch,failure):
+    from eth_abi import encode
+    from yearn_data import pricing
+    lp='0x'+'a'*40;pool='0x'+'b'*40;coin='0x'+'c'*40
+    from types import SimpleNamespace
+    def post(url,json,timeout):
+        data=json['params'][0]['data']
+        result=None
+        if data==pricing._selector('minter()'):
+            result='0x'+encode(['address'],[pool]).hex()
+        elif data==pricing._selector('decimals()'):
+            result='0x'+encode(['uint256'],[18]).hex()
+        elif data==pricing._selector('totalSupply()') or data.startswith(pricing._selector('balances(uint256)')):
+            result='0x'+encode(['uint256'],[100*10**18]).hex()
+        elif data.startswith(pricing._selector('coins(uint256)')):
+            index=int(data[-64:],16)
+            if index==0 and failure!='alternate':result='0x'+encode(['address'],[coin]).hex()
+            elif failure=='transport':raise pricing.requests.Timeout('private RPC detail')
+            elif failure=='rpc':
+                return SimpleNamespace(raise_for_status=lambda:None,json=lambda:{
+                    'error':{'code':-32005,'message':'private RPC rate limit'}})
+            elif failure=='abi':result='0x01'
+        elif data.startswith(pricing._selector('coins(int128)')) and failure=='alternate' and int(data[-64:],16)==0:
+            result='0x'+encode(['address'],[coin]).hex()
+        body={'result':result} if result is not None else {
+            'error':{'code':3,'message':'execution reverted'}}
+        return SimpleNamespace(raise_for_status=lambda:None,json=lambda:body)
+    monkeypatch.setattr(pricing.requests,'post',post)
+    monkeypatch.setattr(pricing,'get_rpc_url',lambda chain:'offline-test')
+    monkeypatch.setattr(pricing,'_resolve_reserve_price',lambda *a:(1,{}))
+    pricing._curve_lp_price.cache_clear()
+    try:
+        price,payload=pricing._curve_lp_price(1,lp,100,10)
+        assert price==(1 if failure in ('complete','alternate') else None)
+        assert 'private' not in str(payload)
+    finally:pricing._curve_lp_price.cache_clear()

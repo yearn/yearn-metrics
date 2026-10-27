@@ -8,8 +8,11 @@ from yearn_data.incident_adjustments import adjustment_for_tx
 from yearn_data.storage import connect, from_json, init_db, seed_chains
 
 
-def test_lifetime_yield_uses_net_gain_minus_loss(tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+def test_lifetime_yield_uses_net_gain_minus_loss(postgres_database, tmp_path):
+    assert_lifetime_yield_amounts(connect('staging'))
+
+
+def assert_lifetime_yield_amounts(conn):
     init_db(conn)
     seed_chains(conn, CHAINS)
     conn.execute(
@@ -56,8 +59,74 @@ def test_lifetime_yield_uses_net_gain_minus_loss(tmp_path):
     assert output["priced_reports"] == 1
 
 
-def test_lifetime_yield_selects_and_records_requested_price_source(tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+def test_lifetime_yield_includes_active_and_retired_vault_reports(postgres_database, tmp_path):
+    conn = connect('staging')
+    init_db(conn)
+    seed_chains(conn, CHAINS)
+    asset = "0x0000000000000000000000000000000000000002"
+    cases = [
+        ("0xactive", "v3", 1, "1000000", "0", "1000000", 100),
+        ("0xretired", "v2", 0, "5000000", "1000000", "4000000", 101),
+        ("0xunpriced", "v3", 0, "3000000", "0", "3000000", 102),
+    ]
+    for address, version, active, gain, loss, net, timestamp in cases:
+        conn.execute(
+            """
+            INSERT INTO vaults (chain_id, version, address, asset, asset_decimals, active, updated_at)
+            VALUES (1, ?, ?, ?, 6, ?, 1)
+            """,
+            (version, address, asset, active),
+        )
+        conn.execute(
+            """
+            INSERT INTO strategy_reports (
+                chain_id, version, vault_address, strategy_address, tx_hash, log_index,
+                block_number, block_timestamp, asset, asset_decimals, gain_raw, loss_raw, net_raw
+            ) VALUES (1, ?, ?, '0xstrategy', ?, 0, 10, ?, ?, 6, ?, ?, ?)
+            """,
+            (version, address, address, timestamp, asset, gain, loss, net),
+        )
+    conn.executemany(
+        """
+        INSERT INTO prices (chain_id, token_address, timestamp, source, price_usd, status)
+        VALUES (1, ?, ?, 'yearn-prices', 2.0, 'ok')
+        """,
+        [(asset, 100), (asset, 101)],
+    )
+    conn.commit()
+
+    run_id = run_lifetime_yield(conn, fallback_price_source=None)
+    summary = from_json(
+        conn.execute(
+            "SELECT row_json FROM analysis_outputs WHERE run_id=? AND name='total_yield_summary'",
+            (run_id,),
+        ).fetchone()["row_json"]
+    )
+    assert summary["reports"] == 3
+    assert summary["priced_reports"] == 2
+    assert summary["unpriced_reports"] == 1
+    assert Decimal(summary["gross_gain_usd"]) == Decimal("12")
+    assert Decimal(summary["loss_usd"]) == Decimal("2")
+    assert Decimal(summary["net_yield_usd"]) == Decimal("10")
+    report_rows = conn.execute(
+        "SELECT row_json FROM analysis_outputs WHERE run_id=? AND name='reports'", (run_id,)
+    )
+    outputs = [from_json(row["row_json"]) for row in report_rows]
+    reports = {row["vault_address"]: row for row in outputs}
+    assert set(reports) == {case[0] for case in cases}
+    assert reports["0xunpriced"]["net_yield_usd"] is None
+    assert reports["0xunpriced"]["valuation_status"] == "missing_price"
+    vaults = [
+        from_json(row["row_json"])
+        for row in conn.execute(
+            "SELECT row_json FROM analysis_outputs WHERE run_id=? AND name='yield_by_vault'", (run_id,)
+        )
+    ]
+    assert {row["vault_address"] for row in vaults} == set(reports)
+
+
+def test_lifetime_yield_selects_and_records_requested_price_source(postgres_database, tmp_path):
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     asset = "0x0000000000000000000000000000000000000002"
@@ -112,6 +181,7 @@ def test_lifetime_yield_selects_and_records_requested_price_source(tmp_path):
     assert params == {
         "price_source": "yearn-prices",
         "fallback_price_source": "defillama",
+        "before_timestamp": None,
     }
     summary = from_json(
         conn.execute(
@@ -135,8 +205,8 @@ def test_lifetime_yield_selects_and_records_requested_price_source(tmp_path):
     assert report["price_adapter"] == "batchHistorical"
 
 
-def test_lifetime_yield_falls_back_to_defillama_when_yearn_prices_is_missing(tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+def test_lifetime_yield_falls_back_to_defillama_when_yearn_prices_is_missing(postgres_database, tmp_path):
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     asset = "0x0000000000000000000000000000000000000002"
@@ -194,18 +264,18 @@ def test_lifetime_yield_falls_back_to_defillama_when_yearn_prices_is_missing(tmp
             assert "price_source" not in output
 
 
-def test_lifetime_yield_excludes_known_incident_adjustments(tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+def test_lifetime_yield_excludes_known_incident_adjustments(postgres_database, tmp_path):
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     conn.execute(
         """
         INSERT INTO vaults (
             chain_id, version, address, asset, asset_symbol, asset_decimals,
-            updated_at
+            active, updated_at
         )
         VALUES (1, 'v2', '0x0000000000000000000000000000000000000001',
-                '0x0000000000000000000000000000000000000002', 'DAI', 18, 1)
+                '0x0000000000000000000000000000000000000002', 'DAI', 18, 0, 1)
         """
     )
     reports = [
@@ -271,8 +341,8 @@ def test_lifetime_yield_excludes_known_incident_adjustments(tmp_path):
     assert all(row["is_adjusted"] for row in outputs)
 
 
-def test_vault_volume_sums_user_and_strategy_gross_flows(tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+def test_vault_volume_sums_user_and_strategy_gross_flows(postgres_database, tmp_path):
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     conn.execute(
@@ -344,8 +414,11 @@ def test_vault_volume_sums_user_and_strategy_gross_flows(tmp_path):
     assert Decimal(output["gross_total_volume_usd"]) == Decimal("3.750")
 
 
-def test_vault_fees_uses_v3_report_fee_fields(tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+@pytest.mark.parametrize('protocol_raw,total_raw,refunds_raw', [
+    (1000000,2500000,500000), (10**18,0,0), (0,10**18,0), (0,0,10**18),
+])
+def test_vault_fees_uses_v3_report_fee_fields(postgres_database, tmp_path,protocol_raw,total_raw,refunds_raw):
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     conn.execute(
@@ -369,9 +442,9 @@ def test_vault_fees_uses_v3_report_fee_fields(tmp_path):
         VALUES (1, 'v3', '0x0000000000000000000000000000000000000001',
                 '0x0000000000000000000000000000000000000003',
                 '0xabc', 0, 10, 100, '0x0000000000000000000000000000000000000002',
-                6, '10000000', '0', '10000000', '0', '1000000', '2500000',
-                '500000', '{}')
-        """
+                6, '10000000', '0', '10000000', '0', ?, ?, ?, '{}')
+        """,
+        (str(protocol_raw),str(total_raw),str(refunds_raw)),
     )
     conn.execute(
         """
@@ -388,14 +461,15 @@ def test_vault_fees_uses_v3_report_fee_fields(tmp_path):
     ).fetchone()
     output = from_json(row["row_json"])
     assert output["events"] == 1
-    assert Decimal(output["v3_protocol_fees_usd"]) == Decimal("2.00")
-    assert Decimal(output["v3_total_fees_usd"]) == Decimal("5.00")
-    assert Decimal(output["v3_total_refunds_usd"]) == Decimal("1.00")
-    assert Decimal(output["total_fees_usd"]) == Decimal("5.00")
+    assert Decimal(output["v3_protocol_fees_usd"]) == Decimal(protocol_raw)*2/10**6
+    assert Decimal(output["v3_total_fees_usd"]) == Decimal(total_raw)*2/10**6
+    assert Decimal(output["v3_total_refunds_usd"]) == Decimal(refunds_raw)*2/10**6
+    assert Decimal(output["total_fees_usd"]) == Decimal(total_raw)*2/10**6
 
 
-def test_vault_fees_infers_v2_same_tx_share_mints(tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+@pytest.mark.parametrize('fee_raw',['3000000000000000000',str(2**255)])
+def test_vault_fees_infers_v2_same_tx_share_mints(postgres_database, tmp_path,fee_raw):
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     conn.execute(
@@ -433,9 +507,9 @@ def test_vault_fees_infers_v2_same_tx_share_mints(tmp_path):
                 '0x0000000000000000000000000000000000000003',
                 '0x0000000000000000000000000000000000000004',
                 '0xabc', 6, 10, 100, '0x0000000000000000000000000000000000000002',
-                18, '3000000000000000000', '3000000000000000000',
+                18, ?, ?,
                 '{"from":"0x0000000000000000000000000000000000000000","to":"0x0000000000000000000000000000000000000004","source_event":"Transfer"}')
-        """
+        """, (fee_raw,fee_raw)
     )
     conn.execute(
         """
@@ -452,8 +526,9 @@ def test_vault_fees_infers_v2_same_tx_share_mints(tmp_path):
     ).fetchone()
     output = from_json(row["row_json"])
     assert output["events"] == 1
-    assert Decimal(output["v2_fee_mint_usd"]) == Decimal("4.50")
-    assert Decimal(output["total_fees_usd"]) == Decimal("4.50")
+    expected=Decimal(fee_raw)/Decimal(10**18)*Decimal('1.5')
+    assert Decimal(output["v2_fee_mint_usd"]) == expected
+    assert Decimal(output["total_fees_usd"]) == expected
 
     event_row = conn.execute(
         "SELECT row_json FROM analysis_outputs WHERE run_id=? AND name='fee_events'",
@@ -464,8 +539,8 @@ def test_vault_fees_infers_v2_same_tx_share_mints(tmp_path):
     assert event["recipient"] == "0x0000000000000000000000000000000000000004"
 
 
-def test_zero_amount_report_does_not_require_a_price(tmp_path):
-    conn = connect(tmp_path / "test.sqlite")
+def test_zero_amount_report_does_not_require_a_price(postgres_database, tmp_path):
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     conn.execute(
@@ -530,9 +605,10 @@ def test_yrecover_loss_is_an_incident_adjustment():
     ],
 )
 def test_lifetime_yield_counts_complete_valuations_without_vault_metadata(
+    postgres_database,
     tmp_path, tx_hash, gain, loss, net, decimals, price, expected_status, expected_priced
 ):
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     asset = "0x0000000000000000000000000000000000000002"
@@ -575,9 +651,10 @@ def test_lifetime_yield_counts_complete_valuations_without_vault_metadata(
 @pytest.mark.parametrize("price", [None, 2.0])
 @pytest.mark.parametrize("protocol_fees,refunds", [("0", "1000000"), ("1000000", "0")])
 def test_vault_fees_counts_refund_and_protocol_only_events_by_all_components(
+    postgres_database,
     tmp_path, price, protocol_fees, refunds
 ):
-    conn = connect(tmp_path / "test.sqlite")
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     asset = "0x" + "2" * 40
@@ -612,8 +689,8 @@ def test_vault_fees_counts_refund_and_protocol_only_events_by_all_components(
 
 @pytest.mark.parametrize("version", ["v2", "v3"])
 @pytest.mark.parametrize("defillama_price", [None, 2.0])
-def test_vault_fees_never_silently_uses_yearn_prices(tmp_path, version, defillama_price):
-    conn = connect(tmp_path / "test.sqlite")
+def test_vault_fees_never_silently_uses_yearn_prices(postgres_database, tmp_path, version, defillama_price):
+    conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
     asset = "0x" + "2" * 40

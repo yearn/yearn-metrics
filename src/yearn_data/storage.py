@@ -1,18 +1,18 @@
-"""SQLite storage layer."""
+"""Postgres storage entry points."""
 
 from __future__ import annotations
 
 import json
-import sqlite3
-from pathlib import Path
+import os
 from typing import Any, Iterable
+import psycopg
 
 
-DEFAULT_DB_PATH = Path("data/yearn.sqlite")
+DEFAULT_DATABASE = "neon"
+DATABASE_ERRORS = (psycopg.Error,)
 
 
 SCHEMA = """
-PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS chains (
     chain_id INTEGER PRIMARY KEY,
@@ -206,6 +206,23 @@ ON vault_fee_events (chain_id, asset, block_timestamp);
 CREATE INDEX IF NOT EXISTS vault_fee_events_vault_idx
 ON vault_fee_events (chain_id, vault_address, block_number);
 
+CREATE TABLE IF NOT EXISTS canonical_fee_reports (
+    chain_id INTEGER NOT NULL,
+    tx_hash TEXT NOT NULL,
+    report_log_index INTEGER NOT NULL,
+    event_log_index INTEGER,
+    contract_family TEXT NOT NULL,
+    api_version TEXT,
+    method_version TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('ok', 'unresolved')),
+    reason TEXT,
+    accounting_json TEXT,
+    evidence_json TEXT NOT NULL,
+    PRIMARY KEY (chain_id, tx_hash, report_log_index),
+    FOREIGN KEY (chain_id, tx_hash, report_log_index)
+        REFERENCES strategy_reports(chain_id, tx_hash, log_index) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS prices (
     chain_id INTEGER NOT NULL,
     token_address TEXT NOT NULL,
@@ -252,33 +269,132 @@ CREATE TABLE IF NOT EXISTS analysis_outputs (
 """
 
 
-def connect(path: str | Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    db_path = Path(path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+POSTGRES_ENV = {'neon': 'NEON_DB_URL', 'staging': 'STAGING_DB_URL'}
 
 
-def init_db(conn: sqlite3.Connection) -> None:
+def is_postgres(database) -> bool:
+    return str(database) in POSTGRES_ENV or str(database).startswith(('postgresql://', 'postgres://'))
+
+
+def database_reference(database) -> str:
+    """Publication manifests contain a logical name, never database credentials."""
+    if str(database) not in POSTGRES_ENV:
+        if is_postgres(database):
+            raise ValueError('use a logical database name for publications; URLs contain credentials')
+        raise ValueError('SQLite storage is retired; use neon or staging with a Postgres URL')
+    return str(database)
+
+
+def connect(database=DEFAULT_DATABASE, *, readonly=False, schema=None, direct=False):
+    from .postgres import Connection
+    if not is_postgres(database):
+        raise ValueError('SQLite storage is retired; use neon or staging with a Postgres URL')
+    env = POSTGRES_ENV.get(str(database))
+    url = os.environ.get(env) if env else str(database)
+    if not url:
+        raise ValueError(f'{env} is required for --db {database}')
+    return Connection(url, readonly=readonly,
+                      schema=schema or os.environ.get('YEARN_DATA_DB_SCHEMA', 'public'), direct=direct)
+
+
+def table_columns(conn, table):
+    return [row[0] for row in conn.execute('SELECT column_name FROM information_schema.columns '
+        'WHERE table_schema=current_schema() AND table_name=? ORDER BY ordinal_position', (table,))]
+
+
+def table_exists(conn, table):
+    return conn.execute('SELECT to_regclass(?)', (table,)).fetchone()[0] is not None
+
+
+def init_db(conn) -> None:
     from .coverage import SCHEMA as COVERAGE_SCHEMA
 
     conn.executescript(SCHEMA)
     conn.executescript(COVERAGE_SCHEMA)
+    from .tvl import SCHEMA as TVL_SCHEMA
+    conn.executescript(TVL_SCHEMA)
+    from .postgres import create_indexes
+    create_indexes(conn)
     _ensure_column(conn, "vault_inventory_events", "action", "TEXT NOT NULL DEFAULT 'added'")
+    conn.execute("""CREATE TABLE IF NOT EXISTS fee_daily_prices (
+        chain_id INTEGER NOT NULL, asset TEXT NOT NULL, eod_timestamp INTEGER NOT NULL,
+        policy TEXT NOT NULL, endpoint_id TEXT NOT NULL, price_usd TEXT,
+        status TEXT NOT NULL, evidence_json TEXT NOT NULL, fetched_at INTEGER NOT NULL,
+        PRIMARY KEY(chain_id,asset,eod_timestamp,policy,endpoint_id))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS tokenized_fee_events (
+        chain_id INTEGER NOT NULL,tx_hash TEXT NOT NULL,log_index INTEGER NOT NULL,
+        event_json TEXT NOT NULL,PRIMARY KEY(chain_id,tx_hash,log_index))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS tokenized_fee_ranges (
+        chain_id INTEGER NOT NULL,vault_address TEXT NOT NULL,from_block INTEGER NOT NULL,
+        to_block INTEGER NOT NULL,before_timestamp INTEGER NOT NULL,inventory_hash TEXT NOT NULL,
+        PRIMARY KEY(chain_id,vault_address,from_block,to_block,before_timestamp,inventory_hash))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS fee_state_evidence (
+        chain_id INTEGER NOT NULL,tx_hash TEXT NOT NULL,report_log_index INTEGER NOT NULL,
+        block_hash TEXT NOT NULL,evidence_json TEXT NOT NULL,
+        PRIMARY KEY(chain_id,tx_hash,report_log_index,block_hash))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS fee_block_log_evidence (
+        chain_id INTEGER NOT NULL,vault_address TEXT NOT NULL,block_hash TEXT NOT NULL,
+        logs_json TEXT NOT NULL,PRIMARY KEY(chain_id,vault_address,block_hash))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS fee_log_acquisitions (
+        acquisition_id TEXT PRIMARY KEY,manifest_json TEXT NOT NULL)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS fee_filtered_log_evidence (
+        chain_id INTEGER NOT NULL,tx_hash TEXT NOT NULL,report_log_index INTEGER NOT NULL,
+        payload_json TEXT NOT NULL,payload_sha256 TEXT NOT NULL,
+        PRIMARY KEY(chain_id,tx_hash,report_log_index))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS fee_receipt_evidence (
+        chain_id INTEGER NOT NULL,tx_hash TEXT NOT NULL,block_number INTEGER NOT NULL,
+        block_hash TEXT NOT NULL,receipt_json TEXT NOT NULL,PRIMARY KEY(chain_id,tx_hash))""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS fee_execution_traces (
+        chain_id INTEGER NOT NULL,tx_hash TEXT NOT NULL,vault_address TEXT NOT NULL,
+        block_hash TEXT NOT NULL,trace_version TEXT NOT NULL,trace_json TEXT NOT NULL,
+        PRIMARY KEY(chain_id,tx_hash,vault_address,block_hash,trace_version))""")
+    _ensure_column(conn, "tokenized_fee_ranges", "finality_policy", "TEXT NOT NULL DEFAULT 'finalized'")
     _ensure_column(conn, "vaults", "management", "TEXT NOT NULL DEFAULT 'yearn'")
     _ensure_column(conn, "vaults", "protocol", "TEXT")
+    _ensure_column(conn, "canonical_fee_reports", "candidate_json", "TEXT")
+    _ensure_column(conn, "canonical_fee_reports", "decision_json", "TEXT")
+    # Old direct-zero projections must not survive a newly corrected release rule.
+    from .fee_zero_rules import ZERO_GAIN_RELEASES
+    for row in conn.execute("""SELECT f.*,r.gain_raw FROM canonical_fee_reports f JOIN strategy_reports r
+        ON r.chain_id=f.chain_id AND r.tx_hash=f.tx_hash AND r.log_index=f.report_log_index
+        WHERE f.contract_family='yearn-v2-vault' AND f.candidate_json IS NULL
+        AND f.accounting_json IS NOT NULL AND r.gain_raw='0'""").fetchall():
+        evidence = json.loads(row['evidence_json'])
+        amounts = json.loads(row['accounting_json'])
+        if (row['api_version'] not in ZERO_GAIN_RELEASES and evidence.get('fee_log_index') is None
+                and row['event_log_index'] in (None,row['report_log_index'])
+                and amounts.get('total_fees_paid_raw') == '0'):
+            from .fee_acceptance import POLICY_VERSION
+            decision={'policy_version':POLICY_VERSION,'status':'unavailable',
+                'reason':'zero_gain_requires_fee_evidence','state_scope':None,'state_suitability':'unverified'}
+            conn.execute("""UPDATE canonical_fee_reports SET accounting_json=NULL,status='unresolved',reason=?,decision_json=?
+                WHERE chain_id=? AND tx_hash=? AND report_log_index=?""",
+                (decision['reason'],to_json(decision),row['chain_id'],row['tx_hash'],row['report_log_index']))
+    # Conservatively reassess legacy derived values without refetching evidence.
+    from .fee_acceptance import assess_candidate, normalize_candidate
+    for row in conn.execute("SELECT * FROM canonical_fee_reports WHERE candidate_json IS NULL AND accounting_json IS NOT NULL").fetchall():
+        amounts = json.loads(row['accounting_json'])
+        if amounts.get('amount_source') != 'derived-contract':
+            continue
+        evidence = json.loads(row['evidence_json'])
+        candidate = normalize_candidate(evidence.pop('reconstruction', {
+            'method': 'legacy-unverified', 'total_fees_paid_raw': amounts['total_fees_paid_raw'], 'interval': None}))
+        decision = assess_candidate(candidate, evidence)
+        accepted = decision['status'] == 'accepted'
+        conn.execute("""UPDATE canonical_fee_reports SET candidate_json=?,decision_json=?,evidence_json=?,
+            accounting_json=?,status=?,reason=? WHERE chain_id=? AND tx_hash=? AND report_log_index=?""",
+            (to_json(candidate),to_json(decision),to_json(evidence),row['accounting_json'] if accepted else None,
+             'ok' if accepted else 'unresolved',decision['reason'],row['chain_id'],row['tx_hash'],row['report_log_index']))
     conn.commit()
 
 
-def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
-    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+def _ensure_column(conn, table: str, column: str, definition: str) -> None:
+    columns = table_columns(conn, table)
     if column not in columns:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
-def seed_chains(conn: sqlite3.Connection, chains: dict[str, Any]) -> None:
+def seed_chains(conn, chains: dict[str, Any]) -> None:
     rows = [
         (cfg.chain_id, cfg.key, cfg.name, cfg.rpc_env, cfg.defillama_slug)
         for cfg in chains.values()
@@ -306,7 +422,7 @@ def from_json(value: str) -> Any:
     return json.loads(value)
 
 
-def upsert_many(conn: sqlite3.Connection, sql: str, rows: Iterable[tuple[Any, ...]]) -> int:
+def upsert_many(conn, sql: str, rows: Iterable[tuple[Any, ...]]) -> int:
     cur = conn.executemany(sql, rows)
     conn.commit()
     return cur.rowcount

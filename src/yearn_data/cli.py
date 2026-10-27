@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .analysis import run_lifetime_yield, run_vault_fees, run_vault_volume
 from .config import CHAINS, DEFAULT_CHAINS, get_event_source, load_environment, normalize_chain_key
+from .fees import index_canonical_fees, run_canonical_fees
 from .discovery import discover
 from .envio import discover_from_envio, import_reports_from_envio
 from .exports import export_analysis
@@ -22,7 +23,7 @@ from .pricing import (
     price_unpriced_volume,
     validate_report_pricing_policy,
 )
-from .storage import DEFAULT_DB_PATH, connect, init_db, seed_chains
+from .storage import DEFAULT_DATABASE, connect, init_db, seed_chains
 
 
 def progress(message: str) -> None:
@@ -45,11 +46,35 @@ def _fallback_source(price_source: str) -> str | None:
     return DEFAULT_FALLBACK_PRICE_SOURCE if price_source == DEFAULT_PRICE_SOURCE else None
 
 
-def _run_analysis(conn, job: str, price_source: str | None = None, provider_fallback: bool = True) -> int:
+def _run_analysis(
+    conn,
+    job: str,
+    price_source: str | None = None,
+    provider_fallback: bool = True,
+    before_timestamp: int | None = None,
+    deferred_manifest: Path | None = None,
+) -> int:
+    if job == "fee-usd":
+        if price_source not in (None, "yearn-prices"):
+            raise ValueError("fee-usd supports Yearn Prices only")
+        from .fee_valuation import run_fee_usd
+        return run_fee_usd(conn, before_timestamp=before_timestamp, deferred_manifest=deferred_manifest)
+    if deferred_manifest is not None:
+        raise ValueError("deferred manifests are supported only for fee-usd")
+    if before_timestamp is not None and job != "lifetime-yield":
+        raise ValueError("valuation cutoff is supported only for fee-usd and lifetime-yield")
+    if job == "canonical-fees":
+        if price_source is not None:
+            raise ValueError("canonical-fees currently exports raw asset amounts without USD pricing")
+        return run_canonical_fees(conn)
     price_source = _job_price_source(job, price_source)
     if job == "lifetime-yield":
-        return run_lifetime_yield(conn, price_source=price_source,
-                                  fallback_price_source=_fallback_source(price_source) if provider_fallback else None)
+        return run_lifetime_yield(
+            conn,
+            price_source=price_source,
+            fallback_price_source=_fallback_source(price_source) if provider_fallback else None,
+            before_timestamp=before_timestamp,
+        )
     if price_source != "defillama":
         raise ValueError("--price-source yearn-prices is currently supported only for lifetime-yield")
     if job == "vault-volume":
@@ -68,11 +93,72 @@ def open_db(path: str | Path):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="yearn-data")
-    parser.add_argument("--db", default=str(DEFAULT_DB_PATH), help="SQLite database path")
+    parser.add_argument("--db", help="Postgres: neon or staging; defaults to YEARN_DATA_DB or neon")
     parser.add_argument("--env", action="append", default=[], help="Extra .env file to load before defaults")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init-db")
+
+    canonical_p = sub.add_parser('consolidate-history', help='Keep one canonical history, verifying every historical key')
+    canonical_p.add_argument('--apply', action='store_true', help='Apply atomically; the default only reports the plan')
+    canonical_p.add_argument('--receipt', type=Path, help='Write key/value preservation counts and selected revision')
+
+    tvl_p = sub.add_parser("tvl", help="Historical vault TVL and nested positions")
+    tvl_sub = tvl_p.add_subparsers(dest="tvl_command", required=True)
+    tvl_prepare=tvl_sub.add_parser('prepare-history',help='Prepare immutable TVL chart rows for fast reads')
+    tvl_prepare.add_argument('--publication',required=True,type=Path)
+    tvl_prepare.add_argument('--previous-dataset-id',help='Copy this prepared dataset and recompute only newly rejected quote dates')
+    tvl_prepare.add_argument('--current-bridge-policy',choices=['none','retired-registry'],default='retired-registry')
+    tvl_discover = tvl_sub.add_parser("discover", help="Create or refresh the TVL catalog independently")
+    tvl_discover.add_argument("--sources", nargs="+", choices=["kong", "v1", "curation"], help="Default: all sources")
+    tvl_discover.add_argument("--chain-ids", nargs="+", type=int)
+    tvl_discover.add_argument("--from-block", type=int, help="Optional lower bound for factory and adapter scans")
+    tvl_discover.add_argument("--to-block", type=int, help="Optional finalized upper bound for historical scans")
+    tvl_discover.add_argument("--chunk-size", type=int, default=50_000)
+    tvl_sub.add_parser("refresh-kong", help="Refresh paginated V2/V3 vault and strategy inventory")
+    tvl_collect = tvl_sub.add_parser("collect", help="Store archive-state TVL at explicit timestamps")
+    tvl_collect.add_argument("--from-timestamp", required=True, type=int)
+    tvl_collect.add_argument("--to-timestamp", required=True, type=int)
+    tvl_collect.add_argument("--interval", type=int, default=86400, help="Seconds between samples; default daily")
+    tvl_collect.add_argument("--chain-ids", nargs="+", type=int)
+    tvl_collect.add_argument("--vaults", nargs="+", help="Optional bounded vault-address selection")
+    tvl_collect.add_argument("--price-source", choices=["yearn-prices", "defillama"], default="yearn-prices")
+    tvl_map = tvl_sub.add_parser("map-holders", help="Scan strategy balances for nested child vaults at a date")
+    tvl_map.add_argument("--timestamp", required=True, type=int)
+    tvl_map.add_argument("--chain-ids", nargs="+", type=int)
+    tvl_export = tvl_sub.add_parser("export", help="Export vaults, positions, and aggregate history")
+    tvl_export.add_argument("--out", required=True)
+    tvl_export.add_argument("--run-id", type=int)
+    tvl_export.add_argument("--include-curation", action=argparse.BooleanOptionalAction, default=True, help="Deduct curated child ownership (default: enabled; --no-include-curation uses the separate-product convention)")
+
+    pairing_p = sub.add_parser("select-pairing", help="Select completed earnings/fees for Powerglove without changing source data")
+    pairing_p.add_argument("--earnings-run-id", type=int, required=True)
+    pairing_p.add_argument("--fees-run-id", type=int, required=True)
+    pairing_p.add_argument("--out", type=Path, default=Path("data/powerglove"))
+
+    hosted_p = sub.add_parser('publish-hosted', help='Validate and atomically select database-backed API publications')
+    hosted_p.add_argument('--publication', type=Path, required=True)
+    hosted_p.add_argument('--tvl-publication', type=Path, required=True)
+    hosted_choice = hosted_p.add_mutually_exclusive_group()
+    hosted_choice.add_argument('--analytics-publication-id')
+    hosted_choice.add_argument('--prepare-analytics', action='store_true', help='Prepare matching analytics; successful consolidation also updates the legacy selection')
+    restore_p = sub.add_parser('select-hosted-release', help='Select a still-retained release; successful consolidation retires older releases')
+    restore_p.add_argument('--release-id', required=True)
+
+    sub.add_parser('collect-analytics', help='Collect owned DefiLlama references, membership and declared fee configurations')
+    prepare_p = sub.add_parser('prepare-analytics', help='Publish remaining Powerglove analytics in the selected database')
+    prepare_p.add_argument('--publication', type=Path, required=True)
+    prepare_p.add_argument('--tvl-publication', type=Path, required=True)
+
+    serve_p = sub.add_parser("serve-pairing", help="Serve read-only selected Powerglove views")
+    serve_p.add_argument("--publication", type=Path, default=Path("data/powerglove"))
+    serve_p.add_argument("--host", default="127.0.0.1")
+    serve_p.add_argument("--port", type=int, default=3490)
+    serve_p.add_argument("--cors-origin", help="Optional production frontend origin")
+    serve_p.add_argument("--tvl-publication", type=Path, help="Automatically publish accumulated finished TVL results too")
+    serve_p.add_argument("--published-tvl-only", action="store_true", help="Serve only the updater's selected TVL publication")
+    serve_p.add_argument("--current-bridge-policy", choices=["none", "retired-registry"], default="retired-registry")
+    serve_p.add_argument("--analytics", action="store_true", help="Serve prepared owned analytics and comparison without legacy services")
 
     catchup_p = sub.add_parser("catch-up", help="Acquire one bounded chain window; no pricing or analysis")
     catchup_p.add_argument("--chain", required=True, choices=sorted(CHAINS))
@@ -127,11 +213,47 @@ def build_parser() -> argparse.ArgumentParser:
     fee_index_p = sub.add_parser("index-fees")
     fee_index_p.add_argument("--chains", nargs="+", help="Chains to index")
 
+    fee_index_p.add_argument("--canonical", action="store_true")
+    fee_index_p.add_argument("--limit", type=int)
+    fee_index_p.add_argument("--retry-unresolved", action="store_true")
+    fee_index_p.add_argument("--version", choices=["v2", "v3"])
+
+    fee_index_p.add_argument("--verify-selective", action="store_true", help="Trace supported reconstructed fees when later vault logs are detected")
+    fee_index_p.add_argument("--trace-limit", type=int, help="Maximum new trace requests per run (default 10)")
+    fee_index_p.add_argument("--reconstruct-v2", action="store_true")
+    fee_index_p.add_argument("--filtered-evidence-only", action="store_true", help="Project retained direct V2 logs offline")
+    fee_index_p.add_argument("--refresh-evidence", action="store_true")
+    fee_index_p.add_argument("--verify-execution", action="store_true", help="Verify executed fee operands for explicitly selected reports")
+    fee_index_p.add_argument("--report-keys", type=Path, help="JSON array of [chain_id, tx_hash, report_log_index] triples")
+
+    fee_recompute_p = sub.add_parser("recompute-fees", help="Recompute retained evidence without RPC")
+    fee_recompute_p.add_argument("mode", choices=["policy", "formulas"])
+    fee_recompute_p.add_argument("--chains", nargs="+")
+    fee_recompute_p.add_argument("--limit", type=int)
+    fee_recompute_p.add_argument("--version", choices=["v2", "v3"])
+
+    tokenized_p = sub.add_parser("index-tokenized-fees", help="Import bounded Tokenized Strategy fee ranges")
+    tokenized_p.add_argument("--inventory", type=Path, help="Classified inventory JSON; defaults to packaged Yearn inventory")
+    tokenized_p.add_argument("--chain", required=True, choices=sorted(CHAINS))
+    tokenized_p.add_argument("--from-block", required=True, type=int)
+    tokenized_p.add_argument("--to-block", required=True, type=int)
+    tokenized_p.add_argument("--before-timestamp", required=True, type=int)
+    tokenized_p.add_argument("--chunk-size", type=int, default=2000)
+    tokenized_p.add_argument("--max-vaults", type=int, default=10)
+    tokenized_p.add_argument("--confirmations", type=int, help="Explicit latest-minus-N finality policy instead of finalized")
+
+    fee_price_p = sub.add_parser("price-fees", help="Cache Yearn Prices for accepted closed-day fee amounts")
+    fee_price_p.add_argument("--before-timestamp", type=int, help="Exclusive closed UTC midnight; defaults to today")
+    fee_price_p.add_argument("--limit", type=int, default=500, help="Maximum distinct asset-days per invocation")
+    fee_price_p.add_argument("--retry-missing", action="store_true")
+    fee_price_p.add_argument("--refresh", action="store_true", help="Refresh selected cached prices")
+
     price_p = sub.add_parser("price")
     price_p.add_argument("--limit", type=int, help="Maximum distinct token/timestamp prices to fetch")
     price_p.add_argument("--source", choices=sorted(SUPPORTED_SOURCES), default=DEFAULT_PRICE_SOURCE)
     price_p.add_argument("--retry-missing", action="store_true", help="Retry existing non-ok price rows")
     price_p.add_argument("--no-provider-fallback", action="store_true", help="Do not use DefiLlama when Yearn Prices is unavailable")
+    price_p.add_argument("--refresh-onchain-fallbacks", action="store_true", help="Recompute prices produced by local fallback adapters")
     price_p.add_argument("--chains", nargs="+", help="Restrict report pricing to chains")
     price_p.add_argument("--no-onchain-fallbacks", action="store_true", help="Use only the selected offchain price source")
 
@@ -139,18 +261,22 @@ def build_parser() -> argparse.ArgumentParser:
     volume_price_p.add_argument("--limit", type=int, help="Maximum distinct token/timestamp prices to fetch")
     volume_price_p.add_argument("--source", choices=["defillama"], default="defillama")
     volume_price_p.add_argument("--retry-missing", action="store_true", help="Retry existing non-ok price rows")
+    volume_price_p.add_argument("--refresh-onchain-fallbacks", action="store_true", help="Recompute prices produced by local fallback adapters")
     volume_price_p.add_argument("--chains", nargs="+", help="Restrict volume pricing to chains")
     volume_price_p.add_argument("--no-onchain-fallbacks", action="store_true", help="Use only the selected offchain price source")
 
     analyze_p = sub.add_parser("analyze")
-    analyze_p.add_argument("job", choices=["lifetime-yield", "vault-volume", "vault-fees"])
+    analyze_p.add_argument("job", choices=["lifetime-yield", "vault-volume", "vault-fees", "canonical-fees", "fee-usd"])
 
+    analyze_p.add_argument("--before-timestamp", type=int, help="Exclusive closed UTC midnight for fee-usd or lifetime-yield")
+    analyze_p.add_argument("--deferred-manifest", type=Path, help="Optional validated accounting exclusions for fee-usd")
     analyze_p.add_argument("--price-source", choices=sorted(SUPPORTED_SOURCES))
     analyze_p.add_argument("--no-provider-fallback", action="store_true")
 
     export_p = sub.add_parser("export")
-    export_p.add_argument("job", choices=["lifetime-yield", "vault-volume", "vault-fees"])
+    export_p.add_argument("job", choices=["lifetime-yield", "vault-volume", "vault-fees", "canonical-fees", "fee-usd"])
     export_p.add_argument("--out", default="exports")
+    export_p.add_argument("--run-id", type=int, help="Export this completed run; defaults to latest")
 
     publish_p = sub.add_parser("publish")
     publish_sub = publish_p.add_subparsers(dest="publish_job", required=True)
@@ -179,11 +305,99 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     load_environment(args.env)
+    args.db = args.db or os.environ.get('YEARN_DATA_DB', str(DEFAULT_DATABASE))
+    if args.command == 'consolidate-history':
+        from .canonical_history import consolidate
+        result = consolidate(args.db, apply=args.apply, progress=progress)
+        body = json.dumps(result, sort_keys=True, indent=2)
+        if args.receipt:
+            args.receipt.parent.mkdir(parents=True, exist_ok=True)
+            args.receipt.write_text(body+'\n')
+        print(body)
+        return 0
+    if args.command == 'select-hosted-release':
+        from .hosted_publications import select_release
+        print(json.dumps({'releaseId':select_release(args.db, args.release_id)}))
+        return 0
+    if args.command == 'publish-hosted':
+        from .hosted_publications import publish, PublicationCleanupError
+        try:
+            release = publish(args.db, args.publication, args.tvl_publication,
+                              args.analytics_publication_id, prepare_analytics=args.prepare_analytics)
+        except PublicationCleanupError as exc:
+            print(json.dumps({'releaseId': exc.release_id, 'published': True,
+                              'consolidated': False, 'error': str(exc)}))
+            return 1
+        print(json.dumps({'releaseId': release}))
+        return 0
+    if args.command == 'collect-analytics':
+        from .analytics_collect import collect
+        print(json.dumps(collect(args.db), sort_keys=True))
+        return 0
+    if args.command == 'prepare-analytics':
+        from .analytics import prepare
+        from .pairing import PairingStore
+        from .tvl_api import TvlStore
+        financial = PairingStore(args.publication).get()
+        from .storage import database_reference
+        if database_reference(financial.database) != database_reference(args.db):
+            raise ValueError('financial publication database must match --db')
+        tvl = TvlStore(args.db, args.tvl_publication, current_bridge_policy='retired-registry').get()
+        print(json.dumps({'publicationId':prepare(args.db,financial,tvl)}))
+        return 0
+    if args.command == "select-pairing":
+        from .pairing import select_pairing
+        manifest = select_pairing(args.db, args.earnings_run_id, args.fees_run_id, args.out)
+        print(json.dumps({'datasetId': manifest['datasetId'], 'publication': str(args.out)}, sort_keys=True))
+        return 0
+    if args.command == "serve-pairing":
+        from .pairing import serve_pairing
+        serve_pairing(args.publication, host=args.host, port=args.port, cors_origin=args.cors_origin,
+                      tvl_publication=args.tvl_publication, current_bridge_policy=args.current_bridge_policy,
+                      published_tvl_only=args.published_tvl_only,
+                      analytics=args.analytics)
+        return 0
+    if args.command=='tvl' and args.tvl_command=='prepare-history':
+        from .tvl_api import TvlStore
+        from .tvl_history_cache import prepare, prepare_price_repair
+        store=TvlStore(args.db,args.publication,current_bridge_policy=args.current_bridge_policy)
+        dataset=store.get()
+        result=(prepare_price_repair(dataset,store.get(args.previous_dataset_id))
+                if args.previous_dataset_id else prepare(dataset,progress=progress))
+        print(json.dumps(result,sort_keys=True))
+        return 0
     conn = open_db(args.db)
     event_source = get_event_source()
 
+    if args.command == "tvl":
+        from .tvl import export_tvl
+        from .tvl_sources import refresh_kong_catalog, collect_tvl, scan_holders
+        if args.tvl_command == "discover":
+            from .tvl_discovery import discover_catalog
+            try:
+                result = discover_catalog(conn, sources=args.sources, chain_ids=args.chain_ids,
+                    from_block=args.from_block, to_block=args.to_block, chunk_size=args.chunk_size, progress=progress)
+                print(json.dumps(result, sort_keys=True))
+                return 0 if result["status"] == "complete" else 2
+            finally:
+                conn.close()
+        elif args.tvl_command == "refresh-kong":
+            result = {"vaults": refresh_kong_catalog(conn)}
+        elif args.tvl_command == "map-holders":
+            result = scan_holders(conn, args.timestamp, chain_ids=args.chain_ids, progress=progress)
+        elif args.tvl_command == "collect":
+            result = {"run_id": collect_tvl(conn, args.from_timestamp, args.to_timestamp,
+                interval=args.interval, chain_ids=args.chain_ids, addresses=args.vaults,
+                price_source=args.price_source, progress=progress)}
+        else:
+            result = {"out": str(export_tvl(conn, args.out, args.run_id, include_curation=args.include_curation))}
+        print(json.dumps(result, sort_keys=True))
+        conn.close()
+        return 0
+
     if args.command == "init-db":
-        print(f"initialized {args.db}")
+        from .storage import database_reference
+        print(f"initialized {database_reference(args.db)}")
         return 0
 
     if args.command == "catch-up":
@@ -265,9 +479,51 @@ def main(argv: list[str] | None = None) -> int:
         print(f"indexed {count} volume logs/rows")
         return 0
 
+    if args.command == "index-tokenized-fees":
+        from .tokenized_fees import index_tokenized_fees, load_inventory
+        inventory = json.loads(args.inventory.read_text()) if args.inventory else load_inventory()
+        result = index_tokenized_fees(conn, inventory, args.chain, args.from_block,
+            args.to_block, args.before_timestamp, args.chunk_size, args.max_vaults,
+            confirmations=args.confirmations)
+        print(result)
+        return 0
+
+    if args.command == "recompute-fees":
+        from .fee_recompute import recompute_canonical_fees
+        result = recompute_canonical_fees(conn,args.mode,_chains(args.chains) if args.chains else None,args.limit,version=args.version)
+        print(result)
+        return 0
+
     if args.command == "index-fees":
+        if args.trace_limit is not None and not args.verify_selective:
+            raise ValueError("--trace-limit requires --verify-selective")
+        report_keys = None
+        if args.report_keys:
+            report_keys = json.loads(args.report_keys.read_text())
+            import re
+            if not isinstance(report_keys, list) or any(
+                not isinstance(key, list) or len(key) != 3 or
+                type(key[0]) is not int or key[0] <= 0 or
+                not isinstance(key[1], str) or not re.fullmatch(r'0x[0-9a-fA-F]{64}', key[1]) or
+                type(key[2]) is not int or key[2] < 0 for key in report_keys):
+                raise ValueError('report keys must be [chain_id, tx_hash, report_log_index] triples')
+            report_keys = [(key[0], key[1].lower(), key[2]) for key in report_keys]
+        if args.canonical:
+            count = index_canonical_fees(conn, _chains(args.chains) if args.chains else None,
+                                         limit=args.limit, retry_unresolved=args.retry_unresolved, reconstruct_v2=args.reconstruct_v2,
+                                         verify_selective=args.verify_selective, trace_limit=args.trace_limit if args.trace_limit is not None else 10, refresh_evidence=args.refresh_evidence, filtered_evidence_only=args.filtered_evidence_only, version=args.version, report_keys=report_keys, verify_execution=args.verify_execution)
+            print(f"processed {count} canonical fee reports")
+            return 0
+        if args.limit is not None or args.retry_unresolved or args.reconstruct_v2 or args.verify_selective or args.refresh_evidence or args.filtered_evidence_only or args.version or args.report_keys or args.verify_execution:
+            raise ValueError("Canonical fee options, including --version, require --canonical")
         count = index_v2_fee_mints_from_reports(conn, _chains(args.chains), progress=progress)
         print(f"indexed {count} fee events")
+        return 0
+
+    if args.command == "price-fees":
+        from .fee_valuation import price_fees
+        print(json.dumps(price_fees(conn, before_timestamp=args.before_timestamp, limit=args.limit,
+                                   retry_missing=args.retry_missing, refresh=args.refresh)))
         return 0
 
     if args.command == "price":
@@ -278,6 +534,7 @@ def main(argv: list[str] | None = None) -> int:
             source=args.source,
             fallback=None if args.no_provider_fallback else _fallback_source(args.source),
             retry_missing=args.retry_missing,
+            refresh_onchain_fallbacks=args.refresh_onchain_fallbacks,
             chain_ids=chain_ids,
             onchain_fallbacks=not args.no_onchain_fallbacks,
         )
@@ -292,6 +549,7 @@ def main(argv: list[str] | None = None) -> int:
             source=args.source,
             fallback=None,
             retry_missing=args.retry_missing,
+            refresh_onchain_fallbacks=args.refresh_onchain_fallbacks,
             chain_ids=chain_ids,
             onchain_fallbacks=not args.no_onchain_fallbacks,
         )
@@ -299,12 +557,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "analyze":
-        run_id = _run_analysis(conn, args.job, args.price_source, provider_fallback=not args.no_provider_fallback)
+        run_id = _run_analysis(conn, args.job, args.price_source,
+                               provider_fallback=not args.no_provider_fallback,
+                               before_timestamp=args.before_timestamp,
+                               deferred_manifest=args.deferred_manifest)
         print(f"analysis run {run_id} complete")
         return 0
 
     if args.command == "export":
-        paths = export_analysis(conn, args.job, args.out)
+        paths = export_analysis(conn, args.job, args.out, run_id=args.run_id)
         for path in paths:
             print(path)
         return 0
@@ -389,7 +650,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"priced/recorded {count} token timestamp rows")
         run_id = _run_analysis(conn, args.job, args.price_source, provider_fallback=not args.no_provider_fallback)
         print(f"analysis run {run_id} complete")
-        for path in export_analysis(conn, args.job, args.out):
+        for path in export_analysis(conn, args.job, args.out, run_id=run_id):
             print(path)
         return 0
 

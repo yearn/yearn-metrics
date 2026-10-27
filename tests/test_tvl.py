@@ -1,0 +1,486 @@
+import json
+from decimal import Decimal
+
+import pytest
+
+from yearn_data.storage import connect, init_db
+from yearn_data.tvl import account, asset_units, export_tvl
+from yearn_data.tvl_sources import ArchiveReader, collect_tvl, scan_holders, candidate_edges
+from yearn_data.cli import build_parser, main
+
+
+def address(n):
+    return '0x'+f'{n:040x}'
+
+
+@pytest.mark.parametrize('failure', ['authentication', 'configuration'])
+def test_collection_stops_on_operator_price_errors(postgres_database, tmp_path, monkeypatch, failure):
+    from unittest.mock import Mock
+    from yearn_data import pricing, tvl_sources
+    conn = connect('staging'); init_db(conn)
+    conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at) "
+                 "VALUES (1,'v3',?,?,18,1)", (address(1), address(2))); conn.commit()
+    reader = Mock(); reader.block_at.return_value = 1
+    reader.exists.return_value = True; reader.uint.return_value = 10
+    monkeypatch.delenv('YEARN_PRICE_PROD_KEY', raising=False)
+    def fail(*args, **kwargs):
+        if failure == 'authentication':
+            raise pricing.YearnPricesAuthenticationError('rejected credential')
+        return pricing._yearn_prices_config()
+    monkeypatch.setattr(tvl_sources, 'fetch_yearn_price', fail)
+    expected = pricing.YearnPricesAuthenticationError if failure == 'authentication' else ValueError
+    with pytest.raises(expected):
+        collect_tvl(conn, 86399, 86399, reader_factory=lambda _: reader)
+    assert conn.execute('SELECT status FROM tvl_runs').fetchone()[0] == 'failed'
+    assert conn.execute('SELECT COUNT(*) FROM tvl_snapshots').fetchone()[0] == 0
+    conn.close()
+
+
+def snapshot(n,value,version='v3',chain=1):
+    return {'chain_id':chain,'vault':address(n),'timestamp':100,'tvl_usd':value,'version':version}
+
+
+def edge(parent,strategy,child,debt,owned,chain=1):
+    return {'chain_id':chain,'parent':address(parent),'strategy':address(strategy),'child':address(child),
+            'timestamp':100,'debt_usd':debt,'owned_usd':owned,'status':'ok'}
+
+
+@pytest.mark.parametrize('replacement', ['missing', 'verified', 'wrong-block', 'wrong-parent',
+                                       'wrong-date', 'no-getter', 'failed', 'missing-value', 'zero'])
+@pytest.mark.parametrize('require_complete_ownership', [True, False])
+def test_superseded_registry_position_needs_dated_replacement(replacement, require_complete_ownership):
+    correction = {'chainId':1,'strategyAddress':address(9),'targetVaultAddress':address(3),
+                  'supersededTargetVaultAddresses':[address(2)]}
+    stale = dict(edge(1,9,2,'50','80'), method='service-registry', block_number=123)
+    repaired = dict(edge(1,9,3,'50','60'), method='service-registry', block_number=123,
+                    vault_getter='vault()')
+    if replacement == 'wrong-block': repaired['block_number'] = 124
+    if replacement == 'wrong-parent': repaired['parent'] = address(4)
+    if replacement == 'wrong-date': repaired['timestamp'] = 101
+    if replacement == 'no-getter': repaired.pop('vault_getter')
+    if replacement == 'failed': repaired['status'] = 'unavailable'
+    if replacement == 'missing-value': repaired['owned_usd'] = None
+    if replacement == 'zero': repaired.update(debt_usd='0', owned_usd=None)
+    positions = [stale] + ([] if replacement == 'missing' else [repaired])
+    rows, positions, total = account([snapshot(i,'100') for i in (1,2,3)], positions,
+                                    target_corrections=[correction],
+                                    require_complete_ownership=require_complete_ownership)
+    assert rows[1]['external_tvl_usd'] == '100'
+    assert positions[0]['overlap_usd'] == '0'
+    assert positions[0]['accounting_excluded'] is True
+    assert positions[0]['reason'] == 'superseded_registry_target'
+    assert positions[0]['accounting_unresolved'] is (replacement not in ('verified','zero'))
+    if replacement in ('verified','zero'):
+        assert total['status'] == 'complete'
+        assert total['external_tvl_usd'] == ('250' if replacement == 'verified' else '300')
+    else:
+        assert total['status'] == 'incomplete'
+        assert total['external_tvl_usd'] is None
+        assert 'superseded_registry_target' in total['issues']
+        if require_complete_ownership:
+            assert rows[2]['overlap_usd'] is None
+            assert rows[2]['external_tvl_usd'] is None
+            assert total['known_external_tvl_usd'] == '200'
+    # No rewriting or relabelling of raw historical ownership.
+    assert stale['owned_usd'] == '80' and stale['child'] == address(2)
+
+
+@pytest.mark.parametrize('dated_getter,zero_debt', [(True,False),(False,True)])
+def test_registry_correction_preserves_dated_getter_or_zero(dated_getter,zero_debt):
+    correction = {'chainId':1,'strategyAddress':address(9),'targetVaultAddress':address(3),
+                  'supersededTargetVaultAddresses':[address(2)]}
+    position = dict(edge(1,9,2,'0' if zero_debt else '50','80'),
+                    method='service-registry', block_number=123)
+    if dated_getter: position['vault_getter'] = 'vault()'
+    _, _, total = account([snapshot(i,'100') for i in (1,2,3)], [position],
+                          target_corrections=[correction])
+    assert total['status'] == 'complete'
+    assert total['external_tvl_usd'] == ('300' if zero_debt else '250')
+
+
+def test_three_level_nesting_counts_capital_once():
+    rows,edges,total=account([snapshot(i,'100') for i in (1,2,3)],
+                            [edge(1,2,2,'100','100'),edge(2,3,3,'100','100')])
+    assert total['gross_tvl_usd']=='300'
+    assert total['overlap_usd']=='200'
+    assert total['external_tvl_usd']=='100'
+    assert [r['external_tvl_usd'] for r in rows]==['100','0','0']
+
+
+def test_shared_holder_and_multiple_children_share_debt_budget():
+    # Parents can have idle capital beyond their recorded strategy debt.
+    # Keep parent TVL above that debt so a TVL cap cannot hide a debt-cap bug.
+    points=[snapshot(1,'500'),snapshot(2,'500'),snapshot(3,'500'),snapshot(4,'500')]
+    positions=[edge(1,9,3,'100','400'),edge(2,9,3,'300','400'),
+               edge(1,9,4,'100','400'),edge(2,9,4,'300','400')]
+    _,edges,total=account(points,positions)
+    assert [Decimal(e['overlap_usd']) for e in edges]==[50,150,50,150]
+    assert Decimal(total['overlap_usd'])==400
+
+
+@pytest.mark.parametrize('child_tvl,deductions,external', [('100',[50,50],150),('1000',[50,100],1000)])
+def test_incoming_and_parent_tvl_caps(child_tvl,deductions,external):
+    points=[snapshot(1,'50'),snapshot(2,'100'),snapshot(3,child_tvl)]
+    _,edges,total=account(points,[edge(1,9,3,'200','200'),edge(2,10,3,'200','200')])
+    assert [Decimal(e['overlap_usd']) for e in edges]==deductions
+    assert Decimal(total['external_tvl_usd'])==external
+
+
+def test_curation_is_an_explicit_accounting_choice():
+    points=[snapshot(1,'100'),snapshot(2,'100','curation')]
+    assert account(points,[edge(1,9,2,'100','100')],include_curation=False)[2]['external_tvl_usd']=='200'
+    assert account(points,[edge(1,9,2,'100','100')],include_curation=True)[2]['external_tvl_usd']=='100'
+
+
+def test_curation_nesting_is_deducted_without_merging_product_layers():
+    points=[snapshot(1,'100'),snapshot(2,'100','morpho-v2') | {'category':'curation'},
+            snapshot(3,'110','morpho-v1') | {'category':'curation'}]
+    positions=[edge(1,8,2,'100','100'),edge(2,9,3,'100','105')]
+    rows,edges,total=account(points,positions,include_curation=False)
+    assert [r['external_tvl_usd'] for r in rows]==['100','100','10']
+    assert total['external_tvl_usd']=='210'
+    assert edges[0]['reason']=='curation_separate_product'
+    assert edges[1]['overlap_usd']=='100'
+    assert account(points,positions,include_curation=True)[2]['external_tvl_usd']=='110'
+    assert account(points,positions,include_curation=False,deduct_internal_curation=False)[2]['external_tvl_usd']=='310'
+
+
+def test_internal_curation_missing_price_is_unavailable_not_zero_overlap():
+    points=[snapshot(1,'100','curation'),snapshot(2,None,'curation')]
+    _,edges,total=account(points,[edge(1,9,2,'100',None)])
+    assert edges[0]['overlap_usd'] is None
+    assert edges[0]['reason']=='missing_position_valuation'
+    assert total['status']=='incomplete'
+
+
+def test_missing_values_are_not_zero_or_complete_totals():
+    points=[snapshot(1,'100'),snapshot(2,None)]
+    total=account(points,[edge(1,9,2,'100',None)])[2]
+    assert total['external_tvl_usd'] is None
+    assert total['known_gross_tvl_usd']=='100'
+    assert total['status']=='incomplete'
+    zero=account([snapshot(1,'0')],[])[2]
+    assert zero['external_tvl_usd']=='0' and zero['status']=='complete'
+
+
+def test_cross_chain_same_address_is_not_an_overlap():
+    points=[snapshot(1,'100'),snapshot(2,'100'),snapshot(2,'300',chain=10)]
+    rows,_,total=account(points,[edge(1,9,2,'60','60')])
+    child_values={r['chain_id']:Decimal(r['external_tvl_usd']) for r in rows if r['vault']==address(2)}
+    assert child_values=={1:40,10:300}
+    assert Decimal(total['external_tvl_usd'])==440
+
+
+def test_raw_quantity_keeps_integer_precision_and_requires_decimals():
+    assert asset_units('123456789123456789123456789123456789',18)==Decimal('123456789123456789.123456789123456789')
+    with pytest.raises(ValueError):
+        asset_units('1',None)
+
+
+def test_versioned_debt_layouts():
+    reader=object.__new__(ArchiveReader)
+    reader.words=lambda *args: [10,11,12,13]
+    assert reader.debt(address(1),address(2),'v3',1)==12
+    reader.words=lambda *args: list(range(9))
+    assert reader.debt(address(1),address(2),'v2',1)==6
+    with pytest.raises(ValueError):
+        reader.debt(address(1),address(2),'v3',1)
+
+
+@pytest.fixture
+def db(postgres_database, tmp_path):
+    conn=connect('staging')
+    init_db(conn)
+    for n,version in [(1,'v3'),(2,'v3'),(3,'v1'),(4,'curation')]:
+        conn.execute('''INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at,active)
+                        VALUES (1,?,?,?,?,1,0)''',(version,address(n),address(8),6))
+    conn.execute('INSERT INTO tvl_strategies VALUES (1,?,?,?)',(address(1),address(2),'fixture'))
+    conn.commit()
+    yield conn
+    conn.close()
+
+
+class Reader:
+    def __init__(self,chain): pass
+    def block_at(self,timestamp): return timestamp//10
+    def exists(self,address,block): return block>=10
+    def uint(self,addr,signature,block,arg=None):
+        return {'totalSupply()':100000000,'totalAssets()':100000000,
+                'getPricePerFullShare()':10**18,'balanceOf(address)':20000000}[signature]
+    def debt(self,parent,strategy,version,block): return 60000000
+
+
+def test_collection_retired_v1_curation_historical_debt_and_export(db,tmp_path,monkeypatch):
+    monkeypatch.setattr('yearn_data.tvl_sources.fetch_defillama_price',lambda *a:(1,'ok',{'fixture':True}))
+    run=collect_tvl(db,90,100,interval=10,reader_factory=Reader,price_source='defillama')
+    assert db.execute('SELECT COUNT(*) FROM tvl_snapshots').fetchone()[0]==8
+    export_tvl(db,tmp_path/'out',run)
+    data=json.loads((tmp_path/'out/tvl.json').read_text())
+    assert data['history'][0]['external_tvl_usd']=='0'
+    assert Decimal(data['history'][1]['external_tvl_usd'])==340
+    assert {p['version'] for p in data['vaults']}=={'v1','v3','curation'}
+    assert data['positions'][1]['debt_raw']=='60000000'
+    assert data['positions'][1]['method']=='direct-strategy'
+    assert (tmp_path/'out/history.csv').exists()
+
+
+def test_missing_rpc_and_missing_price_are_retained_and_retryable(db,tmp_path,monkeypatch):
+    monkeypatch.setattr('yearn_data.tvl_sources.fetch_defillama_price',lambda *a:(None,'retryable',{}))
+    run=collect_tvl(db,100,100,reader_factory=Reader,price_source='defillama')
+    assert db.execute('SELECT status FROM tvl_runs WHERE id=?',(run,)).fetchone()[0]=='incomplete'
+    point=json.loads(db.execute('SELECT data_json FROM tvl_snapshots LIMIT 1').fetchone()[0])
+    assert point['tvl_usd'] is None and point['status']=='retryable'
+    monkeypatch.setattr('yearn_data.tvl_sources.fetch_defillama_price',lambda *a:(1,'ok',{}))
+    repaired=collect_tvl(db,100,100,reader_factory=Reader,price_source='defillama')
+    assert repaired!=run
+    assert db.execute('SELECT status FROM tvl_runs WHERE id=?',(run,)).fetchone()[0]=='incomplete'
+    def unavailable(chain): raise ValueError('no RPC')
+    failed=collect_tvl(db,100,100,reader_factory=unavailable,price_source='defillama')
+    assert db.execute('SELECT status FROM tvl_runs WHERE id=?',(failed,)).fetchone()[0]=='incomplete'
+
+
+def test_share_scan_discovers_nonregistry_intermediaries(db):
+    db.execute('INSERT INTO tvl_strategies VALUES (1,?,?,?)',(address(1),address(9),'fixture'))
+    result=scan_holders(db,100,reader_factory=Reader)
+    assert result['positive_holdings']>0 and result['failed_reads']==0
+    vaults=[dict(r) for r in db.execute('SELECT * FROM tvl_vaults')]
+    assert any(e['strategy']==address(9) and e['child']==address(2) for e in candidate_edges(db,vaults))
+
+
+
+
+def test_cli_export_empty_run_is_actionable(postgres_database, tmp_path):
+    with pytest.raises(ValueError,match='no collected TVL run'):
+        main(['--db','staging','tvl','export','--out',str(tmp_path/'out')])
+
+
+def test_yearn_prices_requires_day_end_state(db):
+    with pytest.raises(ValueError,match='UTC day-end'):
+        collect_tvl(db,100,100,reader_factory=Reader)
+
+
+def test_bridge_candidates_do_not_silently_rewrite_history():
+    source=snapshot(1,'100')
+    source['bridge_target_chain']=747474
+    total=account([source,snapshot(2,'100',chain=747474)],[])[2]
+    assert total['external_tvl_usd'] is None
+    assert total['known_gross_tvl_usd']=='200'
+    assert total['issues']==['bridge_migration_timing_unverified']
+
+
+def test_failed_scans_are_not_zero_balances(db):
+    class Broken(Reader):
+        def uint(self,*args): raise RuntimeError('archive unavailable')
+    result=scan_holders(db,100,reader_factory=Broken)
+    assert result['failed_reads']>0 and result['positive_holdings']==0
+
+
+def test_collection_exports_ordinary_strategy_debt_without_overlap(db,monkeypatch,tmp_path):
+    db.execute('INSERT INTO tvl_strategies VALUES (1,?,?,?)',(address(1),address(9),'fixture'))
+    monkeypatch.setattr('yearn_data.tvl_sources.fetch_defillama_price',lambda *a:(1,'ok',{}))
+    run=collect_tvl(db,100,100,reader_factory=Reader,price_source='defillama')
+    export_tvl(db,tmp_path/'out',run)
+    data=json.loads((tmp_path/'out/tvl.json').read_text())
+    allocation=next(p for p in data['positions'] if p['method']=='strategy-allocation')
+    assert Decimal(allocation['debt_usd'])==60
+    assert allocation['mapping_status']=='no_known_child'
+    assert allocation['overlap_usd']=='0'
+
+
+@pytest.mark.parametrize('family',['curation','morpho-v2'])
+def test_morpho_adapter_debt_requires_historical_membership(family):
+    reader=object.__new__(ArchiveReader)
+    calls=[]
+    member=True
+    def uint(vault,signature,block,arg=None):
+        calls.append((vault,signature,block,arg))
+        return int(member) if signature=='isAdapter(address)' else 123
+    reader.uint=uint
+    assert reader.debt(address(1),address(9),family,110)==123
+    assert calls==[(address(1),'isAdapter(address)',110,address(9)),(address(9),'realAssets()',110,None)]
+    member=False;calls.clear()
+    assert reader.debt(address(1),address(9),family,110)==0
+    assert calls==[(address(1),'isAdapter(address)',110,address(9))]
+
+
+def test_known_child_outside_sample_stays_a_known_relationship(db,monkeypatch):
+    monkeypatch.setattr('yearn_data.tvl_sources.fetch_defillama_price',lambda *a:(1,'ok',{}))
+    run=collect_tvl(db,100,100,addresses=[address(1)],reader_factory=Reader,price_source='defillama')
+    position=json.loads(db.execute('SELECT data_json FROM tvl_positions WHERE run_id=?',(run,)).fetchone()[0])
+    assert position['method']=='direct-strategy'
+    assert position['mapping_status']=='child_outside_selection'
+    assert position['status']=='unavailable'
+    assert position['reason']=='child_outside_selection'
+    assert db.execute('SELECT status FROM tvl_runs WHERE id=?',(run,)).fetchone()[0]=='incomplete'
+    assert Decimal(position['debt_usd'])==60
+
+
+def test_compounder_child_is_a_separate_level(db,monkeypatch):
+    db.execute('INSERT INTO tvl_targets VALUES (1,?,?,?)',(address(2),address(4),'fixture'))
+    monkeypatch.setattr('yearn_data.tvl_sources.fetch_defillama_price',lambda *a:(1,'ok',{}))
+    run=collect_tvl(db,100,100,reader_factory=Reader,price_source='defillama')
+    points=[json.loads(r[0]) for r in db.execute('SELECT data_json FROM tvl_snapshots WHERE run_id=?',(run,))]
+    positions=[json.loads(r[0]) for r in db.execute('SELECT data_json FROM tvl_positions WHERE run_id=?',(run,))]
+    assert {(p['parent'],p['child']) for p in positions}=={(address(1),address(2)),(address(2),address(4))}
+    assert Decimal(account(points,positions,include_curation=True)[2]['overlap_usd'])==80
+
+
+def test_curated_product_can_have_v3_contract_semantics():
+    child=snapshot(2,'100','v3')
+    child['category']='curation'
+    positions=[edge(1,2,2,'60','100')]
+    assert Decimal(account([snapshot(1,'100'),child],positions,include_curation=False)[2]['external_tvl_usd'])==200
+    assert Decimal(account([snapshot(1,'100'),child],positions,include_curation=True)[2]['external_tvl_usd'])==140
+
+
+
+def test_legacy_forwarder_scalar_padding():
+    reader=object.__new__(ArchiveReader)
+    reader.words=lambda *_args: [123]+[0]*127
+    assert reader.uint('0xabc','totalAssets()',42)==123
+    reader.words=lambda *_args: [123,456]+[0]*126
+    with pytest.raises(ValueError,match='invalid scalar'):
+        reader.uint('0xabc','totalAssets()',42)
+
+
+def test_legacy_forwarder_strategy_padding():
+    reader=object.__new__(ArchiveReader)
+    params=[0,1,2,3,4,5,987,7,8]
+    reader.words=lambda *_args: params+[0]*119
+    assert reader.debt('0xparent','0xstrategy','v2',42)==987
+    reader.words=lambda *_args: params+[1]+[0]*118
+    with pytest.raises(ValueError,match='unsupported strategies'):
+        reader.debt('0xparent','0xstrategy','v2',42)
+
+
+
+def test_empty_v1_does_not_require_undefined_share_price():
+    from yearn_data.tvl_sources import _snapshot
+    class EmptyV1:
+        def block_at(self,timestamp): return 123
+        def exists(self,vault,block): return True
+        def uint(self,vault,signature,block):
+            assert signature=='totalSupply()'
+            return 0
+    vault={'chain_id':1,'version':'v1','address':address(1),'asset':address(8),
+           'asset_decimals':18,'name':'empty V1'}
+    point=_snapshot(vault,86399,EmptyV1(),{},'yearn-prices')
+    assert point['total_assets_raw']=='0' and point['total_supply_raw']=='0'
+    assert point['tvl_usd']=='0' and point['status']=='ok'
+
+
+@pytest.mark.parametrize('ids', [(1,2,3),(3,2,1)])
+@pytest.mark.parametrize('share_prices', [True,False])
+def test_multilevel_wrappers_use_leaf_value_in_any_order(postgres_database, tmp_path,monkeypatch,ids,share_prices):
+    conn=connect('staging');init_db(conn)
+    outer,middle,leaf=map(address,ids)
+    for vault,asset,decimals in [(outer,middle,18),(middle,leaf,18),(leaf,address(90),6)]:
+        conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at) VALUES (1,'v3',?,?,?,1)",(vault,asset,decimals))
+    conn.commit()
+    assets={outer:50*10**18,middle:50*10**18,leaf:200*10**6}
+    supplies={outer:100*10**18,middle:200*10**18,leaf:100*10**18}
+    class FullOwner(Reader):
+        def uint(self,vault,signature,block,arg=None):
+            if signature=='totalSupply()':return supplies[vault]
+            if signature=='totalAssets()':return assets[vault]
+            return {(middle,outer):assets[outer],(leaf,middle):assets[middle]}[(vault,arg)]
+        def debt(self,*args):return 0
+    def price(chain,asset,timestamp):
+        if not share_prices and asset!=address(90):return None,'missing',{}
+        return {middle:2,leaf:3,address(90):2}[asset],'ok',{}
+    monkeypatch.setattr('yearn_data.tvl_sources.fetch_defillama_price',price)
+    run=collect_tvl(conn,100,100,reader_factory=FullOwner,price_source='defillama')
+    export_tvl(conn,tmp_path/'out',run)
+    data=json.loads((tmp_path/'out/tvl.json').read_text())
+    # Leaf: 200 tokens at $2. Middle owns half its shares; outer owns
+    # one quarter of the middle. Deduct $200 + $50 once, leaving $400.
+    assert {p['vault']:Decimal(p['tvl_usd']) for p in data['vaults']}=={outer:50,middle:200,leaf:400}
+    assert Decimal(data['history'][0]['overlap_usd'])==250
+    assert Decimal(data['history'][0]['external_tvl_usd'])==400
+    assert data['history'][0]['status']=='complete'
+    conn.close()
+
+
+@pytest.mark.parametrize('failure', ['membership','assets','positive-debt','zero-debt'])
+def test_unresolved_adapter_read_failure_cannot_export_complete(postgres_database, tmp_path,monkeypatch,failure):
+    conn=connect('staging');init_db(conn)
+    conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at) VALUES (1,'curation',?,?,18,1)",(address(1),address(90)))
+    conn.execute('INSERT INTO tvl_strategies VALUES (1,?,?,?)',(address(1),address(9),'fixture'))
+    conn.execute("INSERT INTO tvl_catalog_evidence VALUES (1,?,?,'unresolved','{}',1)",(address(9),'adapter:'+address(1)))
+    conn.commit()
+    class AdapterReader(Reader):
+        debt=ArchiveReader.debt
+        def uint(self,vault,signature,block,arg=None):
+            if signature=='isAdapter(address)':
+                if failure=='membership':raise ValueError('historical membership unavailable')
+                return 1
+            if signature=='realAssets()':
+                if failure=='assets':raise RuntimeError('historical assets unavailable')
+                return 0 if failure=='zero-debt' else 10*10**18
+            return 100*10**18
+    monkeypatch.setattr('yearn_data.tvl_sources.fetch_defillama_price',lambda *a:(1,'ok',{}))
+    run=collect_tvl(conn,100,100,reader_factory=AdapterReader,price_source='defillama')
+    export_tvl(conn,tmp_path/'out',run)
+    data=json.loads((tmp_path/'out/tvl.json').read_text())
+    summary=data['history'][0]
+    if failure=='zero-debt':
+        assert summary['status']=='complete' and Decimal(summary['external_tvl_usd'])==100
+        assert data['positions'][0]['overlap_usd']=='0'
+    else:
+        assert summary['status']=='incomplete'
+        assert summary['gross_tvl_usd'] is None and summary['external_tvl_usd'] is None
+        assert data['positions'][0]['overlap_usd'] is None
+    conn.close()
+
+
+@pytest.mark.parametrize('cycle', [False,True])
+def test_nested_valuation_without_a_known_leaf_stays_unavailable(postgres_database, tmp_path,monkeypatch,cycle):
+    conn=connect('staging');init_db(conn)
+    for vault,asset in [(address(1),address(2)),(address(2),address(1) if cycle else address(90))]:
+        conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,updated_at) VALUES (1,'v3',?,?,18,1)",(vault,asset))
+    conn.commit()
+    class FullOwner(Reader):
+        def uint(self,*args):return 100*10**18
+    monkeypatch.setattr('yearn_data.tvl_sources.fetch_defillama_price',
+                        lambda chain,asset,timestamp:(None,'missing',{}) if asset==address(90) else (999,'ok',{}))
+    run=collect_tvl(conn,100,100,reader_factory=FullOwner,price_source='defillama')
+    export_tvl(conn,tmp_path/'out',run)
+    data=json.loads((tmp_path/'out/tvl.json').read_text())
+    assert all(p['tvl_usd'] is None for p in data['vaults'])
+    assert data['history'][0]['status']=='incomplete'
+    assert data['history'][0]['external_tvl_usd'] is None
+    conn.close()
+
+
+@pytest.mark.parametrize('flags,expected', [([], True), (['--include-curation'], True), (['--no-include-curation'], False)])
+def test_tvl_export_curation_option(flags, expected, db, tmp_path, monkeypatch):
+    from yearn_data import tvl
+    argv = ['--db', 'staging', 'tvl', 'export', '--out', str(tmp_path / 'out'), *flags]
+    assert build_parser().parse_args(argv).include_curation is expected
+    calls = []
+    def capture(conn, out, run_id, *, include_curation):
+        calls.append(include_curation)
+        return out
+    monkeypatch.setattr(tvl, 'export_tvl', capture)
+    assert main(argv) == 0
+    assert calls == [expected]
+
+
+@pytest.mark.parametrize('child_state', ['missing','unknown-block','different-block','zero','valid'])
+def test_stored_nested_values_require_compatible_child_state(child_state):
+    from yearn_data.tvl import value_nested_shares
+    parent={'chain_id':1,'vault':address(1),'asset':address(2),'block_number':10,
+            'total_assets_raw':'50','asset_units':'50','total_supply_raw':'100',
+            'tvl_usd':'999','price_usd':'19.98','status':'ok',
+            'pricing':{'source':'nested-share','child':address(2)}}
+    independent=dict(parent,vault=address(3),pricing={'source':'provider'})
+    zero=dict(parent,vault=address(4),total_assets_raw='0',asset_units='0',tvl_usd='0',price_usd=None)
+    points={(1,row['vault']):row for row in (parent,independent,zero)}
+    if child_state!='missing':
+        points[(1,address(2))]={'vault':address(2),'asset':address(90),'block_number':11 if child_state=='different-block' else 10,
+                                'total_supply_raw':'100','tvl_usd':'0' if child_state=='zero' else '100','status':'ok'}
+    if child_state=='unknown-block':
+        parent['block_number']=points[(1,address(2))]['block_number']=None
+    value_nested_shares(points,derived_only=True,require_same_block=True)
+    assert parent['tvl_usd']==({'zero':'0','valid':'50'}.get(child_state))
+    assert independent['tvl_usd']=='999' and zero['tvl_usd']=='0'

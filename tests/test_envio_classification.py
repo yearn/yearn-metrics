@@ -29,7 +29,7 @@ def offline_inventory(monkeypatch):
 
 @pytest.mark.parametrize("version", ["v2", "v3"])
 @pytest.mark.parametrize("deployment", [None, 20])
-def test_default_lifetime_run_promotes_trusted_cached_vault_and_backfills_history(tmp_path, monkeypatch, version, deployment):
+def test_default_lifetime_run_promotes_trusted_cached_vault_and_backfills_history(postgres_database, tmp_path, monkeypatch, version, deployment):
     conn = helpers._db(tmp_path)
     cached_factory_vault(conn, version, deployment)
     kind = "role_manager" if version == "v3" else "registry"
@@ -52,7 +52,7 @@ def test_default_lifetime_run_promotes_trusted_cached_vault_and_backfills_histor
 
 
 @pytest.mark.parametrize("later_actions,expected_active", [([], 0), (["added"], 1), (["added", "removed"], 0)])
-def test_retired_cached_member_uses_latest_trusted_state_during_past_discovery(tmp_path, monkeypatch, later_actions, expected_active):
+def test_retired_cached_member_uses_latest_trusted_state_during_past_discovery(postgres_database, tmp_path, monkeypatch, later_actions, expected_active):
     conn = helpers._db(tmp_path)
     cached_factory_vault(conn)
     helpers._seed_inventory(conn, block=40)
@@ -73,7 +73,7 @@ def test_retired_cached_member_uses_latest_trusted_state_during_past_discovery(t
 
 
 @pytest.mark.parametrize("evidence", ["factory", "foreign_manager", "future_member", "retired_not_requested"])
-def test_unqualified_cached_factory_vault_remains_non_yearn(tmp_path, monkeypatch, evidence):
+def test_unqualified_cached_factory_vault_remains_non_yearn(postgres_database, tmp_path, monkeypatch, evidence):
     conn = helpers._db(tmp_path)
     cached_factory_vault(conn, deployment=20)
     if evidence == "factory":
