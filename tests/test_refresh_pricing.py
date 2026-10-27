@@ -3,7 +3,7 @@ from contextlib import closing
 
 import pytest
 
-from yearn_data import pricing
+from yearn_data import pricing,fee_valuation
 from yearn_data.storage import connect,init_db
 from yearn_data.refresh_state import RefreshState,WorkBudget,WorkDeferred,drain_pages,query_digest
 
@@ -24,6 +24,8 @@ def test_price_pages_resume_after_500_without_repeating_missing_or_overwriting_a
             return {target:(None,'missing',{}) if target[1]==f'0x{1:040x}' else (2,'ok',{}) for target in batch}
         monkeypatch.setattr(pricing,'fetch_yearn_prices_batch',fetch)
         monkeypatch.setattr(pricing,'fetch_yearn_price',lambda *a:pytest.fail('unexpected exact recovery'))
+        monkeypatch.setattr(fee_valuation.pricing,'fetch_yearn_prices_batch',fetch)
+        monkeypatch.setattr(fee_valuation.pricing,'fetch_yearn_price',lambda *a:pytest.fail('unexpected exact recovery'))
         def select(after,limit):
             return pricing.report_pricing_targets(conn,source='yearn-prices',retry_missing=True,
                 retry_statuses=('missing','pending','retryable'),chain_ids={1},before_timestamp=86400,

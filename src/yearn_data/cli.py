@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 from pathlib import Path
+import sys
 
 from .analysis import run_lifetime_yield, run_vault_fees, run_vault_volume
 from .config import CHAINS, DEFAULT_CHAINS, get_event_source, load_environment, normalize_chain_key

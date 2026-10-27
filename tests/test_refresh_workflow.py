@@ -64,6 +64,8 @@ def workflow(postgres_database,tmp_path,monkeypatch):
     def quote(chain,asset,timestamp):return 2,'ok',{'provider':'yearn-prices','normalized_timestamp':timestamp}
     monkeypatch.setattr(pricing,'fetch_yearn_prices_batch',lambda batch:{t:quote(*t) for t in batch})
     monkeypatch.setattr(pricing,'fetch_yearn_price',quote)
+    monkeypatch.setattr(refresh.fee_valuation.pricing,'fetch_yearn_prices_batch',lambda batch:{t:quote(*t) for t in batch})
+    monkeypatch.setattr(refresh.fee_valuation.pricing,'fetch_yearn_price',quote)
     monkeypatch.setattr(tvl_sources,'fetch_yearn_price',quote)
     acquired=[]
     def inputs(database,progress):
@@ -287,4 +289,22 @@ def test_corrected_upstream_quote_invalidates_prepared_financial_outputs(workflo
         earned=json.loads(conn.execute("SELECT row_json FROM analysis_outputs WHERE run_id=? AND name='total_yield_summary'",
             (refreshed['result']['earningsRunId'],)).fetchone()[0])
         assert Decimal(earned['net_yield_usd'])==Decimal('3')
+    assert refresh.selection('staging') is None
+
+
+def test_advancing_cutoff_collects_only_the_new_close_and_preserves_prepared_history(workflow):
+    from dataclasses import replace
+    options,_=workflow
+    first=refresh.run_refresh(options)
+    assert first['status']=='prepared',first
+    events=[]
+    advanced=refresh.run_refresh(replace(options,cutoff=CUTOFF+86400),progress=events.append)
+    assert advanced['status']=='prepared' and advanced['result']['publishReady'] is True,advanced
+    assert [e['timestamp'] for e in events if e['event']=='tvl-collection-started']==[259199]
+    with closing(connect('staging',readonly=True)) as conn:
+        for result,expected in ((first,[86399,172799]),(advanced,[86399,172799,259199])):
+            rows=conn.execute('SELECT timestamp,tvl_usd FROM tvl_chart_rows WHERE dataset_id=? ORDER BY timestamp',
+                (result['result']['tvlDatasetId'],)).fetchall()
+            assert [r[0] for r in rows]==expected
+            assert {Decimal(r[1]) for r in rows}=={Decimal('200')}
     assert refresh.selection('staging') is None
