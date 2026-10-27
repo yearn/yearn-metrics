@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from decimal import Decimal
 
 import pytest
@@ -8,11 +9,14 @@ from yearn_data.incident_adjustments import adjustment_for_tx
 from yearn_data.storage import connect, from_json, init_db, seed_chains
 
 
-@pytest.mark.parametrize(('job', 'failure'), [
-    (job, failure) for job in (run_lifetime_yield, run_vault_fees, run_vault_volume)
+@pytest.mark.parametrize(('job', 'failure', 'pipeline'), [
+    (job, failure, False) for job in (run_lifetime_yield, run_vault_fees, run_vault_volume)
     for failure in (RuntimeError, KeyboardInterrupt)
-] + [(run_lifetime_yield, 'sql')])
-def test_failed_analysis_rolls_back_outputs_and_allows_clean_retry(postgres_database, monkeypatch, job, failure):
+] + [(run_lifetime_yield, 'sql', False),
+     (run_lifetime_yield, RuntimeError, True), (run_lifetime_yield, 'sql', True)])
+def test_failed_analysis_rolls_back_outputs_and_allows_clean_retry(
+    postgres_database, monkeypatch, job, failure, pipeline,
+):
     import psycopg
     from yearn_data import analysis
 
@@ -32,13 +36,14 @@ def test_failed_analysis_rolls_back_outputs_and_allows_clean_retry(postgres_data
     def interrupt_after_output(*args):
         original_write(*args)
         if failure == 'sql':
-            conn.execute('SELECT * FROM missing_analysis_relation')
+            conn.execute('SELECT * FROM missing_analysis_relation').fetchone()
         raise failure('interrupted analysis output')
 
     monkeypatch.setattr(analysis, 'write_output', interrupt_after_output)
     error_type = psycopg.errors.UndefinedTable if failure == 'sql' else failure
-    with pytest.raises(error_type):
-        job(conn)
+    with conn.raw.pipeline() if pipeline else nullcontext():
+        with pytest.raises(error_type):
+            job(conn)
     # A caller rollback cannot erase a committed terminal marker.
     conn.rollback()
     failed = conn.execute('SELECT * FROM analysis_runs').fetchone()
@@ -46,7 +51,8 @@ def test_failed_analysis_rolls_back_outputs_and_allows_clean_retry(postgres_data
     assert conn.execute('SELECT COUNT(*) FROM analysis_outputs').fetchone()[0] == 0
 
     monkeypatch.setattr(analysis, 'write_output', original_write)
-    run_id = job(conn)
+    with conn.raw.pipeline() if pipeline else nullcontext():
+        run_id = job(conn)
     assert run_id != failed['id']
     assert conn.execute('SELECT status FROM analysis_runs WHERE id=?', (run_id,)).fetchone()[0] == 'complete'
     assert conn.execute('SELECT COUNT(*) FROM analysis_runs WHERE status=\'running\'').fetchone()[0] == 0
