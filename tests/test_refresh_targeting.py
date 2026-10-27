@@ -1,5 +1,5 @@
 """Forward cutoff coverage reuse and explicitly scoped fee target acquisition."""
-from yearn_data import fee_valuation,pricing,tokenized_fees
+from yearn_data import fee_valuation,tokenized_fees
 from test_fee_valuation import db as db,seed,point,ASSET,OTHER,DAY
 
 
@@ -33,7 +33,7 @@ def test_explicit_fee_targets_filter_family_chain_and_day_without_losing_global_
     work=fee_valuation.fee_pricing_work(db,before_timestamp=cutoff,refresh=True,chain_ids={1})
     assert len(work.targets)==3 and work.metadata_gaps==1
     calls=[]
-    monkeypatch.setattr(pricing,'fetch_yearn_prices_batch',lambda targets:calls.extend(targets) or {t:point(t) for t in targets})
+    monkeypatch.setattr(fee_valuation.pricing,'fetch_yearn_prices_batch',lambda targets:calls.extend(targets) or {t:point(t) for t in targets})
     result=fee_valuation.price_fees(db,before_timestamp=cutoff,targets={target},chain_ids={1})
     assert result['selected_asset_days']==1 and calls==[target]
     assert fee_valuation.price_fees(db,before_timestamp=cutoff,targets={target},chain_ids={1})['selected_asset_days']==0
