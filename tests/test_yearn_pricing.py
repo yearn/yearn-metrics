@@ -1,8 +1,10 @@
+from yearn_data import pricing_adapters as adapters
+from yearn_data import pricing_clients as clients
 import json
 
 import pytest
 from yearn_data.config import CHAINS
-from yearn_data.pricing import _yearn_prices_batches, fetch_yearn_price, normalize_yearn_price_timestamp, price_unpriced_reports
+from yearn_data.pricing import yearn_prices_batches, fetch_yearn_price, normalize_yearn_price_timestamp, price_unpriced_reports
 from yearn_data.storage import connect, from_json, init_db, seed_chains
 
 
@@ -17,12 +19,12 @@ def test_invalid_retry_configuration_stops_before_http(monkeypatch, setting):
     with pytest.raises(pricing.YearnPricesConfigurationError, match='retry configuration'):
         pricing.fetch_yearn_price(1, '0x'+'1'*40, 86399)
 
-def test_yearn_prices_batches_normalize_and_respect_route_limits():
+def testyearn_prices_batches_normalize_and_respect_route_limits():
     first = "0x0000000000000000000000000000000000000001"
     second = "0x0000000000000000000000000000000000000002"
     targets = [(1, first, day * 86_400) for day in range(91)] + [(1, second, 100)]
 
-    batches = _yearn_prices_batches(targets, max_tokens=2)
+    batches = yearn_prices_batches(targets, max_tokens=2)
 
     assert sum(len(batch) for batch in batches) == 92
     for batch in batches:
@@ -92,8 +94,8 @@ def test_price_unpriced_reports_uses_yearn_prices_eod_and_exact_fallback(postgre
             },
         )
 
-    monkeypatch.setattr("yearn_data.pricing.fetch_yearn_prices_batch", fake_batch)
-    monkeypatch.setattr("yearn_data.pricing.fetch_yearn_price", fake_exact)
+    monkeypatch.setattr("yearn_data.pricing_clients.fetch_yearn_prices_batch", fake_batch)
+    monkeypatch.setattr("yearn_data.pricing_clients.fetch_yearn_price", fake_exact)
 
     count = price_unpriced_reports(conn, source="yearn-prices")
 
@@ -161,9 +163,9 @@ def test_price_unpriced_reports_uses_defillama_only_for_unresolved_yearn_prices(
             )
         }
 
-    monkeypatch.setattr("yearn_data.pricing.fetch_yearn_prices_batch", fake_yearn_batch)
+    monkeypatch.setattr("yearn_data.pricing_clients.fetch_yearn_prices_batch", fake_yearn_batch)
     monkeypatch.setattr(
-        "yearn_data.pricing.fetch_yearn_price",
+        "yearn_data.pricing_clients.fetch_yearn_price",
         lambda *_args: (
             None,
             "missing",
@@ -184,7 +186,7 @@ def test_price_unpriced_reports_uses_defillama_only_for_unresolved_yearn_prices(
             for target in targets
         }
 
-    monkeypatch.setattr("yearn_data.pricing.fetch_defillama_prices_batch", fake_defillama_batch)
+    monkeypatch.setattr("yearn_data.pricing_adapters.fetch_defillama_prices_batch", fake_defillama_batch)
 
     count = price_unpriced_reports(conn)
 
@@ -225,11 +227,11 @@ def test_price_unpriced_reports_falls_back_after_yearn_prices_transport_failure(
     conn.commit()
 
     monkeypatch.setattr(
-        "yearn_data.pricing.fetch_yearn_prices_batch",
+        "yearn_data.pricing_clients.fetch_yearn_prices_batch",
         lambda _targets: (_ for _ in ()).throw(YearnPricesRequestError("batch unavailable")),
     )
     monkeypatch.setattr(
-        "yearn_data.pricing.fetch_yearn_price",
+        "yearn_data.pricing_clients.fetch_yearn_price",
         lambda *_args: (
             None,
             "retryable",
@@ -237,7 +239,7 @@ def test_price_unpriced_reports_falls_back_after_yearn_prices_transport_failure(
         ),
     )
     monkeypatch.setattr(
-        "yearn_data.pricing.fetch_defillama_prices_batch",
+        "yearn_data.pricing_adapters.fetch_defillama_prices_batch",
         lambda targets: {target: (2.0, "ok", {"source": "defillama"}) for target in targets},
     )
 
@@ -255,7 +257,7 @@ def test_yearn_prices_exact_keeps_exhausted_transport_failure_retryable(monkeypa
     from yearn_data.pricing import YearnPricesRequestError
 
     monkeypatch.setattr(
-        "yearn_data.pricing._yearn_prices_get",
+        "yearn_data.pricing_clients._yearn_prices_get",
         lambda *args, **kwargs: (_ for _ in ()).throw(YearnPricesRequestError("request exhausted")),
     )
 
@@ -275,7 +277,7 @@ def test_yearn_prices_exact_keeps_terminal_response_invalid(monkeypatch):
     from yearn_data.pricing import YearnPricesRequestError
 
     monkeypatch.setattr(
-        "yearn_data.pricing._yearn_prices_get",
+        "yearn_data.pricing_clients._yearn_prices_get",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             YearnPricesRequestError("bad response", retryable=False)
         ),
@@ -306,7 +308,7 @@ def test_yearn_batch_rejects_invalid_evidence(monkeypatch, problem):
     if problem == 'duplicate_zero': points = [{**raw, 'price': 0}, raw]
     if problem == 'invalid_price': raw['price'] = True
     if problem == 'missing_source': raw.pop('source')
-    monkeypatch.setattr('yearn_data.pricing._yearn_prices_get', lambda *a, **kw: {'coins': {key: {'prices': points}}})
+    monkeypatch.setattr('yearn_data.pricing_clients._yearn_prices_get', lambda *a, **kw: {'coins': {key: {'prices': points}}})
     assert fetch_yearn_prices_batch([(1, asset, 100)]) == {}
 
 
@@ -339,7 +341,6 @@ def test_malformed_batch_preserves_other_targets_and_exact_provider_fallbacks(
     postgres_database,
     tmp_path, monkeypatch, exact_outcome
 ):
-    from yearn_data import pricing
 
     conn = connect('staging')
     init_db(conn)
@@ -380,8 +381,8 @@ def test_malformed_batch_preserves_other_targets_and_exact_provider_fallbacks(
         fallback_calls.extend(targets)
         return {target: (7.0, "ok", {"source": "defillama"}) for target in targets}
 
-    monkeypatch.setattr(pricing, "_yearn_prices_get", fake_get)
-    monkeypatch.setattr(pricing, "fetch_defillama_prices_batch", fake_fallback)
+    monkeypatch.setattr(clients, "_yearn_prices_get", fake_get)
+    monkeypatch.setattr(adapters, "fetch_defillama_prices_batch", fake_fallback)
     count = price_unpriced_reports(conn, onchain_fallbacks=False)
     rows = {(row["token_address"], row["source"]): row for row in conn.execute("SELECT * FROM prices")}
     assert rows[assets[1], "yearn-prices"]["price_usd"] == 2.0
@@ -433,7 +434,7 @@ def test_response_error_recovery_preserves_fatal_authentication_and_configuratio
             if failure == "exact-auth" and path.endswith("batchHistorical"):
                 return {"coins": {}}
             raise pricing.YearnPricesAuthenticationError("authentication failed")
-        monkeypatch.setattr(pricing, "_yearn_prices_get", fake_get)
+        monkeypatch.setattr(clients, "_yearn_prices_get", fake_get)
         expected_error = pricing.YearnPricesAuthenticationError
         message = "authentication failed"
 
@@ -478,7 +479,7 @@ def test_default_batch_preserves_valid_points_and_only_verifies_invalid_target(p
         exact_calls.append((token_key, int(timestamp)))
         return {"coins": {token_key: {"timestamp": int(timestamp), "price": 9.0, "source": "oracle"}}}
 
-    monkeypatch.setattr(pricing, "_yearn_prices_get", fake_get)
+    monkeypatch.setattr(clients, "_yearn_prices_get", fake_get)
     count, unresolved = pricing._price_rows_with_yearn_prices(conn, rows)
     assert count == 3
     assert unresolved == []
@@ -498,7 +499,7 @@ def test_boolean_prices_are_invalid_in_batch_and_exact_paths(monkeypatch, boolea
     point = {"timestamp": 86399, "price": boolean_price, "source": "oracle"}
     def fake_get(path, **kwargs):
         return {"coins": {"ethereum:" + asset: {"prices": [point]} if path.endswith("batchHistorical") else point}}
-    monkeypatch.setattr(pricing, "_yearn_prices_get", fake_get)
+    monkeypatch.setattr(clients, "_yearn_prices_get", fake_get)
     assert pricing.fetch_yearn_prices_batch([(1, asset, 100)]) == {}
     price, status, evidence = pricing.fetch_yearn_price(1, asset, 100)
     assert price is None
@@ -513,7 +514,7 @@ def test_numeric_zero_price_still_means_missing_instead_of_a_usable_zero_price(m
     point = {"timestamp": 86399, "price": numeric_zero, "source": "oracle"}
     def fake_get(path, **kwargs):
         return {"coins": {"ethereum:" + asset: {"prices": [point]} if path.endswith("batchHistorical") else point}}
-    monkeypatch.setattr(pricing, "_yearn_prices_get", fake_get)
+    monkeypatch.setattr(clients, "_yearn_prices_get", fake_get)
     assert pricing.fetch_yearn_prices_batch([(1, asset, 100)]) == {}
     price, status, evidence = pricing.fetch_yearn_price(1, asset, 100)
     assert price is None
@@ -534,7 +535,6 @@ def test_run_rejects_unsupported_fallback_flags_before_discovery_or_indexing(pos
 
 @pytest.mark.parametrize("fallback_status", ["missing", "retryable", "invalid", "ok"])
 def test_yearn_fallback_does_not_replace_good_stored_prices_with_failures(postgres_database, monkeypatch, tmp_path, fallback_status):
-    from yearn_data import pricing
     from yearn_data.analysis import run_lifetime_yield
 
     conn = connect('staging')
@@ -558,13 +558,13 @@ def test_yearn_fallback_does_not_replace_good_stored_prices_with_failures(postgr
     conn.execute("""INSERT INTO prices (chain_id, token_address, timestamp, source, status)
                     VALUES (1, ?, 100, 'defillama', 'missing')""", (assets[2],))
     conn.commit()
-    monkeypatch.setattr(pricing, "fetch_yearn_prices_batch", lambda _: {})
-    monkeypatch.setattr(pricing, "fetch_yearn_price", lambda *_: (None, "missing", {}))
+    monkeypatch.setattr(clients, "fetch_yearn_prices_batch", lambda _: {})
+    monkeypatch.setattr(clients, "fetch_yearn_price", lambda *_: (None, "missing", {}))
 
     def fallback(targets):
         return {target: ((9.0 if fallback_status == "ok" else None), fallback_status, {"source": "fetched"})
                 if target[1] == assets[0] else (7.0, "ok", {"source": "fetched"}) for target in targets}
-    monkeypatch.setattr(pricing, "fetch_defillama_prices_batch", fallback)
+    monkeypatch.setattr(adapters, "fetch_defillama_prices_batch", fallback)
     count = price_unpriced_reports(conn, onchain_fallbacks=False)
     saved = {row["token_address"]: row for row in conn.execute("SELECT * FROM prices WHERE source='defillama'")}
     assert saved[assets[0]]["status"] == "ok"
@@ -612,9 +612,9 @@ def test_open_day_prices_wait_until_close_and_retry_on_an_ordinary_run(
         calls.extend(targets)
         return {target: (2.0, "ok", {"normalized_timestamp": target[2], "provider": "yearn-prices"})
                 for target in targets if target[2] < clock[0]}
-    monkeypatch.setattr(pricing, "fetch_yearn_prices_batch", batch)
-    monkeypatch.setattr(pricing, "fetch_yearn_price", lambda *_: (None, "missing", {}))
-    monkeypatch.setattr(pricing, "fetch_defillama_prices_batch",
+    monkeypatch.setattr(clients, "fetch_yearn_prices_batch", batch)
+    monkeypatch.setattr(clients, "fetch_yearn_price", lambda *_: (None, "missing", {}))
+    monkeypatch.setattr(adapters, "fetch_defillama_prices_batch",
                         lambda targets: {t: (1.0, "ok", {}) for t in targets})
     price_unpriced_reports(conn, fallback=fallback, onchain_fallbacks=False)
     assert calls == []
@@ -651,7 +651,6 @@ def test_open_day_prices_wait_until_close_and_retry_on_an_ordinary_run(
 
 @pytest.mark.parametrize("unsupported_chain", [100, 999999])
 def test_unsupported_chain_stays_unpriced_without_aborting_configured_chains(postgres_database, monkeypatch, tmp_path, unsupported_chain):
-    from yearn_data import pricing
 
     conn = connect('staging')
     init_db(conn)
@@ -665,16 +664,16 @@ def test_unsupported_chain_stays_unpriced_without_aborting_configured_chains(pos
                   '0x0000000000000000000000000000000000000003', '0xchain', 0,
                   10, 100, ?, 6, '1000000', '0', '1000000')""", (chain_id, asset))
     conn.commit()
-    monkeypatch.setattr(pricing, "fetch_yearn_prices_batch", lambda _: {})
-    monkeypatch.setattr(pricing, "fetch_yearn_price", lambda *_: (None, "missing", {}))
+    monkeypatch.setattr(clients, "fetch_yearn_prices_batch", lambda _: {})
+    monkeypatch.setattr(clients, "fetch_yearn_price", lambda *_: (None, "missing", {}))
     calls = []
     def defillama(targets):
         assert all(t[0] == 1 for t in targets)
         calls.extend(targets)
         return {t: (3.0, "ok", {}) for t in targets}
-    monkeypatch.setattr(pricing, "fetch_defillama_prices_batch", defillama)
-    monkeypatch.setattr(pricing, "fetch_defillama_price", lambda *_: pytest.fail("No unsupported exact fallback"))
-    monkeypatch.setattr(pricing, "_row_level_fallback_price",
+    monkeypatch.setattr(adapters, "fetch_defillama_prices_batch", defillama)
+    monkeypatch.setattr(adapters, "fetch_defillama_price", lambda *_: pytest.fail("No unsupported exact fallback"))
+    monkeypatch.setattr(adapters, "_row_level_fallback_price",
                         lambda *_: pytest.fail("Unsupported chains cannot use onchain adapters"))
     assert price_unpriced_reports(conn) == 4
     rows = {(row["chain_id"], row["source"]): row for row in conn.execute("SELECT * FROM prices")}
@@ -736,12 +735,12 @@ def test_report_pricing_uses_the_client_chain_capability(postgres_database, monk
     original_key = pricing.yearn_prices_token_key
     def extended_key(chain, token):
         return 'new-chain:' + token.lower() if chain == 12345 else original_key(chain, token)
-    monkeypatch.setattr(pricing, 'yearn_prices_token_key', extended_key)
+    monkeypatch.setattr(clients, 'yearn_prices_token_key', extended_key)
     calls = []
     def batch(targets):
         calls.extend(targets)
         return {t: (2.0, 'ok', {'provider': 'yearn-prices', 'normalized_timestamp': t[2]}) for t in targets}
-    monkeypatch.setattr(pricing, 'fetch_yearn_prices_batch', batch)
+    monkeypatch.setattr(clients, 'fetch_yearn_prices_batch', batch)
     pricing.price_unpriced_reports(conn, fallback=None, onchain_fallbacks=False)
     assert calls == [(12345, asset, 86399)]
     assert tuple(conn.execute('SELECT price_usd,status FROM prices').fetchone()) == (2.0, 'ok')
@@ -758,7 +757,7 @@ def test_hyperevm_batch_uses_canonical_namespace(monkeypatch):
             {'timestamp': timestamp, 'price': 0.9998, 'source': 'defillama', 'confidence': 0.99}
         ]}}}
 
-    monkeypatch.setattr('yearn_data.pricing._yearn_prices_get', get)
+    monkeypatch.setattr('yearn_data.pricing_clients._yearn_prices_get', get)
     from yearn_data.pricing import fetch_yearn_prices_batch
     result = fetch_yearn_prices_batch([(999, asset, timestamp)])
     assert result[(999, asset, timestamp)][:2] == (0.9998, 'ok')
@@ -801,7 +800,7 @@ def test_volume_pending_prices_retry_after_close_without_repricing_accepted(post
     def batch(targets):
         calls.extend(targets)
         return {t:(2,'ok',{'normalized_timestamp':t[2],'provider':'yearn-prices'}) for t in targets}
-    monkeypatch.setattr(pricing,'fetch_yearn_prices_batch',batch)
+    monkeypatch.setattr(clients,'fetch_yearn_prices_batch',batch)
     options=dict(source='yearn-prices',onchain_fallbacks=False)
     try:
         assert pricing.price_unpriced_volume(conn,**options)==2

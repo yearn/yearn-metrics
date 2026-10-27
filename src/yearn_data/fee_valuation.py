@@ -10,7 +10,7 @@ import os
 import time
 
 from .analysis import closed_cutoff, create_analysis_run, complete_analysis_run, write_output
-from . import pricing
+from . import pricing_clients as pricing
 
 POLICY = 'fee-usd-yearn-eod-1'
 DISTRIBUTION_FIELDS = ('locker_bonus_raw', 'staker_distribution_raw', 'recovery_distribution_raw')
@@ -119,7 +119,7 @@ def price_fees(conn, *, before_timestamp=None, limit=500, retry_missing=False, r
     # missing prices must not starve later asset-days on repeated bounded runs.
     selected = sorted(targets, key=lambda target: (cache.get(target, {}).get('fetched_at', 0), target))[:limit]
     counts = Counter()
-    for batch in pricing._yearn_prices_batches(selected):
+    for batch in pricing.yearn_prices_batches(selected):
         # Bound GET URL size as well as the service's per-token timestamp limit.
         for offset in range(0, len(batch), 100):
             chunk = batch[offset:offset+100]

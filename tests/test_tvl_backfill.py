@@ -61,7 +61,7 @@ def test_backfill_stops_on_operator_price_errors(postgres_database, monkeypatch,
     def fail(*args, **kwargs):
         if failure == 'authentication':
             raise pricing.YearnPricesAuthenticationError('rejected credential')
-        return pricing._yearn_prices_config()
+        return pricing.yearn_prices_config()
     monkeypatch.setattr(b, 'fetch_yearn_prices_batch', fail if stage == 'batch' else lambda *a, **k: {})
     exact = Mock(side_effect=fail); monkeypatch.setattr(b, 'fetch_yearn_price', exact)
     expected = pricing.YearnPricesAuthenticationError if failure == 'authentication' else ValueError

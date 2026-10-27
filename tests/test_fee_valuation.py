@@ -1,8 +1,11 @@
+from yearn_data import pricing_adapters as adapters
+from yearn_data import pricing_clients as clients
 import json
 
 import pytest
 
-from yearn_data import fee_valuation as valuation, pricing
+from yearn_data import fee_valuation as valuation
+from yearn_data import pricing_clients as pricing
 from yearn_data.cli import main
 from yearn_data.storage import connect, init_db
 
@@ -55,7 +58,7 @@ def outputs(conn, run, name):
 def test_deduplicates_across_families_and_resumes_without_requests(db, monkeypatch):
     seed(db,1);seed(db,2,tokenized=True);seed(db,3,fee='0',asset=OTHER)
     calls=[]
-    monkeypatch.setattr(pricing,'fetch_yearn_prices_batch',lambda targets: calls.append(targets) or {t:point(t) for t in targets})
+    monkeypatch.setattr(clients,'fetch_yearn_prices_batch',lambda targets: calls.append(targets) or {t:point(t) for t in targets})
     assert valuation.price_fees(db,before_timestamp=CUTOFF)['selected_asset_days']==1
     assert calls==[[(1,ASSET,CUTOFF-1)]]
     assert valuation.price_fees(db,before_timestamp=CUTOFF)['selected_asset_days']==0
@@ -93,29 +96,29 @@ def test_no_known_value_is_null_not_zero(db):
 
 def test_exact_omission_check_and_retry_missing_are_explicit(db, monkeypatch):
     seed(db,1);calls=[]
-    monkeypatch.setattr(pricing,'fetch_yearn_prices_batch',lambda targets:{})
-    monkeypatch.setattr(pricing,'fetch_yearn_price',lambda *t: calls.append(t) or (None,'missing',{'provider':'yearn-prices','normalized_timestamp':t[2]}))
+    monkeypatch.setattr(clients,'fetch_yearn_prices_batch',lambda targets:{})
+    monkeypatch.setattr(clients,'fetch_yearn_price',lambda *t: calls.append(t) or (None,'missing',{'provider':'yearn-prices','normalized_timestamp':t[2]}))
     result=valuation.price_fees(db,before_timestamp=CUTOFF)
     assert result['results']=={'missing':1} and len(calls)==1
     assert valuation.price_fees(db,before_timestamp=CUTOFF)['selected_asset_days']==0
-    monkeypatch.setattr(pricing,'fetch_yearn_prices_batch',lambda targets:{t:point(t) for t in targets})
+    monkeypatch.setattr(clients,'fetch_yearn_prices_batch',lambda targets:{t:point(t) for t in targets})
     assert valuation.price_fees(db,before_timestamp=CUTOFF,retry_missing=True)['results']=={'ok':1}
 
 
 def test_batch_outage_does_not_fan_out_to_exact_or_another_provider(db, monkeypatch):
     seed(db,1);seed(db,2,asset=OTHER)
     def fail(*a,**kw):raise pricing.YearnPricesRequestError('unavailable')
-    monkeypatch.setattr(pricing,'fetch_yearn_prices_batch',fail)
-    monkeypatch.setattr(pricing,'fetch_yearn_price',lambda *a:pytest.fail('exact fanout'))
-    monkeypatch.setattr(pricing,'fetch_defillama_prices_batch',lambda *a, **kw:pytest.fail('fallback'))
-    monkeypatch.setattr(pricing,'_row_level_fallback_price',lambda *a, **kw:pytest.fail('on-chain fallback'))
+    monkeypatch.setattr(clients,'fetch_yearn_prices_batch',fail)
+    monkeypatch.setattr(clients,'fetch_yearn_price',lambda *a:pytest.fail('exact fanout'))
+    monkeypatch.setattr(adapters,'fetch_defillama_prices_batch',lambda *a, **kw:pytest.fail('fallback'))
+    monkeypatch.setattr(adapters,'_row_level_fallback_price',lambda *a, **kw:pytest.fail('on-chain fallback'))
     assert valuation.price_fees(db,before_timestamp=CUTOFF)['results']=={'retryable':2}
 
 
 def test_authentication_failure_stops_without_caching_missing(db, monkeypatch):
     seed(db,1)
     def fail(*a):raise pricing.YearnPricesAuthenticationError('denied')
-    monkeypatch.setattr(pricing,'fetch_yearn_prices_batch',fail)
+    monkeypatch.setattr(clients,'fetch_yearn_prices_batch',fail)
     with pytest.raises(pricing.YearnPricesAuthenticationError):valuation.price_fees(db,before_timestamp=CUTOFF)
     assert db.execute('SELECT COUNT(*) FROM fee_daily_prices').fetchone()[0]==0
 
@@ -154,10 +157,10 @@ def test_cutoff_excludes_open_day_and_preserves_decimals_zero(db):
 def test_limit_and_price_only_refresh_leave_accounting_unchanged(db, monkeypatch):
     seed(db,1);seed(db,2,asset=OTHER)
     before=[tuple(r) for r in db.execute('SELECT * FROM canonical_fee_reports')]
-    monkeypatch.setattr(pricing,'fetch_yearn_prices_batch',lambda targets:{t:point(t) for t in targets})
+    monkeypatch.setattr(clients,'fetch_yearn_prices_batch',lambda targets:{t:point(t) for t in targets})
     assert valuation.price_fees(db,before_timestamp=CUTOFF,limit=1)['remaining_asset_days']==1
     assert valuation.price_fees(db,before_timestamp=CUTOFF,limit=1)['remaining_asset_days']==0
-    monkeypatch.setattr(pricing,'fetch_yearn_prices_batch',lambda targets:{t:point(t,'3') for t in targets})
+    monkeypatch.setattr(clients,'fetch_yearn_prices_batch',lambda targets:{t:point(t,'3') for t in targets})
     assert valuation.price_fees(db,before_timestamp=CUTOFF,refresh=True)['selected_asset_days']==2
     assert [tuple(r) for r in db.execute('SELECT * FROM canonical_fee_reports')]==before
     rows=outputs(db,valuation.run_fee_usd(db,before_timestamp=CUTOFF),'fee_usd_by_family')
@@ -213,7 +216,7 @@ def test_failed_valuation_discards_partial_outputs(db,tmp_path):
 def test_zero_fee_still_prices_nonzero_gain_and_tracks_component_gaps(db,monkeypatch):
     seed(db,1,fee='0',gain='1000000')
     calls=[]
-    monkeypatch.setattr(pricing,'fetch_yearn_prices_batch',lambda targets:calls.append(targets) or {t:point(t) for t in targets})
+    monkeypatch.setattr(clients,'fetch_yearn_prices_batch',lambda targets:calls.append(targets) or {t:point(t) for t in targets})
     valuation.price_fees(db,before_timestamp=CUTOFF)
     assert len(calls)==1
     row=outputs(db,valuation.run_fee_usd(db,before_timestamp=CUTOFF),'fee_usd_events')[0]
@@ -226,7 +229,7 @@ def test_invalid_endpoint_evidence_cannot_enter_usd_totals(db, monkeypatch):
     seed(db, 1)
     monkeypatch.setenv('YEARN_PRICE_PROD_KEY', 'test-only')
     raw = {'timestamp': CUTOFF-1-86400, 'price': 2.5, 'source': 'oracle'}
-    monkeypatch.setattr(pricing, '_yearn_prices_get',
+    monkeypatch.setattr(clients, '_yearn_prices_get',
                         lambda *a, **kw: {'coins': {'ethereum:'+ASSET: {'prices': [raw]}}})
     result = valuation.price_fees(db, before_timestamp=CUTOFF)
     assert result['results'] == {'invalid': 1}
@@ -243,7 +246,7 @@ def test_sync_target_scope_and_retry_order_do_not_starve_new_days(db, monkeypatc
     valuation.save_price(db, first, (None, 'missing', {'provider':'yearn-prices'}))
     db.commit()
     calls = []
-    monkeypatch.setattr(pricing, 'fetch_yearn_prices_batch', lambda targets: calls.extend(targets) or {t:point(t) for t in targets})
+    monkeypatch.setattr(clients, 'fetch_yearn_prices_batch', lambda targets: calls.extend(targets) or {t:point(t) for t in targets})
     valuation.price_fees(db, before_timestamp=CUTOFF, retry_missing=True, limit=1)
     assert calls == [second]
     calls.clear()
@@ -257,7 +260,7 @@ def test_failed_fee_refresh_preserves_accepted_quote_and_usd(db, monkeypatch, fa
     target = (1, ASSET, CUTOFF-1)
     valuation.save_price(db, target, point(target))
     before = dict(db.execute('SELECT * FROM fee_daily_prices').fetchone())
-    monkeypatch.setattr(pricing, 'fetch_yearn_prices_batch', lambda targets: {
+    monkeypatch.setattr(clients, 'fetch_yearn_prices_batch', lambda targets: {
         t: (None, failure, {'provider': 'yearn-prices', 'normalized_timestamp': t[2]}) for t in targets})
     assert valuation.price_fees(db, before_timestamp=CUTOFF, refresh=True)['results'] == {failure: 1}
     assert dict(db.execute('SELECT * FROM fee_daily_prices').fetchone()) == before

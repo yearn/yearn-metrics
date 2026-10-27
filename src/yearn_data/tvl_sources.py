@@ -10,8 +10,9 @@ import requests
 from web3 import Web3
 
 from .config import get_rpc_url_by_chain_id, TVL_EXCLUDED_CHAIN_IDS
-from .pricing import fetch_yearn_price, fetch_defillama_price
-from .pricing import YearnPricesAuthenticationError, YearnPricesConfigurationError
+from .pricing_clients import fetch_yearn_price
+from .pricing_adapters import fetch_defillama_price
+from .pricing_clients import YearnPricesAuthenticationError, YearnPricesConfigurationError
 from .storage import to_json
 from .tvl import asset_units, decimal, value_nested_shares
 from .tvl_policy import classify_vault, correct_catalog
