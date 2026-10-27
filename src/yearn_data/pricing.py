@@ -1508,8 +1508,11 @@ def price_unpriced_volume(
         count += _price_unpriced_reports_defillama_batched(conn, rows, fallback, onchain_fallbacks=onchain_fallbacks)
         return count
     if source == "yearn-prices":
-        primary_count, _ = _price_rows_with_yearn_prices(conn, rows)
+        primary_count, unresolved_rows = _price_rows_with_yearn_prices(conn, rows)
         count += primary_count
+        if fallback == 'defillama':
+            count += _price_unpriced_reports_defillama_batched(
+                conn, unresolved_rows, fallback=None, onchain_fallbacks=onchain_fallbacks)
         return count
 
     for row in rows:

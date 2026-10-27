@@ -435,7 +435,16 @@ class TvlDataset:
         retired = [r for r in rows if key(r) not in active_keys]
         chain_rows = {CHAINS.get(c, f'Chain {c}'): [r for r in rows if r['chain_id'] == c] for c in sorted({r['chain_id'] for r in rows})}
         bridge = [r for r in rows if 'bridge_excluded_usd' in r]
-        result = {'totalTvl': money(rows, 'external_tvl_usd'), 'activeVaultTvl': money(active, 'tvl_usd'),
+        # Accounting diagnostics describe the full network even for a chain view:
+        # cross-chain ownership cannot be assessed from the filtered rows alone.
+        result = {'completeness': {'status': diagnostics['status'],
+                                  'scope': 'network',
+                                  'totals': 'known-subtotals',
+                                  'vaultCount': diagnostics['vault_count'],
+                                  'valuedVaultCount': diagnostics['valued_vault_count'],
+                                  'unresolvedPositions': diagnostics['unresolved_positions'],
+                                  'issues': diagnostics['issues']},
+                  'totalTvl': money(rows, 'external_tvl_usd'), 'activeVaultTvl': money(active, 'tvl_usd'),
                   'retiredVaultTvl': money(retired, 'tvl_usd'), 'overlapExcluded': money(rows, 'overlap_usd'),
                   'vaultBridgeExcluded': money(bridge, 'bridge_excluded_usd') if bridge else 0,
                   'tvlByChain': {c: money(rs, 'tvl_usd') for c, rs in chain_rows.items()},
@@ -524,7 +533,9 @@ class TvlDataset:
             reference_prices[identity] = chosen[1]
         return references, reference_prices
 
-    def history(self, group='chain', mode='external', interval='weekly', start=None, end=None, chain_id=None, constant=False, *, max_points=None, top=None, top_metric=None):
+    def history(self, group='chain', mode='external', interval='weekly', start=None, end=None, chain_id=None, constant=False, *, max_points=None, top=None, top_metric=None, response_format='full'):
+        if response_format not in ('full', 'chart'):
+            raise ValueError('unsupported history format')
         if top is not None and (group != 'vault' or not constant):
             raise ValueError('top requires constant-price vault history')
         # Canonicalize all-time bounds before caching: explicit first/last closes
@@ -534,13 +545,17 @@ class TvlDataset:
             start = None
         if end is not None and end >= self.as_of():
             end = None
-        identity = (group,mode,interval,start,end,chain_id,constant,max_points,top,top_metric)
+        arguments = (group,mode,interval,start,end,chain_id,constant,max_points,top,top_metric)
+        identity = (*arguments,response_format)
         with self._lock:
             cached = self._history_cache.get(identity)
             if cached is not None:
                 self._history_cache.move_to_end(identity)
                 return cached[1]
-        result = self.compute_once(('history',*identity), lambda:self._history(*identity))
+        def compute():
+            result = self._history(*arguments)
+            return chart_response(result) if response_format == 'chart' else result
+        result = self.compute_once(('history',*identity), compute)
         # Bound retained response bytes, not just the number of date-range keys.
         if result['pointCount'] <= PUBLIC_HISTORY_MAX_POINTS:
             size = len(encoded(result).encode())
@@ -860,8 +875,7 @@ def tvl_response(store, url):
             elif request.path.startswith('/api/tvl/history'):
                 if group == 'vault' and len(dataset.sampled_dates(interval,start,end)) > PUBLIC_VAULT_HISTORY_MAX_DATES:
                     raise ValueError('vault history date limit exceeded; narrow the time range or use a coarser interval')
-                result = dataset.history(group,mode,interval,start,end,chain_id,request.path.endswith('/constant-price'),max_points=PUBLIC_HISTORY_MAX_POINTS,top=top,top_metric=top_metric)
-                if response_format=='chart':result=chart_response(result)
+                result = dataset.history(group,mode,interval,start,end,chain_id,request.path.endswith('/constant-price'),max_points=PUBLIC_HISTORY_MAX_POINTS,top=top,top_metric=top_metric,response_format=response_format)
             elif request.path.endswith('/curation-products'):
                 result = dataset.curation(chain_id)
             elif request.path == '/api/audit/tree':

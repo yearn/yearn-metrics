@@ -762,3 +762,22 @@ def test_hyperevm_batch_uses_canonical_namespace(monkeypatch):
     from yearn_data.pricing import fetch_yearn_prices_batch
     result = fetch_yearn_prices_batch([(999, asset, timestamp)])
     assert result[(999, asset, timestamp)][:2] == (0.9998, 'ok')
+
+
+@pytest.mark.parametrize('fallback', [None,'defillama'])
+def test_volume_routes_only_unresolved_yearn_prices_to_requested_fallback(monkeypatch,fallback):
+    from yearn_data import pricing
+    connection=object()
+    rows=[{'asset':'priced'},{'asset':'missing'}]
+    monkeypatch.setattr(pricing,'_unpriced_volume_rows',lambda *a,**kw:rows)
+    monkeypatch.setattr(pricing,'_refresh_adapter_rows',lambda conn,targets,**kw:(0,targets))
+    monkeypatch.setattr(pricing,'_price_rows_with_yearn_prices',lambda conn,targets:(1,targets[1:]))
+    calls=[]
+    def secondary(conn,targets,fallback,onchain_fallbacks):
+        assert conn is connection and fallback is None and onchain_fallbacks is False
+        calls.append(targets)
+        return 1
+    monkeypatch.setattr(pricing,'_price_unpriced_reports_defillama_batched',secondary)
+    count=pricing.price_unpriced_volume(connection,source='yearn-prices',fallback=fallback,onchain_fallbacks=False)
+    assert count==(2 if fallback else 1)
+    assert calls==([rows[1:]] if fallback else [])

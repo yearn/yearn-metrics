@@ -156,6 +156,8 @@ def test_incomplete_ownership_keeps_gross_and_partial_evidence_distinct(source):
     summary = dataset.summary()
     assert summary['tvlByChain']['Ethereum'] == 400
     assert summary['totalTvl'] == 200
+    assert summary['completeness']['status'] == 'incomplete'
+    assert summary['completeness']['unresolvedPositions'] > 0
     assert summary['overlapExcluded'] == 0  # No complete child-level deduction is available.
 
 

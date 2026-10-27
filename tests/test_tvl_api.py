@@ -893,3 +893,41 @@ def test_curation_does_not_recount_dated_bridge_vault_or_its_holdings(source, mo
         assert products['totalTvlUsd'] == store.get().summary()['totalTvl']
         assert products['byFamily']['morpho_curated']['netTvlUsd'] == products['totalTvlUsd']
         assert {r['address'] for r in products['vaults']} == ({BRIDGE, CHILD} if timestamp < cutoff else {CHILD})
+
+
+def test_summary_labels_missing_prices_and_network_scope(source):
+    conn,path,root=source
+    run(conn,1,DAY,[(PARENT,'100'),(CHILD,None)])
+    store=TvlStore(path,root)
+    for query in ('','?chainId=1'):
+        status,result=tvl_response(store,'/api/tvl'+query)
+        assert status==200 and result['totalTvl']==100
+        assert result['completeness']['status']=='incomplete'
+        assert result['completeness']['scope']=='network'
+        assert result['completeness']['totals']=='known-subtotals'
+        assert result['completeness']['valuedVaultCount']==1
+        assert result['completeness']['vaultCount']==2
+    run(conn,2,DAY,[(CHILD,'0')])
+    assert TvlStore(path,root).get().summary()['completeness']['status']=='complete'
+
+
+@pytest.mark.parametrize('top', [None,1])
+def test_chart_byte_limit_applies_after_projection(source,monkeypatch,top):
+    from yearn_data import tvl_api as api
+    conn,path,root=source
+    run(conn,1,DAY,[(PARENT,'100'),(CHILD,'50')])
+    store=TvlStore(path,root)
+    suffix='' if top is None else '&top=1'
+    url='/api/tvl/history/runs/latest/constant-price?groupBy=vault&format=chart'+suffix
+    status,expected=tvl_response(store,url)
+    assert status==200 and expected['references']==expected['points']==[]
+    limit=len(api.encoded(expected).encode())
+    # Full diagnostics exceed this exact chart budget, including reference data.
+    assert len(api.encoded(store.get().history(group='vault',constant=True)).encode())>limit
+    monkeypatch.setattr(api,'PUBLIC_HISTORY_MAX_BYTES',limit)
+    store.get()._history_cache.clear()
+    store.get()._history_cache_bytes=0
+    assert tvl_response(store,url)==(200,expected)
+    assert tvl_response(store,url)==(200,expected)
+    status,error=tvl_response(store,'/api/tvl/history/runs/latest/constant-price?groupBy=vault')
+    assert status==400 and 'size limit' in error['error']

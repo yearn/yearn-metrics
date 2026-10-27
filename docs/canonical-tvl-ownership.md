@@ -98,3 +98,10 @@ DefiLlama reconciliation requires complete local counted TVL for each compared
 scope. Unknown ownership withholds the overall and affected chain/category totals
 and differences, with partial availability and explicit unavailable vaults.
 Complete scopes remain comparable; raw gross observations remain available.
+
+The TVL summary preserves known subtotals when prices or ownership are missing.
+Its `completeness` object labels these as `known-subtotals`, reports `complete` or
+`incomplete`, and includes valued/vault counts, unresolved positions, and issues.
+The diagnostic scope is always `network`, including chain-filtered summaries:
+cross-chain ownership depends on evidence outside the requested chain. A known
+subtotal must not be interpreted as a complete total while status is incomplete.
