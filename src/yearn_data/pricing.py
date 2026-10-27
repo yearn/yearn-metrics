@@ -9,6 +9,7 @@ import time
 import requests
 from .config import CHAINS
 from .storage import to_json
+from .pricing_policy import retired_estimate_predicate, quote_classification
 from . import pricing_adapters as adapters
 from . import pricing_clients as clients
 from .pricing_adapters import fetch_defillama_price as fetch_defillama_price, fetch_defillama_prices_batch as fetch_defillama_prices_batch
@@ -41,9 +42,10 @@ def report_amount(raw_value: str | int, decimals: int | None) -> Decimal:
 
 
 def _existing_price_filter(retry_missing: bool) -> str:
+    rejected = retired_estimate_predicate('p.raw_json')
     if retry_missing:
-        return "p.token_address IS NULL OR p.status != 'ok'"
-    return "p.token_address IS NULL"
+        return f"p.token_address IS NULL OR p.status != 'ok' OR ({rejected})"
+    return f"p.token_address IS NULL OR ({rejected})"
 
 
 def _adapter_refresh_sql(enabled: bool, target: str) -> tuple[str, str]:
@@ -471,8 +473,12 @@ def _write_defillama_price_row(
                 "timestamp": timestamp,
                 "fallback": fallback_payload,
             }
+    if quote_classification(payload) == 'estimated':
+        payload = {'provider': 'defillama', 'failure_class': 'local-parity-estimate-retired',
+                   'retired_estimate': {'price_usd': price, 'evidence_json': to_json(payload)}}
+        price, status = None, 'missing'
     cursor = conn.execute(
-        """
+        f"""
         INSERT INTO prices (
             chain_id, token_address, timestamp, block_number,
             source, price_usd, status, raw_json
@@ -482,8 +488,12 @@ def _write_defillama_price_row(
             block_number = excluded.block_number,
             price_usd = excluded.price_usd,
             status = excluded.status,
-            raw_json = excluded.raw_json
-        WHERE prices.status != 'ok' OR excluded.status = 'ok'
+            raw_json = CASE WHEN {retired_estimate_predicate('prices.raw_json')} THEN
+                (excluded.raw_json::jsonb || jsonb_build_object('retired_estimate',
+                    jsonb_build_object('price_usd', prices.price_usd, 'evidence_json', prices.raw_json,
+                        'reason', 'local-parity-estimate-retired')))::text
+                ELSE excluded.raw_json END
+        WHERE prices.status != 'ok' OR excluded.status = 'ok' OR ({retired_estimate_predicate('prices.raw_json')})
         """,
         (
             chain_id,

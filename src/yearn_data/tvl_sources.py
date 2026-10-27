@@ -13,6 +13,7 @@ from .config import get_rpc_url_by_chain_id, TVL_EXCLUDED_CHAIN_IDS
 from .pricing_clients import fetch_yearn_price
 from .pricing_adapters import fetch_defillama_price
 from .pricing_clients import YearnPricesAuthenticationError, YearnPricesConfigurationError
+from .pricing_policy import PRICE_EVIDENCE_POLICY, quote_classification
 from .storage import to_json
 from .tvl import asset_units, decimal, value_nested_shares
 from .tvl_policy import classify_vault, correct_catalog
@@ -245,10 +246,14 @@ def _snapshot(vault,timestamp,reader,price_cache,price_source):
             fn = fetch_yearn_price if price_source=='yearn-prices' else fetch_defillama_price
             price_cache[key] = fn(*key)
         price, status, evidence = price_cache[key]
-        data['pricing'] = {'source':price_source,'status':status,'evidence':evidence}
+        classification = quote_classification(evidence)
+        if classification == 'estimated':
+            price, status = None, 'rejected_estimate'
+        data['pricing'] = {'source':price_source,'status':status,'evidence':evidence,
+                           'classification':classification,'policy':PRICE_EVIDENCE_POLICY}
         if status != 'ok' or price is None:
-            data['status'] = status if status != 'ok' else 'unavailable'
-            data['reason'] = 'missing_price'
+            data['status'] = 'unavailable' if status in ('ok', 'rejected_estimate') else status
+            data['reason'] = 'rejected_estimate' if classification == 'estimated' else 'missing_price'
         else:
             with localcontext() as ctx:
                 ctx.prec = 78

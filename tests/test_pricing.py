@@ -179,7 +179,7 @@ def test_price_unpriced_volume_uses_flow_tables(postgres_database, monkeypatch, 
     assert row["status"] == "ok"
 
 
-def test_price_unpriced_volume_can_retry_missing_with_polygon_stable_fallback(postgres_database, monkeypatch, tmp_path):
+def test_volume_retry_rejects_legacy_polygon_parity_result(postgres_database, monkeypatch, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -231,12 +231,12 @@ def test_price_unpriced_volume_can_retry_missing_with_polygon_stable_fallback(po
 
     assert count == 1
     row = conn.execute("SELECT price_usd, status, raw_json FROM prices").fetchone()
-    assert row["price_usd"] == 1.0
-    assert row["status"] == "ok"
+    assert row["price_usd"] is None
+    assert row["status"] == "missing"
     assert "canonical_polygon_stable_fallback" in row["raw_json"]
 
 
-def test_price_unpriced_reports_retries_missing_with_v3_alias(postgres_database, monkeypatch, tmp_path):
+def test_report_retry_does_not_invent_arbitrum_parity_quote(postgres_database, monkeypatch, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -283,9 +283,9 @@ def test_price_unpriced_reports_retries_missing_with_v3_alias(postgres_database,
 
     assert count == 1
     row = conn.execute("SELECT price_usd, status, raw_json FROM prices").fetchone()
-    assert row["price_usd"] == 1.0
-    assert row["status"] == "ok"
-    assert "canonical_arbitrum_stable_fallback" in row["raw_json"]
+    assert row["price_usd"] is None
+    assert row["status"] == "missing"
+    assert "canonical_arbitrum_stable_fallback" not in row["raw_json"]
 
 
 def test_price_unpriced_reports_uses_curve_lp_fallback(postgres_database, monkeypatch, tmp_path):

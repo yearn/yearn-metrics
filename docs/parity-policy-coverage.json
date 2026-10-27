@@ -1,0 +1,91 @@
+{
+  "fixture": "synthetic six-report/six-deposit matrix; no production data",
+  "baselineCommit": "5adc4b0f3eb8e7e50aa961864239d7746327a51d",
+  "cases": [
+    {
+      "name": "observed",
+      "quote": 2,
+      "evidence": {
+        "provider": "defillama",
+        "matched": {
+          "timestamp": 100
+        }
+      },
+      "classification": "observed",
+      "expectedNewUsd": "14"
+    },
+    {
+      "name": "stable",
+      "quote": 1,
+      "evidence": {
+        "source": "canonical_ethereum_stable_fallback"
+      },
+      "classification": "estimated",
+      "expectedNewUsd": null
+    },
+    {
+      "name": "alias",
+      "quote": 3000,
+      "evidence": {
+        "source": "canonical_polygon_weth_fallback"
+      },
+      "classification": "estimated",
+      "expectedNewUsd": null
+    },
+    {
+      "name": "nested",
+      "quote": 1.25,
+      "evidence": {
+        "source": "curve_lp_balance_fallback",
+        "reserves": [
+          {
+            "underlying": {
+              "source": "canonical_ethereum_stable_fallback"
+            }
+          }
+        ]
+      },
+      "classification": "estimated",
+      "expectedNewUsd": null
+    },
+    {
+      "name": "derived",
+      "quote": 3,
+      "evidence": {
+        "provider": "local-adapter",
+        "source": "erc4626_wrapper_fallback"
+      },
+      "classification": "derived",
+      "expectedNewUsd": "21"
+    },
+    {
+      "name": "zero",
+      "quote": 1,
+      "evidence": {
+        "source": "canonical_ethereum_stable_fallback"
+      },
+      "classification": "estimated",
+      "expectedNewUsd": "0"
+    }
+  ],
+  "before": {
+    "reports": 6,
+    "pricedReports": 6,
+    "unpricedReports": 0,
+    "knownNetYieldUsd": "21050.75",
+    "volumeEvents": 6,
+    "pricedVolumeEvents": 6,
+    "unpricedVolumeEvents": 0,
+    "knownGrossVolumeUsd": "21050.75"
+  },
+  "after": {
+    "reports": 6,
+    "pricedReports": 3,
+    "unpricedReports": 3,
+    "knownNetYieldUsd": "35.0",
+    "volumeEvents": 6,
+    "pricedVolumeEvents": 3,
+    "unpricedVolumeEvents": 3,
+    "knownGrossVolumeUsd": "35.0"
+  }
+}

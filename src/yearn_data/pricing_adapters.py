@@ -1,4 +1,4 @@
-"""Local valuation adapters, including the existing alias policy.
+"""Contract valuation adapters using accepted underlying quotes; no fixed parity guesses.
 
 fetch_underlying_price is the public quote dependency for contract-derived valuations.
 It uses provider clients; adapters never read or write analysis/price tables.
@@ -7,73 +7,19 @@ from __future__ import annotations
 from decimal import Decimal
 from functools import lru_cache
 from typing import Any
-import json
 import requests
 from eth_abi import decode as abi_decode
 from eth_utils import function_signature_to_4byte_selector
 from web3 import Web3
 from .config import CHAINS, get_rpc_url
 from . import pricing_clients as clients
-from .pricing_clients import (DEFILLAMA_BASE, DEFILLAMA_SEARCH_WIDTH, DEFILLAMA_SEARCH_WIDTH_SECONDS,
-    defillama_coin_id, defillama_get, accepted_defillama_sample, match_defillama_samples)
+from .pricing_policy import CONTRACT_SOURCE_NAMES
 
 ETHEREUM_WETH = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
 
-POLYGON_STABLE_ALIASES = {
-    "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",  # bridged USDC
-    "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",  # native USDC
-    "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",  # bridged USDT
-    "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",  # DAI
-}
-
-POLYGON_WETH = "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619"
-
-ARBITRUM_STABLE_ALIASES = {
-    "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",  # bridged USDT / USDt0
-}
-
-ETHEREUM_STABLE_ALIASES = {
-    "0x6b175474e89094c44da98b954eedeac495271d0f",  # DAI
-    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",  # USDC
-    "0xdac17f958d2ee523a2206206994597c13d831ec7",  # USDT
-    "0x57ab1ec28d129707052df4df418d58a2d46d5f51",  # sUSD
-    "0x85e30b8b263bc64d94b827ed450f2edfee8579da",  # USDaf
-}
-
-KATANA_USDC_WRAPPERS = {
-    "0x203a662b0bd271a6ed5a60edfbd04bfce608fd36",  # vbUSDC
-}
-
-KATANA_ETH_WRAPPERS = {
-    "0xee7d8bcfb72bc1880d0cf19822eb0a2e6577ab62",  # vbETH
-}
-
-ETH_EQUIVALENTS = {
-    ETHEREUM_WETH.lower(),
-    "0xae7ab96520de3a18e5e111b5eaab095312d7fe84",  # stETH
-    "0x5e74c9036fb86bd7ecdcb084a0673efc32ea31cb",  # sETH
-    "0x9559aaa82d9649c7a7b220e7c461d2e74c9a3593",  # rETH
-    "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-}
-
-BTC_EQUIVALENTS = {
-    "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599",  # WBTC
-    "0x0316eb71485b0ab14103307bf65a021042c6d380",  # HBTC
-    "0x8751d4196027d4e6da63716fa7786b5174f04c15",  # Curve sBTC
-}
-
-WBTC = "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"
 
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
-LINK = "0x514910771AF9Ca656af840dff83E8264EcF986CA"
-
-AAVE = "0x7Fc66500c84A76Ad7e9c93437bFc5Ac33E2DDaE9"
-
-TOKEN_PRICE_ALIASES = {
-    "0xbbc455cb4f1b9e4bfc4b73970d360c8f032efee6": (LINK, "canonical_slink_link_fallback"),  # sLINK
-    "0x4da9b813057d04baef4e5800e36083717b4a0341": (AAVE, "canonical_saave_aave_fallback"),  # stkAAVE / saAAVE wrappers
-}
 
 CRV = "0xD533a949740bb3306d119CC777fa900bA034cd52"
 
@@ -104,121 +50,7 @@ BALANCER_VAULT = "0xBA12222222228d8Ba445958a75a0704d566BF2C8"
 
 BALANCER_CHAINS = {1, 137, 8453, 42161}
 
-ONCHAIN_ADAPTER_SOURCES = (
-    'exchange_rate_wrapper_fallback', 'yearn_v1_vault_fallback', 'aave_atoken_fallback',
-    'curve_lp_fallback', 'curve_lp_balance_fallback', 'erc4626_wrapper_fallback',
-    'balancer_bpt_fallback', 'uniswap_v2_pair_fallback', 'curve_get_dy_fallback',
-    'ycrv_crv_par_fallback', 'crv_derivative_curve_lp_fallback',
-)
-
-
-def _canonical_defillama_fallback(
-    chain_id: int,
-    token_address: str,
-    timestamp: int,
-    timeout: int = 30,
-) -> tuple[float | None, str, dict[str, Any]] | None:
-    address = token_address.lower()
-    coin = defillama_coin_id(chain_id, token_address)
-    stable_source = _canonical_stable_source(chain_id, address)
-    if stable_source:
-        return 1.0, "ok", {"coin": coin, "timestamp": int(timestamp), "source": stable_source}
-    eth_source = _canonical_eth_source(chain_id, address)
-    if eth_source:
-        eth_coin = defillama_coin_id(1, ETHEREUM_WETH)
-        url = f"{DEFILLAMA_BASE}/prices/historical/{int(timestamp)}/{eth_coin}"
-        response = defillama_get(url, params={"searchWidth": DEFILLAMA_SEARCH_WIDTH}, timeout=timeout)
-        payload = response.json()
-        entry = payload.get("coins", {}).get(eth_coin)
-        if accepted_defillama_sample(entry, timestamp) is not None:
-            return (
-                float(entry["price"]),
-                "ok",
-                {
-                    "coin": coin,
-                    "timestamp": int(timestamp),
-                    "source": eth_source,
-                    "fallback_coin": eth_coin,
-                    "fallback_payload": payload,
-                    "matched_offset_seconds": int(entry["timestamp"]) - int(timestamp),
-                    "maximum_accepted_offset_seconds": DEFILLAMA_SEARCH_WIDTH_SECONDS,
-                },
-            )
-    return None
-
-
-def _canonical_defillama_fallbacks_batch(
-    missing_keys: list[tuple[int, str, int, str]],
-    timeout: int = 30,
-) -> dict[tuple[int, str, int], tuple[float | None, str, dict[str, Any]]]:
-    output: dict[tuple[int, str, int], tuple[float | None, str, dict[str, Any]]] = {}
-    weth_timestamps: list[int] = []
-    eth_keys: list[tuple[int, str, int, str, str]] = []
-    for chain_id, token_address, timestamp, coin in missing_keys:
-        key = (chain_id, token_address, timestamp)
-        address = token_address.lower()
-        stable_source = _canonical_stable_source(chain_id, address)
-        eth_source = _canonical_eth_source(chain_id, address)
-        if stable_source:
-            output[key] = (1.0, "ok", {"coin": coin, "timestamp": timestamp, "source": stable_source})
-        elif eth_source:
-            weth_timestamps.append(timestamp)
-            eth_keys.append((chain_id, token_address, timestamp, coin, eth_source))
-        else:
-            output[key] = (None, "missing", {"coin": coin, "timestamp": timestamp})
-
-    if weth_timestamps:
-        eth_coin = defillama_coin_id(1, ETHEREUM_WETH)
-        response = defillama_get(
-            f"{DEFILLAMA_BASE}/batchHistorical",
-            params={"coins": json.dumps({eth_coin: sorted(set(weth_timestamps))}, separators=(",", ":"))},
-            timeout=timeout,
-        )
-        payload = response.json()
-        prices = payload.get("coins", {}).get(eth_coin, {}).get("prices") or []
-        matched_prices = match_defillama_samples(weth_timestamps, prices)
-        for chain_id, token_address, timestamp, coin, eth_source in eth_keys:
-            key = (chain_id, token_address, timestamp)
-            matched = matched_prices.get(timestamp)
-            if matched is None:
-                output[key] = (None, "missing", {"coin": coin, "timestamp": timestamp, "fallback_coin": eth_coin})
-                continue
-            output[key] = (
-                float(matched["price"]),
-                "ok",
-                {
-                    "coin": coin,
-                    "timestamp": timestamp,
-                    "source": eth_source,
-                    "fallback_coin": eth_coin,
-                    "matched": matched,
-                    "matched_offset_seconds": int(matched["timestamp"]) - timestamp,
-                    "maximum_accepted_offset_seconds": DEFILLAMA_SEARCH_WIDTH_SECONDS,
-                },
-            )
-    return output
-
-
-def _canonical_stable_source(chain_id: int, address: str) -> str | None:
-    chain_id = int(chain_id)
-    if chain_id == 137 and address in POLYGON_STABLE_ALIASES:
-        return "canonical_polygon_stable_fallback"
-    if chain_id == 42161 and address in ARBITRUM_STABLE_ALIASES:
-        return "canonical_arbitrum_stable_fallback"
-    if chain_id == 1 and address in ETHEREUM_STABLE_ALIASES:
-        return "canonical_ethereum_stable_fallback"
-    if chain_id == 747474 and address in KATANA_USDC_WRAPPERS:
-        return "canonical_katana_usdc_wrapper_fallback"
-    return None
-
-
-def _canonical_eth_source(chain_id: int, address: str) -> str | None:
-    chain_id = int(chain_id)
-    if chain_id == 137 and address == POLYGON_WETH:
-        return "canonical_polygon_weth_fallback"
-    if chain_id == 747474 and address in KATANA_ETH_WRAPPERS:
-        return "canonical_katana_eth_wrapper_fallback"
-    return None
+ONCHAIN_ADAPTER_SOURCES = CONTRACT_SOURCE_NAMES
 
 
 def _selector(signature: str) -> str:
@@ -399,21 +231,6 @@ def _aave_atoken_price(
 
 @lru_cache(maxsize=200_000)
 def fetch_underlying_price(chain_id: int, token_address: str, timestamp: int, block_number: int) -> tuple[float | None, dict[str, Any]]:
-    address = token_address.lower()
-    stable_source = _canonical_stable_source(chain_id, address)
-    if stable_source:
-        return 1.0, {"source": stable_source}
-    if int(chain_id) == 1 and address in TOKEN_PRICE_ALIASES:
-        base_token, alias_source = TOKEN_PRICE_ALIASES[address]
-        price, payload = fetch_underlying_price(chain_id, base_token, timestamp, block_number)
-        return price, {"source": alias_source, "base_token": base_token, "base_payload": payload}
-    eth_source = _canonical_eth_source(chain_id, address)
-    if eth_source or (int(chain_id) == 1 and address in ETH_EQUIVALENTS):
-        price, status, payload = fetch_defillama_price(1, ETHEREUM_WETH, timestamp)
-        return (price if status == "ok" else None), {"source": eth_source or "canonical_eth_equivalent_fallback", "payload": payload}
-    if int(chain_id) == 1 and address in BTC_EQUIVALENTS:
-        price, status, payload = fetch_defillama_price(1, WBTC, timestamp)
-        return (price if status == "ok" else None), {"source": "canonical_btc_equivalent_fallback", "payload": payload}
     price, status, payload = fetch_defillama_price(chain_id, token_address, timestamp)
     if status == "ok":
         return price, {"source": "defillama_underlying", "payload": payload}
@@ -872,17 +689,6 @@ def _crv_derivative_price(chain_id: int, token_address: str, timestamp: int, blo
         price, payload = _curve_get_dy_price(chain_id, OLD_CRV_YCRV_POOL, 1, 0, CRV, timestamp, block_number)
         if price is not None:
             return price, payload
-        crv_price, crv_payload = fetch_underlying_price(chain_id, CRV, timestamp, block_number)
-        if crv_price is not None:
-            return (
-                crv_price,
-                {
-                    "source": "ycrv_crv_par_fallback",
-                    "reason": "CRV/yCRV pool unavailable at block",
-                    "crv_payload": crv_payload,
-                    "pool_payload": payload,
-                },
-            )
     if address in CRV_BASED_CURVE_LPS:
         virtual_price = _call_uint256(chain_id, token_address, "get_virtual_price()", block_number)
         crv_price, crv_payload = fetch_underlying_price(chain_id, CRV, timestamp, block_number)
@@ -900,10 +706,6 @@ def _crv_derivative_price(chain_id: int, token_address: str, timestamp: int, blo
 
 
 def _row_level_fallback_price(chain_id: int, token_address: str, timestamp: int, block_number: int) -> tuple[float | None, str, dict[str, Any]]:
-    canonical = _canonical_defillama_fallback(chain_id, token_address, timestamp)
-    if canonical is not None:
-        price, status, payload = canonical
-        return price, status, payload
     price, payload = _crv_derivative_price(chain_id, token_address, timestamp, block_number)
     if price is not None:
         return price, "ok", payload
@@ -938,16 +740,7 @@ def fetch_fallback_price(
 
 
 def fetch_defillama_prices_batch(requests_, timeout=30):
-    results = clients.fetch_defillama_prices_batch(requests_, timeout=timeout)
-    missing = [(chain, asset, timestamp, defillama_coin_id(chain, asset))
-               for (chain, asset, timestamp), result in results.items() if result[1] != 'ok']
-    aliases = _canonical_defillama_fallbacks_batch(missing, timeout=timeout)
-    for target, result in aliases.items():
-        if result[1] == 'ok':
-            results[target] = clients.price_result(*result, provider='local-adapter', requested_timestamp=target[2])
-        else:
-            results[target] = clients.price_result(*result, provider='defillama', requested_timestamp=target[2])
-    return clients.PriceBatch(results, requests_, provider='defillama')
+    return clients.fetch_defillama_prices_batch(requests_, timeout=timeout)
 
 
 def fetch_defillama_price(chain_id, token_address, timestamp, timeout=30):
