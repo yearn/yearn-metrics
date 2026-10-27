@@ -534,3 +534,19 @@ def test_compact_metric_requires_supported_top_history_contract():
         status, result = tvl_response(UnusedStore(), '/api/tvl/history/runs/latest/constant-price?'+query)
         assert status == 400
         assert 'topMetric' in result['error']
+
+
+@pytest.mark.parametrize('top', [None,1])
+def test_constant_chart_projection_has_one_actual_series_key(top):
+    actual=[{'timestamp':1,'a':10,'b':20}]
+    original={'meta':{},'chart':actual,'actualChart':actual,
+              'constantPriceChart':[{'timestamp':1,'a':5,'b':10}],
+              'points':[], 'references':[]}
+    result=chart_response(original,top=top)
+    assert 'chart' not in result
+    expected=actual if top is None else [{'timestamp':1,'b':20,'All other vaults':10}]
+    assert result['actualChart']==expected
+    assert result['constantPriceChart']
+    assert original['chart'] is actual  # Full export retains its compatibility key.
+    ordinary=chart_response({'meta':{},'chart':actual,'points':[]})
+    assert ordinary['chart']==actual  # Ordinary histories have no actualChart alias.

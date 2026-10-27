@@ -921,6 +921,7 @@ def test_chart_byte_limit_applies_after_projection(source,monkeypatch,top):
     url='/api/tvl/history/runs/latest/constant-price?groupBy=vault&format=chart'+suffix
     status,expected=tvl_response(store,url)
     assert status==200 and expected['references']==expected['points']==[]
+    assert 'chart' not in expected and expected['actualChart']
     limit=len(api.encoded(expected).encode())
     # Full diagnostics exceed this exact chart budget, including reference data.
     assert len(api.encoded(store.get().history(group='vault',constant=True)).encode())>limit

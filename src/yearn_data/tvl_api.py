@@ -79,6 +79,8 @@ def chart_response(result,top=None):
     output.update(points=[],references=[],meta=dict(result['meta']))
     if 'references' in result:
         output['meta']['referenceCount']=len(result['references'])
+    if 'actualChart' in output:
+        output.pop('chart', None)
     if top is None:
         return output
     actual=result['actualChart']
