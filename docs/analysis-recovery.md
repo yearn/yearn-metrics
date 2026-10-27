@@ -1,6 +1,7 @@
 # Recover legacy analysis jobs
 
-`lifetime-yield`, `vault-fees` and `vault-volume` commit a `running` marker before
+`lifetime-yield`, `vault-fees`, `vault-volume`, `fee-usd` and `canonical-fees`
+share one lifecycle and commit a `running` marker before
 calculating outputs. A handled Python exception or interruption now rolls back
 the partial output transaction, commits a `failed` marker with `completed_at`,
 and re-raises the error. A successful job commits its outputs and completed
@@ -37,9 +38,14 @@ RETURNING id, name, status, completed_at;
 COMMIT;
 ```
 
-Retain failed runs and any legacy partial outputs for diagnosis; readers must
-select complete runs. Retry the original analysis with the same intended cutoff
-and source policy, inspect the completed output, and only then perform any
-separately authorized publication. Record the recovered run ID and evidence in
-the operational receipt. This code change performs no production recovery or
-publication automatically.
+Before retrying or publishing, export the failed run's `analysis_runs` record,
+any retained `analysis_outputs`, and relevant process logs to the incident's
+access-controlled diagnostic archive. Record that archive location, the recovered
+run ID and supporting evidence in the operational receipt. Publication runs
+canonical consolidation, which removes outputs outside its retained run set;
+keeping partial outputs in the working database is not durable evidence.
+
+Readers must select complete runs. Retry the original analysis with the same
+intended cutoff and source policy, inspect its completed output, and only then
+perform any separately authorized publication. This code change performs no
+production recovery or publication automatically.

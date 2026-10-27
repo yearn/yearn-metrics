@@ -51,7 +51,7 @@ def complete_analysis_run(conn, run_id: int, status: str = "complete") -> None:
     conn.commit()
 
 
-def _run_analysis(conn, name, calculate, *args, params=None):
+def run_analysis(conn, name, calculate, *args, params=None):
     run_id = create_analysis_run(conn, name, params)
     try:
         calculate(conn, run_id, *args)
@@ -108,7 +108,7 @@ def run_lifetime_yield(
         raise ValueError(f"unsupported price source {price_source!r}")
     if fallback_price_source is not None and fallback_price_source not in SUPPORTED_SOURCES:
         raise ValueError(f"unsupported fallback price source {fallback_price_source!r}")
-    return _run_analysis(conn, 'lifetime-yield', _write_lifetime_yield,
+    return run_analysis(conn, 'lifetime-yield', _write_lifetime_yield,
         price_source, fallback_price_source, before_timestamp, params={
             'price_source': price_source,
             'fallback_price_source': fallback_price_source,
@@ -399,7 +399,7 @@ def run_vault_fees(conn) -> int:
     in the same transaction as a V2 StrategyReported event.
     """
 
-    return _run_analysis(conn, 'vault-fees', _write_vault_fees)
+    return run_analysis(conn, 'vault-fees', _write_vault_fees)
 
 
 def _write_vault_fees(conn, run_id):
@@ -616,7 +616,7 @@ def _add_volume_to_totals(
 
 
 def run_vault_volume(conn) -> int:
-    return _run_analysis(conn, 'vault-volume', _write_vault_volume)
+    return run_analysis(conn, 'vault-volume', _write_vault_volume)
 
 
 def _write_vault_volume(conn, run_id):

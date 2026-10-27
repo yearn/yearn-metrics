@@ -9,7 +9,7 @@ from typing import Any
 from eth_abi import decode
 from eth_utils import keccak
 
-from .analysis import create_analysis_run, complete_analysis_run, write_output
+from .analysis import run_analysis, write_output
 from .chains import web3_for
 from .config import CHAINS
 from .indexing import _receipt_with_retry
@@ -517,15 +517,8 @@ def index_canonical_fees(conn, chains=None, limit=None, retry_unresolved=False, 
 
 def run_canonical_fees(conn) -> int:
     """Export raw canonical fees and coverage of the stored report universe."""
-    run_id = create_analysis_run(conn,'canonical-fees',{'method_version':METHOD_VERSION,'valuation':'raw-assets-only'})
-    try:
-        _write_canonical_outputs(conn, run_id)
-        complete_analysis_run(conn, run_id)
-    except BaseException:
-        conn.rollback()
-        complete_analysis_run(conn, run_id, status='failed')
-        raise
-    return run_id
+    return run_analysis(conn, 'canonical-fees', _write_canonical_outputs,
+        params={'method_version':METHOD_VERSION,'valuation':'raw-assets-only'})
 
 
 def _write_canonical_outputs(conn, run_id):
