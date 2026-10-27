@@ -100,6 +100,17 @@ REDIS_URL='rediss://...' yearn-data publish lifetime-yield --ttl 259200
 
 The publisher atomically replaces `lifetime_yield:headline` with one JSON blob containing `net_yield_usd`, `as_of_ms`, `rate_usd_per_sec`, previous anchor fields, and `run_id`. Use `--dry-run` to print the payload without touching Redis.
 
+Publishing requires explicit complete valuation counts and retained report rows.
+Incomplete or legacy summaries with unknown completeness fail before replacing
+Redis, including in dry-run mode; an existing valid anchor is preserved. A
+complete genuine zero remains publishable. Payloads add completeness and hashed
+coverage/policy metadata. Extrapolation continues only when the previous anchor
+is verified complete and its historical report rows match the current run.
+New reports after that history can contribute yield; backfills, changed historical
+valuations, source-policy changes and legacy anchors reset the rate to zero.
+Anchor timestamps remain monotonic across a reset. Existing Redis publications
+are not changed until this command is explicitly invoked.
+
 ## Vault Volume Outputs
 
 The `vault-volume` job indexes user `Deposit`/`Withdraw` events and strategy debt movement. V2 strategy allocation volume is derived from `StrategyReported.debtAdded` and `debtPaid`; V3 allocation volume is indexed from `DebtUpdated` events.

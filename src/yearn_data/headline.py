@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -25,8 +26,13 @@ def _iso_run_id(timestamp: int | None) -> str:
 
 
 def latest_lifetime_yield_anchor(conn, analysis_run_id: int | None = None) -> tuple[Decimal, str]:
-    """Return the latest completed lifetime-yield net value and default run id."""
+    """Return a fully valued completed lifetime-yield total and default run id."""
+    row, summary = _complete_lifetime_yield_run(conn, analysis_run_id)
+    run_id = f"analysis-run-{row['id']}:{_iso_run_id(row['completed_at'] or row['started_at'])}"
+    return Decimal(str(summary['net_yield_usd'])), run_id
 
+
+def _complete_lifetime_yield_run(conn, analysis_run_id):
     params: tuple[Any, ...]
     if analysis_run_id is None:
         where = "r.name='lifetime-yield' AND r.status='complete'"
@@ -37,7 +43,7 @@ def latest_lifetime_yield_anchor(conn, analysis_run_id: int | None = None) -> tu
 
     row = conn.execute(
         f"""
-        SELECT r.id, r.completed_at, r.started_at, o.row_json
+        SELECT r.id, r.completed_at, r.started_at, r.params_json, o.row_json
         FROM analysis_runs r
         JOIN analysis_outputs o
           ON o.run_id = r.id
@@ -56,9 +62,29 @@ def latest_lifetime_yield_anchor(conn, analysis_run_id: int | None = None) -> tu
     summary = from_json(row["row_json"])
     if "net_yield_usd" not in summary or summary["net_yield_usd"] is None:
         raise ValueError(f"lifetime-yield analysis run {row['id']} has no net_yield_usd")
+    counts = [summary.get(field) for field in ('reports', 'priced_reports', 'unpriced_reports')]
+    if (any(type(count) is not int or count < 0 for count in counts)
+            or counts[0] != counts[1] or counts[2] != 0):
+        raise ValueError(f"lifetime-yield analysis run {row['id']} has incomplete valuation")
+    return row, summary
 
-    run_id = f"analysis-run-{row['id']}:{_iso_run_id(row['completed_at'] or row['started_at'])}"
-    return Decimal(str(summary["net_yield_usd"])), run_id
+
+def _coverage_digest(reports):
+    # Canonical row JSON includes event identity, raw/valued amounts and provenance.
+    rows = sorted(json.dumps(row, sort_keys=True, separators=(',', ':')) for row in reports)
+    return hashlib.sha256('\n'.join(rows).encode()).hexdigest()
+
+
+def _comparable_previous(previous, reports, policy):
+    if not previous or previous.get('valuation_complete') is not True:
+        return None
+    cutoff = previous.get('coverage_through_timestamp')
+    if type(cutoff) is not int or previous.get('valuation_policy') != policy:
+        return None
+    historical = [row for row in reports if row['block_timestamp'] <= cutoff]
+    if _coverage_digest(historical) != previous.get('coverage_digest'):
+        return None
+    return previous
 
 
 def build_lifetime_yield_headline(
@@ -108,6 +134,9 @@ def lifetime_yield_headline_json(payload: dict[str, Any]) -> str:
         f'"prev_as_of_ms": {int(payload["prev_as_of_ms"])}',
         f'"run_id": {json.dumps(str(payload["run_id"]))}',
     ]
+    for key in ('valuation_complete', 'coverage_through_timestamp', 'coverage_digest', 'valuation_policy'):
+        if key in payload:
+            fields.append(f'{json.dumps(key)}: {json.dumps(payload[key])}')
     return "{" + ",".join(fields) + "}"
 
 
@@ -133,8 +162,20 @@ def publish_lifetime_yield_headline(
 ) -> tuple[dict[str, Any], str]:
     """Publish or dry-run the latest lifetime-yield headline Redis blob."""
 
-    net_yield_usd, default_run_id = latest_lifetime_yield_anchor(conn, analysis_run_id)
+    row, summary = _complete_lifetime_yield_run(conn, analysis_run_id)
+    net_yield_usd = Decimal(str(summary['net_yield_usd']))
+    default_run_id = f"analysis-run-{row['id']}:{_iso_run_id(row['completed_at'] or row['started_at'])}"
     run_id = run_id or default_run_id
+    reports = [from_json(output['row_json']) for output in conn.execute(
+        "SELECT row_json FROM analysis_outputs WHERE run_id=? AND name='reports'", (row['id'],))]
+    if len(reports) != summary['reports'] or any(type(r.get('block_timestamp')) is not int for r in reports):
+        raise ValueError(f"lifetime-yield analysis run {row['id']} has incomplete report coverage")
+    params = from_json(row['params_json'])
+    closed_cutoff = params.get('before_timestamp')
+    coverage_through = closed_cutoff-1 if type(closed_cutoff) is int else row['started_at']
+    # Cutoff growth is allowed; all other source/configuration changes reset the rate.
+    policy = hashlib.sha256(json.dumps({key: value for key, value in params.items()
+        if key != 'before_timestamp'}, sort_keys=True).encode()).hexdigest()
 
     previous = None
     if not dry_run:
@@ -146,7 +187,13 @@ def publish_lifetime_yield_headline(
             redis_client = Redis.from_url(redis_url)
         previous = parse_previous_headline(redis_client.get(key))
 
+    if previous:
+        now_ms = max(int(time.time()*1000) if now_ms is None else int(now_ms), int(previous['as_of_ms']))
+    previous = _comparable_previous(previous, reports, policy)
     payload = build_lifetime_yield_headline(net_yield_usd, previous, now_ms=now_ms, run_id=run_id)
+    payload.update(valuation_complete=True, coverage_through_timestamp=max(
+        coverage_through, max((r['block_timestamp'] for r in reports), default=0)),
+        coverage_digest=_coverage_digest(reports), valuation_policy=policy)
     payload_json = lifetime_yield_headline_json(payload)
     if not dry_run:
         kwargs = {"ex": ttl} if ttl else {}
