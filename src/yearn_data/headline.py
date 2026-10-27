@@ -167,7 +167,7 @@ def lifetime_yield_headline_json(payload: dict[str, Any]) -> str:
         f'"prev_as_of_ms": {int(payload["prev_as_of_ms"])}',
         f'"run_id": {json.dumps(str(payload["run_id"]))}',
     ]
-    for key in ('valuation_complete', 'coverage_through_timestamp', 'coverage_digest', 'valuation_policy'):
+    for key in ('valuation_complete', 'coverage_through_timestamp', 'coverage_digest', 'valuation_policy', 'extrapolation_status'):
         if key in payload:
             fields.append(f'{json.dumps(key)}: {json.dumps(payload[key])}')
     return "{" + ",".join(fields) + "}"
@@ -201,7 +201,7 @@ def publish_lifetime_yield_headline(
     run_id = run_id or default_run_id
     params = from_json(row['params_json'])
     closed_cutoff = params.get('before_timestamp')
-    coverage_through = closed_cutoff-1 if type(closed_cutoff) is int else row['started_at']
+    coverage_through = closed_cutoff-1 if type(closed_cutoff) is int else None
     # Cutoff growth is allowed; all other source/configuration changes reset the rate.
     policy = hashlib.sha256(json.dumps({key: value for key, value in params.items()
         if key != 'before_timestamp'}, sort_keys=True).encode()).hexdigest()
@@ -222,14 +222,20 @@ def publish_lifetime_yield_headline(
         conn, row['id'], summary['reports'],
         previous.get('coverage_through_timestamp') if previous else None,
     )
-    coverage_through = max(coverage_through, latest)
-    previous = _comparable_previous(previous, historical_digest, policy)
+    if coverage_through is None:
+        # Wall-clock analysis time is not evidence of closed chain coverage.
+        previous = None
+        extrapolation_status = 'unbounded-analysis'
+    else:
+        coverage_through = max(coverage_through, latest)
+        previous = _comparable_previous(previous, historical_digest, policy)
+        extrapolation_status = 'coverage-verified' if previous else 'coverage-reset'
     payload = build_lifetime_yield_headline(
         net_yield_usd, previous, now_ms=now_ms, run_id=run_id,
         coverage_through_timestamp=coverage_through,
     )
     payload.update(valuation_complete=True, coverage_through_timestamp=coverage_through,
-                   coverage_digest=digest, valuation_policy=policy)
+                   coverage_digest=digest, valuation_policy=policy, extrapolation_status=extrapolation_status)
     payload_json = lifetime_yield_headline_json(payload)
     if not dry_run:
         kwargs = {"ex": ttl} if ttl else {}

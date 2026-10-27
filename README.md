@@ -106,8 +106,13 @@ Redis, including in dry-run mode; an existing valid anchor is preserved. A
 complete genuine zero remains publishable. Payloads add completeness and hashed
 coverage/policy metadata. Extrapolation continues only when the previous anchor
 is verified complete and its historical report rows match the current run.
-The rate divides new yield by the advance in covered chain time, independent of
-how quickly consecutive anchors are published. Retained coverage is checked in
+For analyses with an explicit `--before-timestamp`, the rate divides new yield
+by the advance in covered chain time, independent of publication frequency.
+Cutoff-less analyses (including `run lifetime-yield`) publish complete totals
+with a zero rate, `coverage_through_timestamp: null` and
+`extrapolation_status: "unbounded-analysis"`; analysis start time never stands in
+for closed chain coverage. Bounded anchors report `coverage-verified` or
+`coverage-reset` according to the historical comparability check. Retained coverage is checked in
 one bounded-memory streaming pass. New reports after that history can contribute yield; backfills, changed historical
 valuations, source-policy changes and legacy anchors reset the rate to zero.
 Anchor timestamps remain monotonic across a reset. Existing Redis publications

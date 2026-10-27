@@ -221,3 +221,27 @@ def test_streamed_coverage_preserves_digests_and_rejects_invalid_rows(postgres_d
     conn.commit()
     with pytest.raises(ValueError, match='incomplete report coverage'):
         _retained_coverage(conn, run_id, 3, 75)
+
+
+
+def test_cutoffless_analyses_publish_totals_without_claiming_extrapolation_coverage(postgres_database):
+    conn=connect('staging');init_db(conn)
+    redis=FakeRedis()
+    for index,timestamp in enumerate([100,200],1):
+        # A newly indexed report may predate the previous analysis start time.
+        conn.execute("""INSERT INTO strategy_reports
+            (chain_id,version,vault_address,strategy_address,tx_hash,log_index,block_number,
+             block_timestamp,asset,asset_decimals,gain_raw,loss_raw,net_raw)
+            VALUES(1,'v3','vault','strategy',?,0,10,?,'asset',6,'7000000','0','7000000')""",
+            (f'report-{index}',timestamp))
+        conn.execute("""INSERT INTO prices(chain_id,token_address,timestamp,source,price_usd,status)
+            VALUES(1,'asset',?,'yearn-prices',2,'ok')""",(timestamp,))
+        conn.commit()
+        run_id=run_lifetime_yield(conn,fallback_price_source=None)
+        payload,serialized=publish_lifetime_yield_headline(
+            conn,analysis_run_id=run_id,redis_client=redis,now_ms=index*1000)
+        assert payload['net_yield_usd']==14*index
+        assert payload['rate_usd_per_sec']==0
+        assert payload['coverage_through_timestamp'] is None
+        assert json.loads(serialized)['extrapolation_status']=='unbounded-analysis'
+        assert json.loads(redis.raw)['net_yield_usd']==14*index
