@@ -141,6 +141,8 @@ vaults, and export nested capital positions with overlap deductions. Start from 
 `tvl discover`, collect an explicit date range with `tvl collect`, and use
 `tvl export` for CSV/JSON outputs. See [Historical TVL and nested positions](docs/tvl-history.md)
 for the accounting rules, mapping, and coverage boundaries.
+See [incremental history preparation](docs/incremental-tvl-history.md) for
+input invalidation, targeted backfills, immutable rebuilds and measured costs.
 
 Use one Postgres database with separate TVL and fee/earnings tables. See
 [Shared database](docs/shared-database.md) for the storage boundary.

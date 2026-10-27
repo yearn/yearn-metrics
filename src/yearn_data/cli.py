@@ -108,6 +108,9 @@ def build_parser() -> argparse.ArgumentParser:
     tvl_prepare=tvl_sub.add_parser('prepare-history',help='Prepare immutable TVL chart rows for fast reads')
     tvl_prepare.add_argument('--publication',required=True,type=Path)
     tvl_prepare.add_argument('--previous-dataset-id',help='Copy this prepared dataset and recompute only newly rejected quote dates')
+    tvl_prepare.add_argument('--full-rebuild',action='store_true',help='Recalculate every date of a new immutable dataset')
+    tvl_prepare.add_argument('--backfill-from',type=int,help='Force recalculation from this inclusive captured timestamp')
+    tvl_prepare.add_argument('--backfill-to',type=int,help='Force recalculation through this inclusive captured timestamp')
     tvl_prepare.add_argument('--current-bridge-policy',choices=['none','retired-registry'],default='retired-registry')
     tvl_discover = tvl_sub.add_parser("discover", help="Create or refresh the TVL catalog independently")
     tvl_discover.add_argument("--sources", nargs="+", choices=["kong", "v1", "curation"], help="Default: all sources")
@@ -360,10 +363,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command=='tvl' and args.tvl_command=='prepare-history':
         from .tvl_api import TvlStore
         from .tvl_history_cache import prepare, prepare_price_repair
+        if (args.backfill_from is None)!=(args.backfill_to is None):
+            raise ValueError('provide both --backfill-from and --backfill-to')
+        backfill=None if args.backfill_from is None else (args.backfill_from,args.backfill_to)
+        if args.previous_dataset_id and (args.full_rebuild or backfill):
+            raise ValueError('choose price-only repair or general/full history preparation')
         store=TvlStore(args.db,args.publication,current_bridge_policy=args.current_bridge_policy)
         dataset=store.get()
         result=(prepare_price_repair(dataset,store.get(args.previous_dataset_id))
-                if args.previous_dataset_id else prepare(dataset,progress=progress))
+                if args.previous_dataset_id else prepare(dataset,progress=progress,
+                    full_rebuild=args.full_rebuild,backfill=backfill))
         print(json.dumps(result,sort_keys=True))
         return 0
     conn = open_db(args.db)

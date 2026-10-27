@@ -1,0 +1,282 @@
+{
+  "baselineCommit": "3db530831ce79bec597a43f5ab795d45d1ed8ab7",
+  "baselineMethod": "Original tvl_history_cache.py loaded as a package-relative module, using the same financial accounting and the surviving guarded benchmark fixture.",
+  "measurement": "Three sequential local trials on the final recovery-corrected implementation; all raw timings retained; medians are descriptive, not a CI speed threshold or production performance claim.",
+  "medianTimings": {
+    "daily-refresh": {
+      "incremental": {
+        "seconds": 0.17296871542930603,
+        "chartCopySeconds": 0.018035050481557846,
+        "totalsCopySeconds": 0.0021591801196336746
+      },
+      "full": {
+        "seconds": 0.2245928980410099,
+        "chartCopySeconds": 0,
+        "totalsCopySeconds": 0
+      }
+    },
+    "targeted-backfill": {
+      "incremental": {
+        "seconds": 0.191904341802001,
+        "chartCopySeconds": 0.01887100748717785,
+        "totalsCopySeconds": 0.002063484862446785
+      },
+      "full": {
+        "seconds": 0.23262778110802174,
+        "chartCopySeconds": 0,
+        "totalsCopySeconds": 0
+      }
+    }
+  },
+  "trials": [
+    {
+      "finalDates": 33,
+      "initialDates": 32,
+      "inventory": 80,
+      "limits": "Offline fixed inputs and local Postgres; logical rows returned/read/written, not physical page or query-plan I/O; selected inputs and immutable row copy remain full-history costs.",
+      "phases": [
+        {
+          "phase": "daily-refresh",
+          "runs": [
+            {
+              "accountedDates": 1,
+              "chartCopySeconds": 0.018035050481557846,
+              "chartRowsWritten": 2640,
+              "copiedChartRows": 2560,
+              "copiedTotalsRows": 128,
+              "digest": "7c124186f312e190bcfa4a227706796e876adec62e834dfb6add7f39b16e9f57",
+              "mode": "incremental",
+              "recomputedDates": 1,
+              "reusedDates": 32,
+              "seconds": 0.17296871542930603,
+              "selectedInputRowsRead": 2673,
+              "totalsCopySeconds": 0.0021591801196336746,
+              "totalsRowsRead": 80,
+              "totalsRowsWritten": 132
+            },
+            {
+              "accountedDates": 33,
+              "chartCopySeconds": 0,
+              "chartRowsWritten": 2640,
+              "copiedChartRows": 0,
+              "copiedTotalsRows": 0,
+              "digest": "7c124186f312e190bcfa4a227706796e876adec62e834dfb6add7f39b16e9f57",
+              "mode": "full",
+              "recomputedDates": 33,
+              "reusedDates": 0,
+              "seconds": 0.2139612901955843,
+              "selectedInputRowsRead": 2673,
+              "totalsCopySeconds": 0,
+              "totalsRowsRead": 2640,
+              "totalsRowsWritten": 132
+            }
+          ]
+        },
+        {
+          "phase": "targeted-backfill",
+          "runs": [
+            {
+              "accountedDates": 1,
+              "chartCopySeconds": 0.018150363117456436,
+              "chartRowsWritten": 2640,
+              "copiedChartRows": 2560,
+              "copiedTotalsRows": 128,
+              "digest": "594b894c75ce8cecb0f7688cd0fac9701ad0fd2bb3d9a73081cfc4ba6f6b7298",
+              "mode": "incremental",
+              "recomputedDates": 1,
+              "reusedDates": 32,
+              "seconds": 0.1853119172155857,
+              "selectedInputRowsRead": 2673,
+              "totalsCopySeconds": 0.002063484862446785,
+              "totalsRowsRead": 80,
+              "totalsRowsWritten": 132
+            },
+            {
+              "accountedDates": 33,
+              "chartCopySeconds": 0,
+              "chartRowsWritten": 2640,
+              "copiedChartRows": 0,
+              "copiedTotalsRows": 0,
+              "digest": "594b894c75ce8cecb0f7688cd0fac9701ad0fd2bb3d9a73081cfc4ba6f6b7298",
+              "mode": "full",
+              "recomputedDates": 33,
+              "reusedDates": 0,
+              "seconds": 0.23331034928560257,
+              "selectedInputRowsRead": 2673,
+              "totalsCopySeconds": 0,
+              "totalsRowsRead": 2640,
+              "totalsRowsWritten": 132
+            }
+          ]
+        }
+      ],
+      "positionEdgesPerDate": 1
+    },
+    {
+      "finalDates": 33,
+      "initialDates": 32,
+      "inventory": 80,
+      "limits": "Offline fixed inputs and local Postgres; logical rows returned/read/written, not physical page or query-plan I/O; selected inputs and immutable row copy remain full-history costs.",
+      "phases": [
+        {
+          "phase": "daily-refresh",
+          "runs": [
+            {
+              "accountedDates": 1,
+              "chartCopySeconds": 0.017809439450502396,
+              "chartRowsWritten": 2640,
+              "copiedChartRows": 2560,
+              "copiedTotalsRows": 128,
+              "digest": "7c124186f312e190bcfa4a227706796e876adec62e834dfb6add7f39b16e9f57",
+              "mode": "incremental",
+              "recomputedDates": 1,
+              "reusedDates": 32,
+              "seconds": 0.1720254272222519,
+              "selectedInputRowsRead": 2673,
+              "totalsCopySeconds": 0.002370065078139305,
+              "totalsRowsRead": 80,
+              "totalsRowsWritten": 132
+            },
+            {
+              "accountedDates": 33,
+              "chartCopySeconds": 0,
+              "chartRowsWritten": 2640,
+              "copiedChartRows": 0,
+              "copiedTotalsRows": 0,
+              "digest": "7c124186f312e190bcfa4a227706796e876adec62e834dfb6add7f39b16e9f57",
+              "mode": "full",
+              "recomputedDates": 33,
+              "reusedDates": 0,
+              "seconds": 0.25980845279991627,
+              "selectedInputRowsRead": 2673,
+              "totalsCopySeconds": 0,
+              "totalsRowsRead": 2640,
+              "totalsRowsWritten": 132
+            }
+          ]
+        },
+        {
+          "phase": "targeted-backfill",
+          "runs": [
+            {
+              "accountedDates": 1,
+              "chartCopySeconds": 0.01906765252351761,
+              "chartRowsWritten": 2640,
+              "copiedChartRows": 2560,
+              "copiedTotalsRows": 128,
+              "digest": "594b894c75ce8cecb0f7688cd0fac9701ad0fd2bb3d9a73081cfc4ba6f6b7298",
+              "mode": "incremental",
+              "recomputedDates": 1,
+              "reusedDates": 32,
+              "seconds": 0.191904341802001,
+              "selectedInputRowsRead": 2673,
+              "totalsCopySeconds": 0.0021456778049468994,
+              "totalsRowsRead": 80,
+              "totalsRowsWritten": 132
+            },
+            {
+              "accountedDates": 33,
+              "chartCopySeconds": 0,
+              "chartRowsWritten": 2640,
+              "copiedChartRows": 0,
+              "copiedTotalsRows": 0,
+              "digest": "594b894c75ce8cecb0f7688cd0fac9701ad0fd2bb3d9a73081cfc4ba6f6b7298",
+              "mode": "full",
+              "recomputedDates": 33,
+              "reusedDates": 0,
+              "seconds": 0.23262778110802174,
+              "selectedInputRowsRead": 2673,
+              "totalsCopySeconds": 0,
+              "totalsRowsRead": 2640,
+              "totalsRowsWritten": 132
+            }
+          ]
+        }
+      ],
+      "positionEdgesPerDate": 1
+    },
+    {
+      "finalDates": 33,
+      "initialDates": 32,
+      "inventory": 80,
+      "limits": "Offline fixed inputs and local Postgres; logical rows returned/read/written, not physical page or query-plan I/O; selected inputs and immutable row copy remain full-history costs.",
+      "phases": [
+        {
+          "phase": "daily-refresh",
+          "runs": [
+            {
+              "accountedDates": 1,
+              "chartCopySeconds": 0.025892801582813263,
+              "chartRowsWritten": 2640,
+              "copiedChartRows": 2560,
+              "copiedTotalsRows": 128,
+              "digest": "7c124186f312e190bcfa4a227706796e876adec62e834dfb6add7f39b16e9f57",
+              "mode": "incremental",
+              "recomputedDates": 1,
+              "reusedDates": 32,
+              "seconds": 0.18732340820133686,
+              "selectedInputRowsRead": 2673,
+              "totalsCopySeconds": 0.002114592120051384,
+              "totalsRowsRead": 80,
+              "totalsRowsWritten": 132
+            },
+            {
+              "accountedDates": 33,
+              "chartCopySeconds": 0,
+              "chartRowsWritten": 2640,
+              "copiedChartRows": 0,
+              "copiedTotalsRows": 0,
+              "digest": "7c124186f312e190bcfa4a227706796e876adec62e834dfb6add7f39b16e9f57",
+              "mode": "full",
+              "recomputedDates": 33,
+              "reusedDates": 0,
+              "seconds": 0.2245928980410099,
+              "selectedInputRowsRead": 2673,
+              "totalsCopySeconds": 0,
+              "totalsRowsRead": 2640,
+              "totalsRowsWritten": 132
+            }
+          ]
+        },
+        {
+          "phase": "targeted-backfill",
+          "runs": [
+            {
+              "accountedDates": 1,
+              "chartCopySeconds": 0.01887100748717785,
+              "chartRowsWritten": 2640,
+              "copiedChartRows": 2560,
+              "copiedTotalsRows": 128,
+              "digest": "594b894c75ce8cecb0f7688cd0fac9701ad0fd2bb3d9a73081cfc4ba6f6b7298",
+              "mode": "incremental",
+              "recomputedDates": 1,
+              "reusedDates": 32,
+              "seconds": 0.1963559277355671,
+              "selectedInputRowsRead": 2673,
+              "totalsCopySeconds": 0.002021603286266327,
+              "totalsRowsRead": 80,
+              "totalsRowsWritten": 132
+            },
+            {
+              "accountedDates": 33,
+              "chartCopySeconds": 0,
+              "chartRowsWritten": 2640,
+              "copiedChartRows": 0,
+              "copiedTotalsRows": 0,
+              "digest": "594b894c75ce8cecb0f7688cd0fac9701ad0fd2bb3d9a73081cfc4ba6f6b7298",
+              "mode": "full",
+              "recomputedDates": 33,
+              "reusedDates": 0,
+              "seconds": 0.22936982661485672,
+              "selectedInputRowsRead": 2673,
+              "totalsCopySeconds": 0,
+              "totalsRowsRead": 2640,
+              "totalsRowsWritten": 132
+            }
+          ]
+        }
+      ],
+      "positionEdgesPerDate": 1
+    }
+  ]
+}

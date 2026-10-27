@@ -17,6 +17,8 @@ DERIVED = {
     'tvl_chart_rows': ('dataset_id', 'tvlDatasetId'),
     'tvl_chart_totals': ('dataset_id', 'tvlDatasetId'),
     'tvl_chart_publications': ('dataset_id', 'tvlDatasetId'),
+    'tvl_chart_inputs': ('dataset_id', 'tvlDatasetId'),
+    'tvl_chart_preparations': ('dataset_id', 'tvlDatasetId'),
     'api_tvl_dates': ('dataset_id', 'tvlDatasetId'),
     'api_fee_rows': ('dataset_id', 'feesDatasetId'),
     'api_fee_datasets': ('dataset_id', 'feesDatasetId'),
@@ -27,6 +29,7 @@ DERIVED_KEYS = {
     'tvl_chart_rows': 'dataset_id,timestamp,chain_id,vault',
     'tvl_chart_totals': 'dataset_id,timestamp,group_by,mode,series',
     'tvl_chart_publications': 'dataset_id', 'api_tvl_dates': 'dataset_id',
+    'tvl_chart_inputs': 'dataset_id,timestamp', 'tvl_chart_preparations': 'dataset_id',
     'api_fee_rows': 'dataset_id,kind,ordinal', 'api_fee_datasets': 'dataset_id',
     'analytics_publications': 'id', 'api_releases': 'id',
 }
