@@ -94,18 +94,14 @@ def build(dataset, progress=None, *, full_rebuild=False, backfill=None):
             recompute, reuse, identities = [], [], []
             rows_read = written = 0
             known_by_day = {}
-            cutoff=dataset.manifest.get('reportingCutoff')
-            eligible=(set(dataset.run_ids) if cutoff is None else {r[0] for r in conn.execute(
-                f'SELECT DISTINCT run_id FROM tvl_snapshots WHERE run_id IN ({marks}) AND timestamp<?',
-                (*dataset.run_ids,cutoff))})
-            expected_chains = {c for r in dataset.manifest['runs']
-                               if r['id'] in eligible
-                               for c in json.loads(r['params_json']).get('chain_ids', [])}
-            if not expected_chains:
-                bounded=' AND timestamp<?' if cutoff is not None else ''
-                expected_chains = {r[0] for r in conn.execute(
-                    f'SELECT DISTINCT chain_id FROM tvl_snapshots WHERE run_id IN ({marks}){bounded}',
-                    (*dataset.run_ids,cutoff) if cutoff is not None else dataset.run_ids)}
+            # A chain is repairable only from its own first retained observation.
+            # Adding a chain today must not invent gaps before its inventory existed.
+            first_by_chain = dict(conn.execute(
+                f'SELECT chain_id,MIN(timestamp) FROM tvl_snapshots WHERE run_id IN ({marks}) '
+                'AND timestamp<=? GROUP BY chain_id', (*dataset.run_ids, dataset.as_of())))
+            forced_dates = [day for day in dates if backfill is not None and backfill[0] <= day <= backfill[1]]
+            if backfill is not None and not forced_dates:
+                raise ValueError('backfill range matches no captured dates')
             notify(f'History plan: {len(dates)} dates; full rebuild reason: {reason or "compare captured daily inputs"}')
             for offset in range(0, len(dates), 31):
                 batch = []
@@ -141,11 +137,17 @@ def build(dataset, progress=None, *, full_rebuild=False, backfill=None):
                     WHERE dataset_id=? AND timestamp IN ({placeholders})''', (dataset.id, previous, *days)).rowcount
             copy_seconds = time.monotonic()-copy_started
             closes = range((dates[0]//DAY)*DAY+DAY-1, dataset.as_of()+1, DAY) if dates else ()
-            pending = [{'timestamp': day, 'chainIds': sorted(expected_chains-known_by_day.get(day, set()))}
-                       for day in closes if expected_chains-known_by_day.get(day, set())]
+            pending = []
+            for day in closes:
+                missing = sorted(chain for chain, first in first_by_chain.items()
+                                 if first <= day and chain not in known_by_day.get(day, set()))
+                if missing:
+                    pending.append({'timestamp': day, 'chainIds': missing})
             receipt = dict(datasetId=dataset.id, status='rows-prepared', inputVersion=INPUT_VERSION,
                            previousDatasetId=previous, fullRebuildReason=reason,
                            dates=len(dates), reusedDates=reuse, recomputedDates=recompute,
+                           requestedBackfill=(dict(fromTimestamp=backfill[0], toTimestamp=backfill[1],
+                                                   matchedDates=forced_dates) if backfill is not None else None),
                            pendingChainDates=pending, selectedInputRowsRead=rows_read,
                            recomputedRowsWritten=written, copiedRows=copied,
                            rows=written+copied, copySeconds=copy_seconds, seconds=time.monotonic()-started)

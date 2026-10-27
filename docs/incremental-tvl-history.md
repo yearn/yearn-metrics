@@ -167,3 +167,9 @@ The surviving benchmark compares the current explicit full path with incremental
 preparation. The one-off original-module probe was consolidated into the saved
 receipt; its shared fixture/result/work assertions remain in the benchmark.
 CI still runs the complete existing suite on both Python matrices.
+
+Gap receipts begin at each chain’s first retained observation. A newly added chain
+does not create gaps before that date. Targeted-backfill receipts record the
+requested inclusive bounds and matched dates; a range matching no captured date
+is rejected. A retry that completes interrupted totals reports `prepared`; only a
+retry with both rows and totals already complete reports `already-prepared`.

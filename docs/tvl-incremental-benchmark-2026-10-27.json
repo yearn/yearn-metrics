@@ -1,6 +1,6 @@
 {
   "baselineCommit": "3db530831ce79bec597a43f5ab795d45d1ed8ab7",
-  "baselineMethod": "Original tvl_history_cache.py loaded as a package-relative module, using the same financial accounting and the surviving guarded benchmark fixture.",
+  "baselineMethod": "One-off probe: original tvl_history_cache.py loaded from baselineCommit as a package-relative module using the guarded benchmark fixture. This original-module loader is not retained in the supported harness.",
   "measurement": "Three sequential local trials on the final recovery-corrected implementation; all raw timings retained; medians are descriptive, not a CI speed threshold or production performance claim.",
   "medianTimings": {
     "daily-refresh": {
@@ -278,5 +278,6 @@
       ],
       "positionEdgesPerDate": 1
     }
-  ]
+  ],
+  "baselineReproducibility": "Saved historical measurement; the retained benchmark compares incremental against the current explicit full-rebuild path."
 }

@@ -230,6 +230,8 @@ def test_totals_resume_after_copy_source_is_retired(postgres_database,tmp_path,m
                       'tvl_chart_inputs','tvl_chart_preparations'):
             conn.execute(f'DELETE FROM {table} WHERE dataset_id=?',(old.id,))
     result=prepare(target)
+    assert result['status']=='prepared'
+    assert prepare(target)['status']=='already-prepared'
     assert result['totalsRowsCopied']==0 and result['totalsRowsRead']==3
     assert target.history(interval='daily')['chart']==[
         {'timestamp':DAY,'Ethereum':100.0},{'timestamp':DAY+86400,'Ethereum':200.0},
@@ -254,3 +256,30 @@ def test_bounded_history_does_not_report_future_only_chains_as_historical_gaps(p
     assert result['pendingChainDates']==[
         {'timestamp':DAY+86400,'chainIds':[1]},
         {'timestamp':DAY+2*86400,'chainIds':[1]}]
+
+
+def test_new_chain_gaps_start_at_its_first_retained_observation(postgres_database,tmp_path):
+    with closing(connect('staging')) as conn:
+        init_db(conn)
+        for number, day in enumerate([DAY, DAY+86400, DAY+2*86400, DAY+3*86400], 1):
+            run(conn,number,day,[(PARENT,'100')])
+        # Chain 10 first enters retained history on day 2, then misses day 3.
+        for number, day in [(2,DAY+86400),(4,DAY+3*86400)]:
+            row=dict(chain_id=10,vault=CHILD,timestamp=day,version='v3',
+                     category='v3',name='New chain vault',asset_units='1',tvl_usd='1')
+            conn.execute('INSERT INTO tvl_snapshots VALUES(?,10,?,?,1,?)',
+                         (number,CHILD,day,json.dumps(row)))
+        conn.commit()
+    result=prepare(TvlStore('staging',tmp_path/'pub').get())
+    assert result['pendingChainDates']==[{'timestamp':DAY+2*86400,'chainIds':[10]}]
+
+
+def test_targeted_backfill_records_matched_dates_and_rejects_unmatched_range(postgres_database,tmp_path):
+    with closing(connect('staging')) as conn:
+        init_db(conn);run(conn,1,DAY,[(PARENT,'100')])
+    dataset=TvlStore('staging',tmp_path/'pub').get()
+    with pytest.raises(ValueError,match='matches no captured dates'):
+        prepare(dataset,backfill=(DAY-10,DAY-1))
+    assert not ready(dataset)
+    result=prepare(dataset,backfill=(DAY-1,DAY+1))
+    assert result['requestedBackfill']==dict(fromTimestamp=DAY-1,toTimestamp=DAY+1,matchedDates=[DAY])

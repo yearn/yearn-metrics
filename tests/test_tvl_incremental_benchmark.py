@@ -11,7 +11,7 @@ from yearn_data.tvl_api import TvlStore, TvlDataset
 from test_tvl_api import run, DAY, PARENT, CHILD
 
 
-def benchmark_history(root, monkeypatch, full_cache=cache):
+def benchmark_history(root, monkeypatch):
     vaults = [PARENT,CHILD]+[f'0x{i+1:040x}' for i in range(78)]
     with closing(connect('staging')) as conn:
         init_db(conn)
@@ -45,21 +45,18 @@ def benchmark_history(root, monkeypatch, full_cache=cache):
             with monkeypatch.context() as patch:
                 patch.setattr(TvlDataset,'selected_rows',inputs)
                 patch.setattr(TvlDataset,'account_frame',account)
-                for module in {cache,full_cache}:
-                    original_rows=module.rows
-                    def counted_rows(*args,_original=original_rows,**kwargs):
-                        for timestamp,points in _original(*args,**kwargs):
-                            metrics['totalsRowsRead']+=len(points)
-                            yield timestamp,points
-                    patch.setattr(module,'rows',counted_rows)
+                original_rows=cache.rows
+                def counted_rows(*args,**kwargs):
+                    for timestamp,points in original_rows(*args,**kwargs):
+                        metrics['totalsRowsRead']+=len(points)
+                        yield timestamp,points
+                patch.setattr(cache,'rows',counted_rows)
                 started=time.perf_counter()
                 if mode=='incremental':
                     receipt=cache.prepare(dataset,backfill=(DAY+15*86400,DAY+15*86400)
                                           if phase=='targeted-backfill' else None)
-                elif full_cache is cache:
-                    receipt=cache.prepare(dataset,full_rebuild=True)
                 else:
-                    receipt=full_cache.prepare(dataset)
+                    receipt=cache.prepare(dataset,full_rebuild=True)
                 elapsed=time.perf_counter()-started
             with closing(connect('staging',readonly=True)) as conn:
                 rows=[tuple(r) for r in conn.execute('''SELECT timestamp,chain_id,vault,name,category,version,

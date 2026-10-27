@@ -158,14 +158,15 @@ def prepare(dataset,progress=None,*,full_rebuild=False,backfill=None):
     if ready(dataset):
         if full_rebuild or backfill is not None:
             raise ValueError('already prepared immutable dataset; collect/publish a new revision for a rebuild')
+        had_totals = totals_ready(dataset)
         prepare_totals(dataset)
         with closing(connect(dataset.database,readonly=True)) as conn:
             if table_exists(conn,'tvl_chart_preparations'):
                 from .tvl_incremental import preparation
                 receipt = preparation(conn,dataset.id)
                 if receipt:
-                    return receipt|{'status':'already-prepared'}
-        return {'datasetId':dataset.id,'status':'already-prepared'}
+                    return receipt|{'status':'already-prepared' if had_totals else 'prepared'}
+        return {'datasetId':dataset.id,'status':'already-prepared' if had_totals else 'prepared'}
     from .tvl_incremental import build, preparation
     build(dataset, progress, full_rebuild=full_rebuild, backfill=backfill)
     prepare_totals(dataset)
