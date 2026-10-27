@@ -110,8 +110,20 @@ Chart clients can request `format=chart` to omit duplicate diagnostic points and
 price references. On constant-price vault history, `top=10` returns the ten vaults
 with the largest latest known values plus an `All other vaults` series, and one
 price-neutral total across every vault. `meta.topSeries` identifies the prepared
-series so clients do not reduce them again. Default requests keep the full
-response. Responses use gzip when the client accepts it.
+series so clients do not reduce them again. Add `topMetric=constant-price` to
+rank by the latest available price-adjusted value instead; this returns the
+selected price-adjusted series and their remainder, preserving unavailable
+prices rather than turning them into zero. The metric requires a compact `top`
+vault-history request.
+
+Compact top histories rank in a streaming pass and retain only the selected
+chart series in a second pass. The existing point and response-byte limits apply
+to that compact result, so a small chart is not rejected because its uncompressed
+source exceeds the export limit. For these responses, `pointCount` counts emitted
+actual-chart values, while `meta.sourceSeriesCount` counts the ranking metric's
+source series. Full requests retain their existing limits and response shape.
+The sampled dates, reference-price window and publication selection are unchanged.
+Responses use gzip when the client accepts it.
 
 ## Local operation after cutover
 

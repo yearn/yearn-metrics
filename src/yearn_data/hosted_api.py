@@ -10,7 +10,8 @@ from urllib.parse import parse_qs, urlsplit
 from .hosted_publications import Registry
 from .storage import DATABASE_ERRORS
 
-FEE_PATHS = {'/api/fees', '/api/fees/', '/api/fees/history', '/api/fees/vaults'}
+FEE_PATHS = {'/api/fees', '/api/fees/', '/api/fees/history', '/api/fees/vaults',
+             '/api/fees/vaults/history'}
 TVL_PATHS = {'/api/tvl', '/api/tvl/', '/api/tvl/history/runs/latest',
              '/api/tvl/history/runs/latest/constant-price', '/api/tvl/curation-products', '/api/tvl/graph', '/api/audit/tree'}
 ANALYTICS_PATHS = {'/api/analytics/publication', '/api/fees/stack', '/api/profitability',

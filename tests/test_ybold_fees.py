@@ -86,13 +86,15 @@ def test_index_and_offline_replay(postgres_database, tmp_path, monkeypatch):
 
 def test_valuation_and_api_keep_distributions_separate():
     from yearn_data.fee_valuation import value_event, target_for
-    from yearn_data.pairing import _fees
+    from yearn_data.pairing import _fee_totals
     r=CASES[-1]['report']
     event={k:r[k] for k in ('chain_id','vault_address','tx_hash','log_index','block_timestamp','asset','asset_decimals')}
-    event.update(accounting=accounting(r,CASES[-1]['evidence']),accounting_status='accepted')
+    event.update(contract_family='yearn-v3-allocator',
+                 accounting=accounting(r,CASES[-1]['evidence']),accounting_status='accepted')
     row=value_event(event,{target_for(event):{'status':'ok','price_usd':'1','evidence_json':'{}','fetched_at':1}})
-    api=_fees([row])
+    api=_fee_totals([row])
     assert api['totalFeesPaidUsd']=='0'
+    assert api['recoveryDistributionUsd'] is None
     assert api['stakerDistributionUsd']==api['reportedTotalFeesUsd']
     assert api['stakerDistributionUsd']!='0'
     assert row['gross_gain_raw']==r['gain_raw']
