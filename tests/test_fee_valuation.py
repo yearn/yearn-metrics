@@ -105,14 +105,23 @@ def test_exact_omission_check_and_retry_missing_are_explicit(db, monkeypatch):
     assert valuation.price_fees(db,before_timestamp=CUTOFF,retry_missing=True)['results']=={'ok':1}
 
 
-def test_batch_outage_does_not_fan_out_to_exact_or_another_provider(db, monkeypatch):
+@pytest.mark.parametrize('error,status', [
+    (pricing.YearnPricesRequestError('unavailable'),'retryable'),
+    (pricing.YearnPricesRequestError('invalid',retryable=False),'invalid'),
+    (pricing.YearnPricesResponseError('bad response'),'invalid'),
+])
+def test_batch_outage_does_not_fan_out_to_exact_or_another_provider(db, monkeypatch, error, status):
     seed(db,1);seed(db,2,asset=OTHER)
-    def fail(*a,**kw):raise pricing.YearnPricesRequestError('unavailable')
+    def fail(*a,**kw):raise error
     monkeypatch.setattr(clients,'fetch_yearn_prices_batch',fail)
     monkeypatch.setattr(clients,'fetch_yearn_price',lambda *a:pytest.fail('exact fanout'))
     monkeypatch.setattr(adapters,'fetch_defillama_prices_batch',lambda *a, **kw:pytest.fail('fallback'))
     monkeypatch.setattr(adapters,'_row_level_fallback_price',lambda *a, **kw:pytest.fail('on-chain fallback'))
-    assert valuation.price_fees(db,before_timestamp=CUTOFF)['results']=={'retryable':2}
+    assert valuation.price_fees(db,before_timestamp=CUTOFF)['results']=={status:2}
+    for row in db.execute('SELECT evidence_json FROM fee_daily_prices'):
+        evidence=json.loads(row[0])
+        assert evidence['requested_timestamp']==evidence['normalized_timestamp']==CUTOFF-1
+        assert evidence['provider']=='yearn-prices'
 
 
 def test_authentication_failure_stops_without_caching_missing(db, monkeypatch):

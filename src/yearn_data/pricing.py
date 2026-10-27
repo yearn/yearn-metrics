@@ -67,14 +67,6 @@ def _refresh_adapter_rows(conn, rows, *, onchain_fallbacks):
     return count, [row for row in rows if not row['refresh_adapter']]
 
 
-def _fetch_price(source: str, chain_id: int, token_address: str, timestamp: int, block_number: int):
-    if source == "defillama":
-        return adapters.fetch_defillama_price(chain_id, token_address, timestamp)
-    if source == "yearn-prices":
-        return clients.fetch_yearn_price(chain_id, token_address, timestamp)
-    raise ValueError(f"unsupported price source {source!r}; expected {sorted(SUPPORTED_SOURCES)}")
-
-
 def validate_report_pricing_policy(
     source: str, fallback: str | None, onchain_fallbacks: bool, *, require_credentials: bool = False
 ) -> None:
@@ -154,50 +146,6 @@ def price_unpriced_reports(
             )
         return count
 
-    for row in rows:
-        sources = [source]
-        if fallback and fallback != source:
-            sources.append(fallback)
-        for price_source in sources:
-            price, status, payload = _fetch_price(
-                price_source,
-                int(row["chain_id"]),
-                row["asset"],
-                int(row["block_timestamp"]),
-                int(row["block_number"]),
-            )
-            conn.execute(
-                """
-                    INSERT INTO prices (
-                        chain_id, token_address, timestamp, block_number,
-                        source, price_usd, status, raw_json
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(chain_id,token_address,timestamp,source) DO UPDATE SET
-                        block_number=excluded.block_number,
-                        price_usd=excluded.price_usd,
-                        status=excluded.status,
-                        raw_json=excluded.raw_json
-                """,
-                (
-                    int(row["chain_id"]),
-                    row["asset"],
-                    int(row["block_timestamp"]),
-                    int(row["block_number"]),
-                    price_source,
-                    price,
-                    status,
-                    to_json(payload),
-                ),
-            )
-            count += 1
-            if status == "ok":
-                break
-        if count % 100 == 0:
-            conn.commit()
-            time.sleep(0.2)
-    conn.commit()
-    return count
 
 
 def price_unpriced_volume(
@@ -236,50 +184,6 @@ def price_unpriced_volume(
                 conn, unresolved_rows, fallback=None, onchain_fallbacks=onchain_fallbacks)
         return count
 
-    for row in rows:
-        sources = [source]
-        if fallback and fallback != source:
-            sources.append(fallback)
-        for price_source in sources:
-            price, status, payload = _fetch_price(
-                price_source,
-                int(row["chain_id"]),
-                row["asset"],
-                int(row["block_timestamp"]),
-                int(row["block_number"]),
-            )
-            conn.execute(
-                """
-                    INSERT INTO prices (
-                        chain_id, token_address, timestamp, block_number,
-                        source, price_usd, status, raw_json
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(chain_id,token_address,timestamp,source) DO UPDATE SET
-                        block_number=excluded.block_number,
-                        price_usd=excluded.price_usd,
-                        status=excluded.status,
-                        raw_json=excluded.raw_json
-                """,
-                (
-                    int(row["chain_id"]),
-                    row["asset"],
-                    int(row["block_timestamp"]),
-                    int(row["block_number"]),
-                    price_source,
-                    price,
-                    status,
-                    to_json(payload),
-                ),
-            )
-            count += 1
-            if status == "ok":
-                break
-        if count % 100 == 0:
-            conn.commit()
-            time.sleep(0.2)
-    conn.commit()
-    return count
 
 
 def _unpriced_volume_rows(

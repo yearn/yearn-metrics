@@ -74,3 +74,14 @@ def test_batch_transport_failure_is_not_an_individual_unresolved_target(monkeypa
     result = fetch([(1, ASSET, 100)])
     unresolved = next(iter(result.target_results.values()))
     assert unresolved.value is None and unresolved.status in {'unresolved', 'missing'}
+
+
+
+def test_scalar_defillama_sparse_result_keeps_named_evidence_contract(monkeypatch):
+    assert adapters.fetch_defillama_price is clients.fetch_defillama_price
+    monkeypatch.setattr(clients,'fetch_defillama_prices_batch',lambda *a,**k:{})
+    result=clients.fetch_defillama_price(1,ASSET,100)
+    assert isinstance(result,clients.PriceResult)
+    assert result.value is None and result.status=='missing'
+    assert result.provider=='defillama' and result.requested_timestamp==100
+    assert result.evidence_timestamp is None

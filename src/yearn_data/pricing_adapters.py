@@ -746,6 +746,5 @@ def fetch_defillama_prices_batch(requests_, timeout=30) -> clients.PriceBatch:
     return clients.fetch_defillama_prices_batch(requests_, timeout=timeout)
 
 
-def fetch_defillama_price(chain_id, token_address, timestamp, timeout=30):
-    target = (int(chain_id), token_address, int(timestamp))
-    return fetch_defillama_prices_batch([target], timeout=timeout)[target]
+# Call-compatible alias; provider transport has one implementation.
+fetch_defillama_price = clients.fetch_defillama_price

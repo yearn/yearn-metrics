@@ -19,8 +19,6 @@ DEFILLAMA_BASE = "https://coins.llama.fi"
 
 DEFILLAMA_SEARCH_WIDTH_SECONDS = 12 * 60 * 60
 
-DEFILLAMA_SEARCH_WIDTH = "12h"
-
 YEARN_PRICES_DEFAULT_BASE = "https://prices.yearn.dev"
 
 YEARN_PRICES_MAX_TOKEN_KEYS = 50
@@ -353,25 +351,6 @@ def fetch_yearn_price(chain_id: int, token_address: str, timestamp: int, timeout
         provider='yearn-prices', requested_timestamp=normalize_yearn_price_timestamp(timestamp))
 
 
-def accepted_defillama_sample(sample: Any, requested_timestamp: int) -> dict[str, Any] | None:
-    if not isinstance(sample, dict):
-        return None
-    timestamp = sample.get("timestamp")
-    price = sample.get("price")
-    if (
-        not isinstance(timestamp, (int, float))
-        or isinstance(timestamp, bool)
-        or not isfinite(float(timestamp))
-        or not isinstance(price, (int, float))
-        or isinstance(price, bool)
-        or not isfinite(float(price))
-        or float(price) <= 0
-        or abs(int(timestamp) - int(requested_timestamp)) > DEFILLAMA_SEARCH_WIDTH_SECONDS
-    ):
-        return None
-    return sample
-
-
 def match_defillama_samples(
     requested_timestamps: list[int],
     samples: list[Any],
@@ -425,15 +404,13 @@ def defillama_get(url: str, *, timeout: int, params: dict[str, str] | None = Non
     raise RuntimeError("unreachable DefiLlama retry state")
 
 
-def fetch_defillama_price(chain_id: int, token_address: str, timestamp: int, timeout: int = 30) -> tuple[float | None, str, dict[str, Any]]:
+def fetch_defillama_price(chain_id: int, token_address: str, timestamp: int, timeout: int = 30) -> PriceResult:
     key = (int(chain_id), token_address, int(timestamp))
     return fetch_defillama_prices_batch([key], timeout=timeout).get(
         key,
-        (
-            None,
-            "missing",
+        price_result(None, "missing",
             {"coin": defillama_coin_id(chain_id, token_address), "timestamp": int(timestamp)},
-        ),
+            provider='defillama', requested_timestamp=int(timestamp)),
     )
 
 

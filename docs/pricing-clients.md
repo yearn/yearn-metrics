@@ -13,7 +13,10 @@ Provider transport, local valuation and job storage have separate owners:
 Clients contain no SQL, database access or contract valuation. The fee consumer
 uses public client batch utilities rather than private earnings helpers. TVL uses
 the Yearn client and the existing DefiLlama adapter policy explicitly. Public
-fetch imports in `pricing.py` remain available for existing callers.
+fetch imports in `pricing.py` remain call-compatible aliases for existing callers.
+They are not substitution points for pricing jobs: patch the owning client or
+adapter module to replace acquisition in a test. The scalar DefiLlama function
+is owned by `pricing_clients.py`; the adapter module re-exports that same function.
 
 ## Results
 
