@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
 
 from .analysis import run_lifetime_yield, run_vault_fees, run_vault_volume
 from .config import CHAINS, DEFAULT_CHAINS, get_event_source, load_environment, normalize_chain_key
@@ -160,6 +161,24 @@ def build_parser() -> argparse.ArgumentParser:
     serve_p.add_argument("--current-bridge-policy", choices=["none", "retired-registry"], default="retired-registry")
     serve_p.add_argument("--analytics", action="store_true", help="Serve prepared owned analytics and comparison without legacy services")
 
+    refresh_p=sub.add_parser('refresh',help='Resume bounded multi-chain acquisition/preparation; publishing is explicit')
+    refresh_p.add_argument('--chains',nargs='+')
+    refresh_p.add_argument('--cutoff',type=int,help='Exclusive closed UTC midnight')
+    refresh_p.add_argument('--publication-root',type=Path)
+    refresh_p.add_argument('--mode',choices=['acquire','prepare','publish'],default='prepare')
+    refresh_p.add_argument('--resume',help='Resume this job with the same scope, bounds and configuration')
+    refresh_p.add_argument('--inspect',help='Read a job receipt without acquiring the writer lock')
+    refresh_p.add_argument('--from-block',action='append',default=[],metavar='CHAIN:BLOCK')
+    refresh_p.add_argument('--confirmations',action='append',default=[],metavar='CHAIN:COUNT')
+    refresh_p.add_argument('--first-close',type=int,help='Initial inclusive UTC day end when retained TVL scope is absent')
+    refresh_p.add_argument('--source',choices=['auto','rpc','envio'],default='auto')
+    refresh_p.add_argument('--chunk-size',type=int,default=50_000)
+    refresh_p.add_argument('--max-targets',type=int,default=10_000,help='Total fee/pricing/chunk targets per invocation')
+    refresh_p.add_argument('--max-dates',type=int,default=30,help='Total TVL chain/date targets per invocation')
+    refresh_p.add_argument('--repair-history',action='store_true',help='Reacquire every close in the retained/explicit TVL window')
+    refresh_p.add_argument('--deferred-manifest',type=Path)
+    refresh_p.add_argument('--receipt',type=Path)
+
     catchup_p = sub.add_parser("catch-up", help="Acquire one bounded chain window; no pricing or analysis")
     catchup_p.add_argument("--chain", required=True, choices=sorted(CHAINS))
     catchup_p.add_argument("--from-block", type=int, required=True)
@@ -304,8 +323,51 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command=='refresh' and args.db is None:
+        raise ValueError('refresh requires an explicit --db neon or --db staging')
     load_environment(args.env)
     args.db = args.db or os.environ.get('YEARN_DATA_DB', str(DEFAULT_DATABASE))
+    if args.command=='refresh':
+        if args.db not in ('neon','staging'):
+            raise ValueError('refresh requires a named Postgres database: neon or staging')
+        from .refresh import run_refresh
+        from .refresh_scope import RefreshOptions
+        from .refresh_state import read_receipt,CheckpointRejected,RefreshBusy
+        if args.inspect:
+            try:result=read_receipt(args.db,args.inspect)
+            except Exception as exc:
+                result={'status':'rejected','failureClass':type(exc).__name__}
+                if isinstance(exc,(CheckpointRejected,RefreshBusy)):result['reason']=str(exc)
+        else:
+            if not args.chains or args.cutoff is None or args.publication_root is None:
+                raise ValueError('refresh requires --chains, --cutoff and --publication-root')
+            def mapping(values):
+                mapped={}
+                for value in values:
+                    chain,number=value.split(':',1)
+                    key=normalize_chain_key(chain)
+                    if key in mapped:raise ValueError('duplicate explicit chain bound')
+                    mapped[key]=int(number)
+                return mapped
+            try:
+                options=RefreshOptions(args.db,tuple(args.chains),args.cutoff,args.publication_root,
+                    from_blocks=mapping(args.from_block),confirmations=mapping(args.confirmations),
+                    first_close=args.first_close,source=args.source,chunk_size=args.chunk_size,
+                    max_targets=args.max_targets,max_dates=args.max_dates,repair_history=args.repair_history,
+                    deferred_manifest=args.deferred_manifest)
+                result=run_refresh(options,mode=args.mode,resume=args.resume,
+                    progress=lambda event:print(json.dumps(event,sort_keys=True),file=sys.stderr,flush=True))
+            except Exception as exc:
+                result={'status':'rejected','failureClass':type(exc).__name__}
+                if isinstance(exc,(CheckpointRejected,RefreshBusy)):result['reason']=str(exc)
+        body=json.dumps(result,sort_keys=True,indent=2)
+        if args.receipt:
+            args.receipt.parent.mkdir(parents=True,exist_ok=True)
+            temporary=args.receipt.with_suffix(args.receipt.suffix+'.tmp')
+            temporary.write_text(body+'\n');temporary.replace(args.receipt)
+        print(body)
+        return (3 if result['status']=='work-deferred' else 4 if result['status']=='selected-cleanup-failed'
+                else 2 if result['status'] in ('failed','rejected') else 0)
     if args.command == 'consolidate-history':
         from .canonical_history import consolidate
         result = consolidate(args.db, apply=args.apply, progress=progress)

@@ -213,14 +213,11 @@ def _save(conn, report, amounts, reason, evidence, event_index=None, candidate=N
           to_json(candidate) if candidate else None,to_json(decision) if decision else None))
 
 
-def index_canonical_fees(conn, chains=None, limit=None, retry_unresolved=False, receipt_fetcher=None,
-                         reconstruct_v2=False, state_reader=None, verify_selective=False, trace_limit=10,
-                         block_logs_fetcher=None, trace_fetcher=None, refresh_evidence=False, filtered_evidence_only=False, version=None, report_keys=None, verify_execution=False) -> int:
-    """Project allocator fees locally; fetch each selected V2 receipt once per run.
-
-    Scope is the stored report universe, including retired vaults. This does not
-    certify historical completeness or expand Tokenized Strategy discovery.
-    """
+def canonical_fee_targets(conn, chains=None, limit=None, retry_unresolved=False, *,
+                          reconstruct_v2=False, verify_selective=False, trace_limit=10,
+                          refresh_evidence=False, filtered_evidence_only=False, version=None,
+                          report_keys=None, verify_execution=False, before_timestamp=None, after=None):
+    """Select native projection work with explicit closed scope and a stable cursor."""
     if verify_execution and (not verify_selective or not report_keys):
         raise ValueError('explicit execution requires selective verification and report keys')
     if verify_selective and not reconstruct_v2:
@@ -244,17 +241,25 @@ def index_canonical_fees(conn, chains=None, limit=None, retry_unresolved=False, 
         params.append(version)
     if report_keys is not None:
         if not report_keys:
-            return 0
+            return []
         scope += ' AND (r.chain_id,r.tx_hash,r.log_index) IN (VALUES '+','.join('(?,?,?)' for _ in report_keys)+')'
         params.extend(value for key in report_keys for value in key)
+    if before_timestamp is not None:
+        scope += ' AND r.block_timestamp<?'
+        params.append(before_timestamp)
+    if after is not None:
+        if len(after)!=4:
+            raise ValueError('canonical fee cursor must contain chain, block, transaction and log index')
+        scope += ' AND (r.chain_id,r.block_number,r.tx_hash,r.log_index)>(?,?,?,?)'
+        params.extend(after)
     if filtered_evidence_only:
         if refresh_evidence:
             raise ValueError('offline filtered projection cannot refresh evidence')
         scope += """ AND EXISTS (SELECT 1 FROM fee_filtered_log_evidence e WHERE
             e.chain_id=r.chain_id AND e.tx_hash=r.tx_hash AND e.report_log_index=r.log_index)"""
-    from .yvusd_fees import VAULT, applies as is_yvusd
-    from .ybold_fees import VAULT as YBOLD_VAULT, applies as is_ybold
-    from .yeth_fees import VAULT as YETH_VAULT, applies as is_yeth
+    from .yvusd_fees import VAULT
+    from .ybold_fees import VAULT as YBOLD_VAULT
+    from .yeth_fees import VAULT as YETH_VAULT
     retry = " OR f.status='unresolved'" if retry_unresolved else ''
     retry += " OR (r.version='v2' AND r.gain_raw='0' AND f.method_version<>?)"
     params.insert(0, METHOD_VERSION)
@@ -271,7 +276,26 @@ def index_canonical_fees(conn, chains=None, limit=None, retry_unresolved=False, 
     if limit is not None:
         query += ' LIMIT ?'
         params.append(limit)
-    rows = conn.execute(query,params).fetchall()
+    return conn.execute(query,params).fetchall()
+
+
+def index_canonical_fees(conn, chains=None, limit=None, retry_unresolved=False, receipt_fetcher=None,
+                         reconstruct_v2=False, state_reader=None, verify_selective=False, trace_limit=10,
+                         block_logs_fetcher=None, trace_fetcher=None, refresh_evidence=False, filtered_evidence_only=False, version=None, report_keys=None, verify_execution=False, before_timestamp=None, after=None) -> int:
+    """Project allocator fees locally; fetch each selected V2 receipt once per run.
+
+    Scope is the stored report universe, including retired vaults. This does not
+    certify historical completeness or expand Tokenized Strategy discovery.
+    """
+    rows=canonical_fee_targets(conn,chains,limit,retry_unresolved,reconstruct_v2=reconstruct_v2,
+        verify_selective=verify_selective,trace_limit=trace_limit,refresh_evidence=refresh_evidence,
+        filtered_evidence_only=filtered_evidence_only,version=version,report_keys=report_keys,
+        verify_execution=verify_execution,before_timestamp=before_timestamp,after=after)
+    if not rows:
+        return 0
+    from .yvusd_fees import applies as is_yvusd
+    from .ybold_fees import applies as is_ybold
+    from .yeth_fees import applies as is_yeth
     groups = defaultdict(list)
     for row in rows:
         groups[(row['chain_id'],row['tx_hash'])].append(row)

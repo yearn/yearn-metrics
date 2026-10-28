@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import time
+from typing import NamedTuple
 
 from .analysis import closed_cutoff, run_analysis, write_output
 from . import pricing_clients as pricing
@@ -25,12 +26,27 @@ def endpoint_identity():
     return hashlib.sha256(url.encode()).hexdigest()
 
 
-def fee_events(conn, cutoff):
-    rows = conn.execute('''SELECT r.*,f.status,f.reason,f.accounting_json,f.decision_json,
+def fee_events(conn, cutoff, *, targets=None, chain_ids=None):
+    if (targets is not None and not targets) or (chain_ids is not None and not chain_ids):
+        return
+    requested=sorted(set(targets)) if targets is not None else None
+    join='';token_join='';target_params=[]
+    if requested is not None:
+        values=','.join('(?,?,?)' for _ in requested)
+        target_params=[value for target in requested for value in target]
+        join=f""" JOIN (VALUES {values}) wanted(cid,asset,eod) ON wanted.cid=r.chain_id
+            AND wanted.asset=lower(r.asset) AND r.block_timestamp BETWEEN wanted.eod-86399 AND wanted.eod"""
+        token_join=f""" JOIN (VALUES {values}) wanted(cid,asset,eod) ON wanted.cid=t.chain_id
+            AND wanted.asset=lower(json_extract(t.event_json,'$.asset'))
+            AND CAST(json_extract(t.event_json,'$.block_timestamp') AS BIGINT) BETWEEN wanted.eod-86399 AND wanted.eod"""
+    chain_filter=' AND r.chain_id IN ('+','.join('?' for _ in chain_ids)+')' if chain_ids is not None else ''
+    chain_params=sorted(chain_ids) if chain_ids is not None else []
+    rows = conn.execute(f'''SELECT r.*,f.status,f.reason,f.accounting_json,f.decision_json,
         f.contract_family FROM strategy_reports r LEFT JOIN canonical_fee_reports f
         ON f.chain_id=r.chain_id AND f.tx_hash=r.tx_hash AND f.report_log_index=r.log_index
-        WHERE r.version IN ('v2','v3') AND r.block_timestamp<?
-        ORDER BY r.chain_id,r.block_timestamp,r.tx_hash,r.log_index''', (cutoff,))
+        {join}
+        WHERE r.version IN ('v2','v3') AND r.block_timestamp<?{chain_filter}
+        ORDER BY r.chain_id,r.block_timestamp,r.tx_hash,r.log_index''', (*target_params,cutoff,*chain_params))
     for row in rows:
         amounts = json.loads(row['accounting_json']) if row['accounting_json'] else None
         decision = json.loads(row['decision_json'] or '{}')
@@ -45,7 +61,8 @@ def fee_events(conn, cutoff):
                'contract_family': row['contract_family'] or ('yearn-v2-vault' if row['version']=='v2' else 'yearn-v3-allocator'),
                'accounting_status': 'accepted' if accepted else (decision.get('status') or row['status'] or 'not_indexed'),
                'accounting_reason': row['reason'], 'accounting': amounts if accepted else None}
-    for row in conn.execute('SELECT event_json FROM tokenized_fee_events ORDER BY chain_id,tx_hash,log_index'):
+    token_filter=' WHERE t.chain_id IN ('+','.join('?' for _ in chain_ids)+')' if chain_ids is not None else ''
+    for row in conn.execute(f'SELECT t.event_json FROM tokenized_fee_events t {token_join}{token_filter} ORDER BY t.chain_id,t.tx_hash,t.log_index',(*target_params,*chain_params)):
         event = json.loads(row['event_json'])
         if event['block_timestamp'] < cutoff:
             yield {key: event[key] for key in ('chain_id','vault_address','tx_hash','log_index',
@@ -94,30 +111,49 @@ def save_price(conn, target, result):
                                       json.dumps(evidence, sort_keys=True), int(time.time())))
 
 
-def price_fees(conn, *, before_timestamp=None, limit=500, retry_missing=False, refresh=False, targets=None):
-    """Bounded deduplicated requests. Failed batches never fan out to exact requests."""
-    cutoff = closed_cutoff(before_timestamp)
-    if limit <= 0:
-        raise ValueError('price target limit must be positive')
+class FeePricingWork(NamedTuple):
+    targets: list
+    metadata_gaps: int
+
+
+def fee_pricing_work(conn, *, before_timestamp=None, retry_missing=False, refresh=False,
+                     targets=None, retry_statuses=None, chain_ids=None):
+    """Native eligible asset-days and unpriceable metadata, without acquisition."""
+    cutoff=closed_cutoff(before_timestamp)
     cache = cached_prices(conn)
     requested = targets
+    metadata_gaps=0
     targets = set()
-    for event in fee_events(conn, cutoff):
+    for event in fee_events(conn, cutoff, targets=requested, chain_ids=chain_ids):
         amounts = event['accounting']
         if not amounts or not any(int(amounts.get(f) or 0) != 0 for f in FIELDS):
             continue
         try:
             target = target_for(event)
         except ValueError:
+            metadata_gaps+=1
             continue  # Export retains metadata gaps; do not guess an asset or decimals.
         if requested is not None and target not in requested:
             continue
         prior = cache.get(target)
-        if refresh or prior is None or (retry_missing and prior['status'] != 'ok'):
+        if refresh or prior is None or (retry_missing and prior['status'] != 'ok'
+            and (retry_statuses is None or prior['status'] in retry_statuses)):
             targets.add(target)
-    # New targets first, then the least recently attempted failures. Persistent
-    # missing prices must not starve later asset-days on repeated bounded runs.
-    selected = sorted(targets, key=lambda target: (cache.get(target, {}).get('fetched_at', 0), target))[:limit]
+    ordered=sorted(targets,key=lambda target:(cache.get(target,{}).get('fetched_at',0),target))
+    return FeePricingWork(ordered,metadata_gaps)
+
+
+def price_fees(conn, *, before_timestamp=None, limit=500, retry_missing=False, refresh=False, targets=None,
+               retry_statuses=None,chain_ids=None):
+    """Bounded deduplicated requests. Failed batches never fan out to exact requests."""
+    cutoff = closed_cutoff(before_timestamp)
+    if limit <= 0:
+        raise ValueError('price target limit must be positive')
+    work=fee_pricing_work(conn,before_timestamp=cutoff,retry_missing=retry_missing,refresh=refresh,
+                          targets=targets,retry_statuses=retry_statuses,chain_ids=chain_ids)
+    targets=work.targets
+    # New targets first, then the least recently attempted failures.
+    selected=targets[:limit]
     counts = Counter()
     for batch in pricing.yearn_prices_batches(selected):
         # Bound GET URL size as well as the service's per-token timestamp limit.
