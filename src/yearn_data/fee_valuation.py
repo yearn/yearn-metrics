@@ -11,7 +11,7 @@ import time
 from typing import NamedTuple
 
 from .analysis import closed_cutoff, run_analysis, write_output
-from . import pricing
+from . import pricing_clients as pricing
 
 POLICY = 'fee-usd-yearn-eod-1'
 DISTRIBUTION_FIELDS = ('locker_bonus_raw', 'staker_distribution_raw', 'recovery_distribution_raw')
@@ -155,7 +155,7 @@ def price_fees(conn, *, before_timestamp=None, limit=500, retry_missing=False, r
     # New targets first, then the least recently attempted failures.
     selected=targets[:limit]
     counts = Counter()
-    for batch in pricing._yearn_prices_batches(selected):
+    for batch in pricing.yearn_prices_batches(selected):
         # Bound GET URL size as well as the service's per-token timestamp limit.
         for offset in range(0, len(batch), 100):
             chunk = batch[offset:offset+100]
@@ -163,13 +163,13 @@ def price_fees(conn, *, before_timestamp=None, limit=500, retry_missing=False, r
                 results = pricing.fetch_yearn_prices_batch(chunk)
             except pricing.YearnPricesRequestError as error:
                 status = 'retryable' if error.retryable else 'invalid'
-                results = {target: (None, status, {'provider':'yearn-prices',
-                    'normalized_timestamp':target[2], 'adapter':'batchHistorical',
-                    'failure_class':status}) for target in chunk}
+                results = {target: pricing.price_result(None, status,
+                    {'normalized_timestamp':target[2], 'adapter':'batchHistorical', 'failure_class':status},
+                    provider='yearn-prices', requested_timestamp=target[2]) for target in chunk}
             except pricing.YearnPricesResponseError:
-                results = {target: (None, 'invalid', {'provider':'yearn-prices',
-                    'normalized_timestamp':target[2], 'adapter':'batchHistorical',
-                    'failure_class':'invalid_response'}) for target in chunk}
+                results = {target: pricing.price_result(None, 'invalid',
+                    {'normalized_timestamp':target[2], 'adapter':'batchHistorical', 'failure_class':'invalid_response'},
+                    provider='yearn-prices', requested_timestamp=target[2]) for target in chunk}
             for target in chunk:
                 result = results.get(target)
                 if result is None:
