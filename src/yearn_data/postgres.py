@@ -187,8 +187,9 @@ class Connection:
             self.raw.execute(statement)
 
     def commit(self):
-        # Queued BEGIN/writes may still report IDLE. Drain them before the
-        # driver's commit() decides whether there is a transaction to commit.
+        # scripts/update_postgres.py holds raw.pipeline() open across the
+        # lifetime-yield and fee-usd jobs. Their queued BEGIN/writes may still
+        # report IDLE; drain before the driver decides whether to commit.
         if self.raw.pgconn.pipeline_status != PipelineStatus.OFF:
             with self.raw.pipeline() as pipeline:
                 pipeline.sync()
