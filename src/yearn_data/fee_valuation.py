@@ -9,7 +9,7 @@ import json
 import os
 import time
 
-from .analysis import closed_cutoff, create_analysis_run, complete_analysis_run, write_output
+from .analysis import closed_cutoff, run_analysis, write_output
 from . import pricing_clients as pricing
 
 POLICY = 'fee-usd-yearn-eod-1'
@@ -222,17 +222,12 @@ def run_fee_usd(conn, *, before_timestamp=None, deferred_manifest=None):
     cutoff = closed_cutoff(before_timestamp)
     cache = cached_prices(conn)
     deferrals, manifest_hash = read_deferrals(deferred_manifest)
-    run_id = create_analysis_run(conn, 'fee-usd', {'policy':POLICY, 'before_timestamp':cutoff,
-        'provider':'yearn-prices', 'endpoint_id':endpoint_identity(),
-        'deferred_manifest_sha256':manifest_hash, 'scope':'stored_reports_and_tokenized_events_only', 'historical_discovery_complete':False})
-    try:
-        _write_fee_usd_outputs(conn, run_id, cutoff, cache, deferrals, manifest_hash)
-        complete_analysis_run(conn, run_id)
-    except BaseException:
-        conn.rollback()
-        complete_analysis_run(conn, run_id, status='failed')
-        raise
-    return run_id
+    return run_analysis(conn, 'fee-usd', _write_fee_usd_outputs,
+        cutoff, cache, deferrals, manifest_hash,
+        params={'policy':POLICY, 'before_timestamp':cutoff,
+            'provider':'yearn-prices', 'endpoint_id':endpoint_identity(),
+            'deferred_manifest_sha256':manifest_hash, 'scope':'stored_reports_and_tokenized_events_only',
+            'historical_discovery_complete':False})
 
 
 def _write_fee_usd_outputs(conn, run_id, cutoff, cache, deferrals, manifest_hash):

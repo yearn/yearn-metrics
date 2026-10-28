@@ -2,7 +2,7 @@
 
 Set YEARN_TEST_POSTGRES_URL to exercise real Postgres. No test uses public tables.
 """
-from contextlib import closing
+from contextlib import closing, nullcontext
 import json
 
 import psycopg
@@ -85,7 +85,8 @@ def test_existing_fee_pairing_contract_on_postgres(pg,tmp_path):
     assert PairingStore(tmp_path/'fees').get().id == dataset.id
 
 
-def test_failed_usd_export_rolls_back_on_postgres(pg,monkeypatch):
+@pytest.mark.parametrize('pipeline', [False, True])
+def test_failed_usd_export_rolls_back_on_postgres(pg,monkeypatch,pipeline):
     from yearn_data import fee_valuation
     from test_fee_valuation import seed, CUTOFF
     conn, _ = pg
@@ -96,8 +97,9 @@ def test_failed_usd_export_rolls_back_on_postgres(pg,monkeypatch):
         original(conn, run_id, name, row)
         raise RuntimeError('injected export interruption')
     monkeypatch.setattr(fee_valuation, 'write_output', interrupted)
-    with pytest.raises(RuntimeError, match='interruption'):
-        fee_valuation.run_fee_usd(conn,before_timestamp=CUTOFF)
+    with conn.raw.pipeline() if pipeline else nullcontext():
+        with pytest.raises(RuntimeError, match='interruption'):
+            fee_valuation.run_fee_usd(conn,before_timestamp=CUTOFF)
     run = conn.execute('SELECT * FROM analysis_runs ORDER BY id DESC LIMIT 1').fetchone()
     assert run['status'] == 'failed' and run['completed_at'] is not None
     assert conn.execute('SELECT COUNT(*) FROM analysis_outputs WHERE run_id=?', (run['id'],)).fetchone()[0] == 0
@@ -313,15 +315,18 @@ def test_removed_comparison_selector_is_rejected_before_server_start(monkeypatch
 
 
 @pytest.mark.parametrize('url,mode,root', [
-    ('postgresql://db.example/test', 'verify-full', 'system'),
-    ('postgresql://db.example/test?sslmode=require', 'verify-full', 'system'),
-    ('postgresql://db.example/test?sslmode=disable', 'verify-full', 'system'),
+    ('postgresql://db.example/test', 'verify-full', '/system/ca.pem'),
+    ('postgresql://db.example/test?sslmode=require', 'verify-full', '/system/ca.pem'),
+    ('postgresql://db.example/test?sslmode=disable', 'verify-full', '/system/ca.pem'),
     ('postgresql://db.example/test?sslrootcert=/custom/ca.pem', 'verify-full', '/custom/ca.pem'),
     ('postgresql://127.0.0.1/test?sslmode=disable', 'disable', None),
     ('postgresql://[::1]/test?sslmode=disable', 'disable', None),
 ])
 def test_connection_authenticates_remote_servers(monkeypatch,url,mode,root):
+    from types import SimpleNamespace
+    from yearn_data import postgres
     from yearn_data.postgres import Connection
+    monkeypatch.setattr(postgres.ssl, 'get_default_verify_paths', lambda: SimpleNamespace(cafile='/system/ca.pem'))
     class Captured(Exception):pass
     def capture(**params):
         assert params['sslmode']==mode
@@ -399,3 +404,17 @@ def test_remote_tls_rejects_untrusted_or_wrong_hostname(tmp_path,monkeypatch,tru
                 Connection(dsn)
         finally:thread.join(10)
         assert not thread.is_alive() and not errors
+
+
+def test_remote_tls_has_packaged_roots_when_system_ca_file_is_absent(monkeypatch):
+    from types import SimpleNamespace
+    from yearn_data import postgres
+    from requests.certs import where
+    monkeypatch.setattr(postgres.ssl, 'get_default_verify_paths', lambda: SimpleNamespace(cafile=None))
+    class Captured(Exception):pass
+    def capture(**params):
+        assert params['sslmode']=='verify-full'
+        assert params['sslrootcert']==where()
+        raise Captured
+    monkeypatch.setattr(psycopg, 'connect', capture)
+    with pytest.raises(Captured):postgres.Connection('postgresql://db.example/test')

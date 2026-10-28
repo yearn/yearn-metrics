@@ -37,7 +37,9 @@ DEFAULT_FALLBACK_PRICE_SOURCE = "defillama"
 
 
 def report_amount(raw_value: str | int, decimals: int | None) -> Decimal:
-    scale = Decimal(10) ** int(decimals or 18)
+    if decimals is None:
+        raise ValueError('asset decimals are required to scale a report amount')
+    scale = Decimal(10) ** int(decimals)
     return Decimal(int(raw_value)) / scale
 
 
