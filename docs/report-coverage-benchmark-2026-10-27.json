@@ -1,0 +1,175 @@
+{
+  "baselineCommit": "3db530831ce79bec597a43f5ab795d45d1ed8ab7",
+  "optimizedBranch": "ross/issue-56-coverage-scan",
+  "environment": "Python 3.11.15; guarded disposable local Postgres; deterministic offline provider boundaries",
+  "limits": [
+    "Fixture measurement; no production inventory, network latency, HTTP pagination, throttling or live provider retries.",
+    "Time is the catch-up contribution to the TVL-start barrier; subsequent accounting/pricing stages and TVL itself are excluded. End-to-end TVL-start measurement remains a refresh-workflow validation gate.",
+    "Two milliseconds added only to coverage SELECT calls in the separately labeled latency model.",
+    "Baseline intentionally fails the surviving query-budget regression after printing its receipt."
+  ],
+  "beforeLocal": {
+    "active": 60,
+    "coverageDigest": "adaf905702d53d9be013e45efdaaeb59dd04401b58820701255e3580c355cabc",
+    "coverageRows": 160,
+    "fromBlock": 10,
+    "inactive": 60,
+    "initiallyFullyCovered": 40,
+    "initiallyPartiallyCovered": 40,
+    "initiallyUncovered": 40,
+    "inventory": 120,
+    "reportRows": 120,
+    "reportsDigest": "a23cdc5a7d59f650ef6e76ccb3a3e40935a7cd395d4d66ca89392ab090c7f8d4",
+    "runs": [
+      {
+        "completedRanges": 80,
+        "coverageReadQueries": 240,
+        "insertedRows": 80,
+        "phase": "extend",
+        "providerBoundaryRequests": {
+          "block_header": 85,
+          "chain_identity": 84,
+          "reports": 80
+        },
+        "secondsUntilTvlEligible": 0.7196568232029676
+      },
+      {
+        "completedRanges": 0,
+        "coverageReadQueries": 240,
+        "insertedRows": 0,
+        "phase": "resume",
+        "providerBoundaryRequests": {
+          "block_header": 5,
+          "chain_identity": 4,
+          "reports": 0
+        },
+        "secondsUntilTvlEligible": 0.1073430273681879
+      }
+    ],
+    "simulatedCoverageReadLatencyMs": 0.0,
+    "toBlock": 30
+  },
+  "afterLocal": {
+    "active": 60,
+    "coverageDigest": "adaf905702d53d9be013e45efdaaeb59dd04401b58820701255e3580c355cabc",
+    "coverageRows": 160,
+    "fromBlock": 10,
+    "inactive": 60,
+    "initiallyFullyCovered": 40,
+    "initiallyPartiallyCovered": 40,
+    "initiallyUncovered": 40,
+    "inventory": 120,
+    "reportRows": 120,
+    "reportsDigest": "a23cdc5a7d59f650ef6e76ccb3a3e40935a7cd395d4d66ca89392ab090c7f8d4",
+    "runs": [
+      {
+        "completedRanges": 80,
+        "coverageReadQueries": 2,
+        "insertedRows": 80,
+        "phase": "extend",
+        "providerBoundaryRequests": {
+          "block_header": 85,
+          "chain_identity": 84,
+          "reports": 80
+        },
+        "secondsUntilTvlEligible": 0.4575892295688391
+      },
+      {
+        "completedRanges": 0,
+        "coverageReadQueries": 2,
+        "insertedRows": 0,
+        "phase": "resume",
+        "providerBoundaryRequests": {
+          "block_header": 5,
+          "chain_identity": 4,
+          "reports": 0
+        },
+        "secondsUntilTvlEligible": 0.003098662942647934
+      }
+    ],
+    "simulatedCoverageReadLatencyMs": 0.0,
+    "toBlock": 30
+  },
+  "beforeLatencyModel": {
+    "active": 60,
+    "coverageDigest": "adaf905702d53d9be013e45efdaaeb59dd04401b58820701255e3580c355cabc",
+    "coverageRows": 160,
+    "fromBlock": 10,
+    "inactive": 60,
+    "initiallyFullyCovered": 40,
+    "initiallyPartiallyCovered": 40,
+    "initiallyUncovered": 40,
+    "inventory": 120,
+    "reportRows": 120,
+    "reportsDigest": "a23cdc5a7d59f650ef6e76ccb3a3e40935a7cd395d4d66ca89392ab090c7f8d4",
+    "runs": [
+      {
+        "completedRanges": 80,
+        "coverageReadQueries": 240,
+        "insertedRows": 80,
+        "phase": "extend",
+        "providerBoundaryRequests": {
+          "block_header": 85,
+          "chain_identity": 84,
+          "reports": 80
+        },
+        "secondsUntilTvlEligible": 1.2380547560751438
+      },
+      {
+        "completedRanges": 0,
+        "coverageReadQueries": 240,
+        "insertedRows": 0,
+        "phase": "resume",
+        "providerBoundaryRequests": {
+          "block_header": 5,
+          "chain_identity": 4,
+          "reports": 0
+        },
+        "secondsUntilTvlEligible": 0.605360820889473
+      }
+    ],
+    "simulatedCoverageReadLatencyMs": 2.0,
+    "toBlock": 30
+  },
+  "afterLatencyModel": {
+    "active": 60,
+    "coverageDigest": "adaf905702d53d9be013e45efdaaeb59dd04401b58820701255e3580c355cabc",
+    "coverageRows": 160,
+    "fromBlock": 10,
+    "inactive": 60,
+    "initiallyFullyCovered": 40,
+    "initiallyPartiallyCovered": 40,
+    "initiallyUncovered": 40,
+    "inventory": 120,
+    "reportRows": 120,
+    "reportsDigest": "a23cdc5a7d59f650ef6e76ccb3a3e40935a7cd395d4d66ca89392ab090c7f8d4",
+    "runs": [
+      {
+        "completedRanges": 80,
+        "coverageReadQueries": 2,
+        "insertedRows": 80,
+        "phase": "extend",
+        "providerBoundaryRequests": {
+          "block_header": 85,
+          "chain_identity": 84,
+          "reports": 80
+        },
+        "secondsUntilTvlEligible": 0.5130214933305979
+      },
+      {
+        "completedRanges": 0,
+        "coverageReadQueries": 2,
+        "insertedRows": 0,
+        "phase": "resume",
+        "providerBoundaryRequests": {
+          "block_header": 5,
+          "chain_identity": 4,
+          "reports": 0
+        },
+        "secondsUntilTvlEligible": 0.0075330231338739395
+      }
+    ],
+    "simulatedCoverageReadLatencyMs": 2.0,
+    "toBlock": 30
+  }
+}
