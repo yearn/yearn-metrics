@@ -138,6 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
     pairing_p = sub.add_parser("select-pairing", help="Select completed earnings/fees for Powerglove without changing source data")
     pairing_p.add_argument("--earnings-run-id", type=int, required=True)
     pairing_p.add_argument("--fees-run-id", type=int, required=True)
+    pairing_p.add_argument("--strategy-ownership", type=Path, help="Pinned report-time ownership ledger; enables materiality-gated strategy earnings")
     pairing_p.add_argument("--out", type=Path, default=Path("data/powerglove"))
 
     hosted_p = sub.add_parser('publish-hosted', help='Validate and atomically select database-backed API publications')
@@ -412,7 +413,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "select-pairing":
         from .pairing import select_pairing
-        manifest = select_pairing(args.db, args.earnings_run_id, args.fees_run_id, args.out)
+        ownership = json.loads(args.strategy_ownership.read_text()) if args.strategy_ownership else None
+        manifest = select_pairing(args.db, args.earnings_run_id, args.fees_run_id, args.out, strategy_ownership=ownership)
         print(json.dumps({'datasetId': manifest['datasetId'], 'publication': str(args.out)}, sort_keys=True))
         return 0
     if args.command == "serve-pairing":
