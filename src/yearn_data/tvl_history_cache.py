@@ -79,6 +79,9 @@ def prepare_totals(dataset):
     with closing(connect(dataset.database,direct=True)) as conn:
         conn.executescript(SCHEMA)
         with conn:
+            # Keep the copy-source marker and its totals in one snapshot even
+            # if consolidation retires that publication between statements.
+            conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
             if not conn.execute('SELECT pg_try_advisory_xact_lock(743219889)').fetchone()[0]:
                 raise ValueError('TVL chart preparation is already running')
             if totals_ready(dataset):return

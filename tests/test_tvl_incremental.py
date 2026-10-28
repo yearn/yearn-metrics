@@ -209,7 +209,8 @@ def test_cli_backfill_mode_and_invalid_modes_fail_before_storage(monkeypatch,tmp
         cli.main(args+['--previous-dataset-id','a'*64,'--full-rebuild'])
 
 
-def test_totals_resume_after_copy_source_is_retired(postgres_database,tmp_path,monkeypatch):
+@pytest.mark.parametrize('retirement', ['before-check', 'after-check'])
+def test_totals_resume_after_copy_source_is_retired(postgres_database,tmp_path,monkeypatch,retirement):
     from yearn_data import tvl_history_cache as cache
     with closing(connect('staging')) as conn:
         init_db(conn)
@@ -226,19 +227,41 @@ def test_totals_resume_after_copy_source_is_retired(postgres_database,tmp_path,m
         with pytest.raises(RuntimeError,match='totals stage'):
             prepare(target)
     assert ready(target) and not totals_ready(target)
-    with closing(connect('staging')) as conn,conn:
-        # Another completed publication may consolidate an older copy source
-        # before this interrupted candidate resumes its totals stage.
-        for table in ('tvl_chart_rows','tvl_chart_totals','tvl_chart_publications',
-                      'tvl_chart_inputs','tvl_chart_preparations'):
-            conn.execute(f'DELETE FROM {table} WHERE dataset_id=?',(old.id,))
+    def retire_source():
+        with closing(connect('staging')) as conn,conn:
+            # Match consolidation deleting a superseded publication while
+            # the candidate's totals stage is interrupted or copying.
+            for table in ('tvl_chart_rows','tvl_chart_totals','tvl_chart_publications',
+                          'tvl_chart_inputs','tvl_chart_preparations'):
+                conn.execute(f'DELETE FROM {table} WHERE dataset_id=?',(old.id,))
+    retired=False
+    if retirement=='before-check':
+        retire_source()
+    else:
+        from yearn_data.postgres import Connection
+        execute=Connection.execute
+        def retire_after_check(conn,statement,params=()):
+            nonlocal retired
+            result=execute(conn,statement,params)
+            if not retired and statement.startswith('SELECT 1 FROM tvl_chart_publications') and params==(old.id,cache.VERSION+'+totals'):
+                retired=True
+                retire_source()
+            return result
+        monkeypatch.setattr(Connection,'execute',retire_after_check)
     result=prepare(target)
     assert result['status']=='prepared'
     assert prepare(target)['status']=='already-prepared'
-    assert result['totalsRowsCopied']==0 and result['totalsRowsRead']==3
-    assert target.history(interval='daily')['chart']==[
-        {'timestamp':DAY,'Ethereum':100.0},{'timestamp':DAY+86400,'Ethereum':200.0},
-        {'timestamp':DAY+2*86400,'Ethereum':300.0}]
+    if retirement=='after-check':
+        assert retired
+        # Both unchanged dates reuse raw/external chain/category totals;
+        # only the newly appended one-vault date needs to be read.
+        assert result['totalsRowsCopied']==8 and result['totalsRowsRead']==1
+    else:
+        assert result['totalsRowsCopied']==0 and result['totalsRowsRead']==3
+    for mode in ('raw','external'):
+        assert target.history(interval='daily',mode=mode)['chart']==[
+            {'timestamp':DAY,'Ethereum':100.0},{'timestamp':DAY+86400,'Ethereum':200.0},
+            {'timestamp':DAY+2*86400,'Ethereum':300.0}]
 
 
 def test_bounded_history_does_not_report_future_only_chains_as_historical_gaps(postgres_database,tmp_path):
