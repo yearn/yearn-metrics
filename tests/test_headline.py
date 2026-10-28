@@ -158,26 +158,28 @@ def test_only_new_tail_earnings_contribute_to_redis_extrapolation(postgres_datab
     original = {'tx_hash': '0xreport', 'block_timestamp': 100, 'net_yield_usd': '100'}
     tail = {'tx_hash': '0xtail', 'block_timestamp': 86500, 'net_yield_usd': '5'}
     cases = [
-        ([original, tail], '105', 11_000, pytest.approx(5/86400)),
+        ([original, tail], '105', 172800, 11_000, pytest.approx(5/86400)),
         # Historical repricing must not appear as newly earned yield.
-        ([{**original, 'net_yield_usd': '110'}, tail], '115', 21_000, 0),
+        ([{**original, 'net_yield_usd': '110'}, tail], '115', 259200, 21_000, 0),
         # This late report is newer than the last stored report but inside the prior closed cutoff.
         ([{**original, 'net_yield_usd': '110'}, tail,
-          {'tx_hash': '0xbackfill', 'block_timestamp': 87000, 'net_yield_usd': '7'}], '122', 31_000, 0),
+          {'tx_hash': '0xbackfill', 'block_timestamp': 172900, 'net_yield_usd': '7'}], '122', 345600, 31_000, 0),
     ]
-    for reports, value, now, expected_rate in cases:
-        run_id = create_analysis_run(conn, 'lifetime-yield', {'before_timestamp': 172800})
+    for reports, value, cutoff, now, expected_rate in cases:
+        run_id = create_analysis_run(conn, 'lifetime-yield', {'before_timestamp': cutoff})
         write_output(conn, run_id, 'total_yield_summary', dict(
             net_yield_usd=value, reports=len(reports), priced_reports=len(reports), unpriced_reports=0))
         for report in reports:
             write_output(conn, run_id, 'reports', report)
         complete_analysis_run(conn, run_id)
         before = redis.raw
+        assert cutoff-1 > json.loads(before)['coverage_through_timestamp']
         dry, dry_json = publish_lifetime_yield_headline(conn, redis_client=redis, now_ms=now, dry_run=True)
         assert redis.raw == before
         payload, serialized = publish_lifetime_yield_headline(conn, redis_client=redis, now_ms=now)
         assert dry == payload and dry_json == serialized
         assert payload['rate_usd_per_sec'] == expected_rate
+        assert payload['extrapolation_status'] == ('coverage-verified' if now == 11_000 else 'coverage-reset')
         assert json.loads(serialized)['valuation_complete'] is True
 
 
@@ -262,3 +264,15 @@ def test_offline_dry_run_does_not_predict_an_unread_anchor(postgres_database,tmp
     payload,_=publish_lifetime_yield_headline(conn,dry_run=True)
     assert payload['extrapolation_status']=='anchor-not-read'
     assert payload['rate_usd_per_sec']==0
+
+
+def test_retained_report_outside_cutoff_cannot_replace_anchor(postgres_database,tmp_path):
+    conn,run_id=_db_with_lifetime_yield(tmp_path)
+    previous=b'{"net_yield_usd":100,"as_of_ms":1000}'
+    redis=FakeRedis(previous)
+    conn.execute("UPDATE analysis_outputs SET row_json=? WHERE run_id=? AND name='reports'",
+                 (json.dumps(dict(tx_hash='0xreport',block_timestamp=86400,net_yield_usd='100')),run_id))
+    conn.commit()
+    with pytest.raises(ValueError,match='beyond its cutoff'):
+        publish_lifetime_yield_headline(conn,redis_client=redis)
+    assert redis.raw==previous and redis.set_args is None

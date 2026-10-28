@@ -119,7 +119,10 @@ be inferred; they do not fabricate a replacement anchor on resets.
 
 Publishing requires explicit complete valuation counts and retained report rows.
 Incomplete or legacy summaries with unknown completeness fail before replacing
-Redis, including in dry-run mode; an existing valid anchor is preserved. A
+Redis, including in dry-run mode. Rejection leaves an existing anchor unchanged,
+but does not extend its TTL: it remains available only until its existing expiry.
+With the example TTL above, the key can disappear after 72 hours without a
+successful publication. A
 complete genuine zero remains publishable. Payloads add completeness and hashed
 coverage/policy metadata. Extrapolation continues only when the previous anchor
 is verified complete and its historical report rows match the current run.
@@ -133,7 +136,11 @@ for closed chain coverage. Bounded anchors report `coverage-verified` or
 one bounded-memory streaming pass; unbounded runs validate rows without sorting
 or computing unusable coverage digests. New reports after that history can contribute yield; backfills, changed historical
 valuations, source-policy changes and legacy anchors reset the rate to zero.
-Anchor timestamps remain monotonic across a reset. Existing Redis publications
+Only the publication timestamp `as_of_ms` remains monotonic across a reset.
+Selecting an earlier bounded analysis can reduce `coverage_through_timestamp`
+and the covered value; selecting an unbounded analysis sets coverage to `null`.
+Consumers must read the new coverage and status rather than assuming forward
+financial coverage across resets. Existing Redis publications
 are not changed until this command is explicitly invoked.
 
 ## Vault Volume Outputs

@@ -230,7 +230,8 @@ def publish_lifetime_yield_headline(
         previous = None
         extrapolation_status = 'unbounded-analysis'
     else:
-        coverage_through = max(coverage_through, latest)
+        if summary['reports'] and latest > coverage_through:
+            raise ValueError(f"lifetime-yield analysis run {row['id']} retains reports beyond its cutoff")
         previous = _comparable_previous(previous, historical_digest, policy)
         extrapolation_status = ('anchor-not-read' if redis_client is None else
                                 'coverage-verified' if previous else 'coverage-reset')
