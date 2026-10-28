@@ -467,7 +467,8 @@ def main(argv: list[str] | None = None) -> int:
         result = catch_up(conn, args.chain, args.from_block, args.to_block,
                           source=args.source, confirmations=args.confirmations,
                           chunk_size=args.chunk_size, discover=args.discover,
-                          experimental=args.include_experimental_v2)
+                          experimental=args.include_experimental_v2,
+                          progress=lambda message: print(message, file=sys.stderr, flush=True))
         print(json.dumps(result, sort_keys=True))
         return 0
 
