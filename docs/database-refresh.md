@@ -110,7 +110,13 @@ itself authorize publication or production writes.
 A failure before selection retains the previous serving release. After repairing
 the cause, resume to revalidate persisted stages. Changed cutoff, chain scope,
 code, configuration or options reject the checkpoint: start a new job rather
-than editing persisted identities. The receipt distinguishes successful
+than editing persisted identities. This check occurs before any stage is reused,
+including a saved TVL manifest: a changed-code `--resume` raises the explicit
+checkpoint error instructing the operator to start a new job. Start the same
+command without `--resume`; the new job publishes a manifest under the current
+financial revision while reusing retained acquisition coverage and observations.
+Do not edit an old manifest's `accountingRevision` to bypass the mismatch.
+The receipt distinguishes successful
 selection followed by failed/unknown consolidation as `selected-cleanup-failed`.
 Resume that job in publish mode to retry only native canonical-history cleanup;
 it does not reacquire inputs or select the release again. A durable expected

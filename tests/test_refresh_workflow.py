@@ -415,3 +415,35 @@ def test_forced_tvl_repairs_report_actual_gaps_after_collection(workflow,monkeyp
     stage=next(s for s in repaired['stages'] if s['name']=='tvl-collection')
     assert stage['result']['unresolvedChainDates']==[]
     assert stage['result']['deferredRepairs']==expected
+
+
+def test_changed_code_rejects_saved_manifest_resume_before_stage_reuse(workflow,monkeypatch):
+    from pathlib import Path
+    from yearn_data import tvl_api
+    from yearn_data.refresh_state import CheckpointRejected,read_receipt
+    options,_=workflow
+    def interrupted(*args):raise RuntimeError('interrupted after manifest')
+    with monkeypatch.context() as patch:
+        patch.setattr(refresh.RefreshWorker,'prepare_history',interrupted)
+        failed=refresh.run_refresh(options)
+    assert failed['status']=='failed',failed
+    manifest_stage=next(s for s in failed['stages'] if s['name']=='tvl-manifest')
+    assert manifest_stage['status']=='complete'
+    identity=manifest_stage['result']['datasetId']
+    path=options.publication_root/'refresh'/failed['jobId']/'tvl'/'datasets'/f'{identity}.json'
+    saved=json.loads(path.read_text())
+    source_path=Path(tvl_api.__file__)
+    read_bytes=Path.read_bytes
+    changed=read_bytes(source_path).replace(b'excluded = set()',b'excluded = set(())')
+    original=read_receipt('staging',failed['jobId'])
+    with monkeypatch.context() as patch:
+        patch.setattr(Path,'read_bytes',lambda self:changed if self==source_path else read_bytes(self))
+        assert saved['accountingRevision']!=tvl_api.accounting_revision()
+        with pytest.raises(CheckpointRejected,match='code or configuration changed; start a new job'):
+            refresh.run_refresh(options,resume=failed['jobId'])
+        assert read_receipt('staging',failed['jobId'])==original
+        events=[]
+        fresh=refresh.run_refresh(options,progress=events.append)
+        assert fresh['status']=='prepared',fresh
+        assert fresh['result']['tvlDatasetId']!=identity
+        assert not [e for e in events if e['event'] in ('range-fetch-started','tvl-collection-started')]

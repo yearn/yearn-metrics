@@ -40,13 +40,29 @@ position is already hashed by date; a changed value still recalculates its full
 network frame. Accounting policy must use its own context fields, not this
 evidence-only digest. Unknown future context fields still invalidate history.
 
-New manifests include an `accountingRevision` digest over the accounting,
-selection, cache and incremental-preparation source files. A code change cannot
-silently reassign new financial results to the same publication ID. A captured
-revision that differs from the running code cannot be prepared: publish a new
-manifest using the current revision. Already prepared older publications keep
-their captured rows. Legacy manifests without a revision remain readable; their
-first indexed preparation takes the full path.
+New manifests include an `accountingRevision` over normalized Python definitions
+for captured-row selection, financial initialization/accounting, chart writes,
+price-repair preparation and totals aggregation. `tvl_revision.py` declares the
+entry points and follows their module-local helpers, constants and import
+bindings; financial instance-method dependencies are followed too. The revision
+algorithm and its declared boundary are included in the digest. New financial
+entry points must be added to that boundary. Serving-only methods, chart response
+formatting, public response limits, exports and serving-cache initialization are
+excluded. Chain names used as persisted totals-series keys remain included.
+Comments and formatting are not source-revision inputs.
+
+This financial revision is separate from the refresh worker's whole-package
+checkpoint identity. A serving-only edit leaves the financial revision, dataset
+identity and reusable accounting context unchanged for identical captured
+inputs, but still requires a new refresh job after deployment. The new job can
+reuse persisted collection coverage and observations; it does not discard them.
+
+A captured financial revision that differs from the running code cannot be
+prepared: publish a new manifest using the current revision. Already prepared
+older publications keep their captured rows. Adopting this narrower digest
+format changes the revision once and requires a full preparation of the new
+identity. Legacy manifests without a revision remain readable; their first
+indexed preparation takes the full path.
 
 Completed observations are immutable inputs. Supported corrections are captured
 in a new completed collection run and therefore a new manifest/run union; do

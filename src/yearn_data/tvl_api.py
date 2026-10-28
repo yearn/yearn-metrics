@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlsplit
 from .tvl import account, decimal, value_nested_shares
 from .tvl_policy import VAULT_POLICIES, TARGET_CORRECTIONS, classify_vault
 from .storage import connect, database_reference, table_exists, DATABASE_ERRORS
+from .tvl_revision import accounting_revision
 
 CHAINS = {1: 'Ethereum', 10: 'Optimism', 100: 'Gnosis', 137: 'Polygon', 250: 'Fantom',
           999: 'HyperEVM', 4663: 'Yeer', 8453: 'Base', 42161: 'Arbitrum', 747474: 'Katana'}
@@ -35,15 +36,6 @@ PRICE_REJECTIONS = json.loads((Path(__file__).parent/'inventories'/'tvl-price-re
 
 def encoded(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)
-
-
-def accounting_revision():
-    """Accounted publications change identity when their calculation code changes."""
-    digest = hashlib.sha256()
-    for name in ('tvl.py', 'tvl_api.py', 'tvl_policy.py', 'tvl_history_cache.py', 'tvl_incremental.py'):
-        digest.update(name.encode())
-        digest.update((Path(__file__).parent/name).read_bytes())
-    return digest.hexdigest()
 
 
 def read_db(path):
@@ -182,6 +174,14 @@ class RetiredTvlDataset(ValueError):
 
 class TvlDataset:
     def __init__(self, manifest):
+        self._init_accounting(manifest)
+        self._lock = threading.RLock()
+        self._pending = {}
+        self._history_cache = OrderedDict()
+        self._history_cache_bytes = 0
+        self._prepared = None
+
+    def _init_accounting(self, manifest):
         self.manifest = manifest
         self.id = manifest['datasetId']
         self.database = manifest['database']
@@ -197,11 +197,6 @@ class TvlDataset:
             if previous is not None and decimal(previous['priceUsd']) != decimal(row['priceUsd']):
                 raise ValueError('TVL publication cannot use conflicting quotes at one rejection coordinate')
             self.price_rejections[coordinate] = row
-        self._lock = threading.RLock()
-        self._pending = {}
-        self._history_cache = OrderedDict()
-        self._history_cache_bytes = 0
-        self._prepared = None
 
     def history_prepared(self):
         # Preparation may finish after this API process first saw the dataset.

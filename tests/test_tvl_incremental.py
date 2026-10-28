@@ -331,3 +331,34 @@ def test_cli_rejects_dataset_retired_between_totals_commit_and_receipt(postgres_
     monkeypatch.setattr(cache,'prepare_totals',original)
     assert cli.main(args)==0
     assert json.loads(capsys.readouterr().out.splitlines()[-1])['status']=='prepared'
+
+
+def test_serving_edits_preserve_identity_but_accounting_edits_rebuild(postgres_database,tmp_path,monkeypatch):
+    from pathlib import Path
+    from yearn_data import tvl_api
+    with closing(connect('staging')) as conn:
+        init_db(conn);run(conn,1,DAY,[(PARENT,'100')])
+    old=TvlStore('staging',tmp_path/'pub').get();prepare(old)
+    revision=tvl_api.accounting_revision()
+    context=context_identity(old)
+    path=Path(tvl_api.__file__)
+    read_bytes=Path.read_bytes
+    source=read_bytes(path)
+    serving=source.replace(b'PUBLIC_HISTORY_MAX_POINTS = 50_000',b'PUBLIC_HISTORY_MAX_POINTS = 50_001').replace(
+        b'def chart_response(result,top=None):',b'def chart_response(result,top=20):')
+    assert serving!=source
+    with monkeypatch.context() as patch:
+        patch.setattr(Path,'read_bytes',lambda self:serving if self==path else read_bytes(self))
+        assert tvl_api.accounting_revision()==revision
+        assert context_identity(old)==context
+        assert TvlStore('staging',tmp_path/'pub').get().id==old.id
+    financial=source.replace(b'excluded = set()',b'excluded = set(())')
+    assert financial!=source
+    with monkeypatch.context() as patch:
+        patch.setattr(Path,'read_bytes',lambda self:financial if self==path else read_bytes(self))
+        assert tvl_api.accounting_revision()!=revision
+        assert context_identity(old)!=context
+        changed=TvlStore('staging',tmp_path/'pub').get()
+        assert changed.id!=old.id
+        assert prepare(changed)['fullRebuildReason']=='accounting-or-catalog-context-changed'
+        assert changed.history(interval='daily')['chart']==[{'timestamp':DAY,'Ethereum':100.0}]
