@@ -15,6 +15,7 @@ from .pricing import (
     report_amount,
 )
 from .storage import from_json, to_json
+from .pricing_policy import PRICE_EVIDENCE_POLICY, quote_classification, retired_estimate_predicate
 
 
 def closed_cutoff(before_timestamp=None, now=None):
@@ -95,6 +96,20 @@ def _price_provenance(raw_json: str | None) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _valuation_quote(row, evidence=None):
+    classification = quote_classification(evidence if evidence is not None else _row_get(row, 'price_raw_json'))
+    rejected = classification == 'estimated'
+    if row['price_usd'] is None and not rejected:
+        classification = 'unavailable'
+    return {
+        'price_usd': None if rejected else row['price_usd'],
+        'price_status': 'rejected_estimate' if rejected else (row['price_status'] or 'missing'),
+        'price_classification': classification,
+        'price_accepted': not rejected and row['price_usd'] is not None,
+        'price_valuation_policy': PRICE_EVIDENCE_POLICY,
+    }
+
+
 def run_lifetime_yield(
     conn,
     price_source: str = DEFAULT_PRICE_SOURCE,
@@ -113,6 +128,7 @@ def run_lifetime_yield(
             'price_source': price_source,
             'fallback_price_source': fallback_price_source,
             'before_timestamp': before_timestamp,
+            'price_valuation_policy': PRICE_EVIDENCE_POLICY,
         })
 
 
@@ -151,7 +167,7 @@ def _write_lifetime_yield(conn, run_id, price_source, fallback_price_source, bef
               AND p2.timestamp = r.block_timestamp
               AND p2.source IN ({source_placeholders})
             ORDER BY
-                CASE WHEN p2.status = 'ok' THEN 0 ELSE 1 END,
+                CASE WHEN p2.status = 'ok' AND NOT ({retired_estimate_predicate('p2.raw_json')}) THEN 0 ELSE 1 END,
                 CASE p2.source {priority} ELSE {len(price_sources)} END
             LIMIT 1
          )
@@ -163,7 +179,8 @@ def _write_lifetime_yield(conn, run_id, price_source, fallback_price_source, bef
     totals: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
         price_provenance = _price_provenance(row["price_raw_json"])
-        price = row["price_usd"]
+        quote = _valuation_quote(row, price_provenance)
+        price = quote['price_usd']
         decimals = row["asset_decimals"]
         raw_gain_usd = _usd(row["gain_raw"], decimals, price)
         raw_loss_usd = _usd(row["loss_raw"], decimals, price)
@@ -179,7 +196,8 @@ def _write_lifetime_yield(conn, run_id, price_source, fallback_price_source, bef
             raw_gain_usd, raw_loss_usd, raw_net_usd, gain_usd, loss_usd, net_usd,
         ))
         if not priced:
-            valuation_status = "missing_price" if price is None else "missing_decimals"
+            valuation_status = ("rejected_estimate" if quote['price_classification'] == 'estimated'
+                                else "missing_price" if price is None else "missing_decimals")
         elif price is None:
             valuation_status = "zero_amount_no_price_required"
         else:
@@ -204,11 +222,10 @@ def _write_lifetime_yield(conn, run_id, price_source, fallback_price_source, bef
             "adjusted_gain_raw": adjusted_gain_raw,
             "adjusted_loss_raw": adjusted_loss_raw,
             "adjusted_net_raw": adjusted_net_raw,
-            "price_usd": price,
+            **quote,
             "price_source": row["selected_price_source"],
             "primary_price_source": price_source,
             "fallback_price_source": fallback_price_source,
-            "price_status": row["price_status"] or "missing",
             "price_evidence_timestamp": price_provenance.get("normalized_timestamp"),
             "price_upstream_source": price_provenance.get("upstream_source"),
             "price_confidence": price_provenance.get("confidence"),
@@ -242,6 +259,7 @@ def _write_lifetime_yield(conn, run_id, price_source, fallback_price_source, bef
                 (output_name, key[1]),
                 {
                     "dimension": key[0],
+                    "price_valuation_policy": PRICE_EVIDENCE_POLICY,
                     "key": key[1],
                     "chain_id": row["chain_id"] if key[0] in {"chain", "vault", "strategy"} else None,
                     "vault_address": row["vault_address"] if key[0] == "vault" else None,
@@ -293,6 +311,7 @@ def _write_lifetime_yield(conn, run_id, price_source, fallback_price_source, bef
 def _empty_fee_bucket(dimension: str, key: str, row: dict[str, Any]) -> dict[str, Any]:
     return {
         "dimension": dimension,
+        "price_valuation_policy": PRICE_EVIDENCE_POLICY,
         "key": key,
         "chain_id": row["chain_id"] if dimension in {"chain", "vault", "strategy", "recipient"} else None,
         "version": row["version"] if dimension in {"version", "vault", "strategy", "recipient"} else None,
@@ -399,7 +418,8 @@ def run_vault_fees(conn) -> int:
     in the same transaction as a V2 StrategyReported event.
     """
 
-    return run_analysis(conn, 'vault-fees', _write_vault_fees)
+    return run_analysis(conn, 'vault-fees', _write_vault_fees,
+                        params={'price_valuation_policy': PRICE_EVIDENCE_POLICY})
 
 
 def _write_vault_fees(conn, run_id):
@@ -414,7 +434,8 @@ def _write_vault_fees(conn, run_id):
             v.management,
             v.protocol,
             p.price_usd,
-            p.status AS price_status
+            p.status AS price_status,
+            p.raw_json AS price_raw_json
         FROM strategy_reports r
         LEFT JOIN vaults v
           ON v.chain_id = r.chain_id AND v.address = r.vault_address
@@ -429,12 +450,13 @@ def _write_vault_fees(conn, run_id):
         """
     ).fetchall()
     for row in v3_rows:
+        quote = _valuation_quote(row)
         protocol_raw = Decimal(int(row["protocol_fees_raw"] or 0))
         total_raw = Decimal(int(row["total_fees_raw"] or 0))
         refunds_raw = Decimal(int(row["total_refunds_raw"] or 0))
-        protocol_usd = _usd(str(int(protocol_raw)), row["asset_decimals"], row["price_usd"])
-        total_usd = _usd(str(int(total_raw)), row["asset_decimals"], row["price_usd"])
-        refunds_usd = _usd(str(int(refunds_raw)), row["asset_decimals"], row["price_usd"])
+        protocol_usd = _usd(str(int(protocol_raw)), row["asset_decimals"], quote['price_usd'])
+        total_usd = _usd(str(int(total_raw)), row["asset_decimals"], quote['price_usd'])
+        refunds_usd = _usd(str(int(refunds_raw)), row["asset_decimals"], quote['price_usd'])
         output = {
             "source": "v3_strategy_report",
             "chain_id": row["chain_id"],
@@ -451,8 +473,7 @@ def _write_vault_fees(conn, run_id):
             "block_timestamp": row["block_timestamp"],
             "asset": row["asset"],
             "asset_symbol": row["asset_symbol"],
-            "price_usd": row["price_usd"],
-            "price_status": row["price_status"] or "missing",
+            **quote,
             "priced": all(value is not None for value in (protocol_usd, total_usd, refunds_usd)),
             "v2_fee_mint_raw": Decimal(0),
             "v2_fee_mint_usd": Decimal(0),
@@ -476,7 +497,8 @@ def _write_vault_fees(conn, run_id):
             v.management,
             v.protocol,
             p.price_usd,
-            p.status AS price_status
+            p.status AS price_status,
+            p.raw_json AS price_raw_json
         FROM vault_fee_events fe
         LEFT JOIN vaults v
           ON v.chain_id = fe.chain_id AND v.address = fe.vault_address
@@ -487,8 +509,9 @@ def _write_vault_fees(conn, run_id):
         """
     ).fetchall()
     for row in v2_rows:
+        quote = _valuation_quote(row)
         fee_raw = Decimal(int(row["fee_raw"]))
-        fee_usd = _usd(row["fee_raw"], row["asset_decimals"], row["price_usd"])
+        fee_usd = _usd(row["fee_raw"], row["asset_decimals"], quote['price_usd'])
         output = {
             "source": row["source"],
             "chain_id": row["chain_id"],
@@ -505,8 +528,7 @@ def _write_vault_fees(conn, run_id):
             "block_timestamp": row["block_timestamp"],
             "asset": row["asset"],
             "asset_symbol": row["asset_symbol"],
-            "price_usd": row["price_usd"],
-            "price_status": row["price_status"] or "missing",
+            **quote,
             "priced": fee_usd is not None,
             "v2_fee_mint_raw": fee_raw,
             "v2_fee_mint_usd": fee_usd,
@@ -542,6 +564,7 @@ def _month(timestamp: int) -> str:
 def _empty_volume_bucket(dimension: str, key: str, row: Any) -> dict[str, Any]:
     return {
         "dimension": dimension,
+        "price_valuation_policy": PRICE_EVIDENCE_POLICY,
         "key": key,
         "chain_id": row["chain_id"] if dimension in {"chain", "vault", "strategy", "token"} else None,
         "version": row["version"] if dimension in {"version", "vault", "strategy"} else None,
@@ -616,7 +639,8 @@ def _add_volume_to_totals(
 
 
 def run_vault_volume(conn) -> int:
-    return run_analysis(conn, 'vault-volume', _write_vault_volume)
+    return run_analysis(conn, 'vault-volume', _write_vault_volume,
+                        params={'price_valuation_policy': PRICE_EVIDENCE_POLICY})
 
 
 def _write_vault_volume(conn, run_id):
@@ -632,7 +656,8 @@ def _write_vault_volume(conn, run_id):
             v.management,
             v.protocol,
             p.price_usd,
-            p.status AS price_status
+            p.status AS price_status,
+            p.raw_json AS price_raw_json
         FROM vault_flows vf
         LEFT JOIN vaults v
           ON v.chain_id = vf.chain_id AND v.address = vf.vault_address
@@ -641,7 +666,8 @@ def _write_vault_volume(conn, run_id):
         """
     ).fetchall()
     for row in vault_rows:
-        amount_usd = _usd(row["assets_raw"], row["asset_decimals"], row["price_usd"])
+        quote = _valuation_quote(row)
+        amount_usd = _usd(row["assets_raw"], row["asset_decimals"], quote['price_usd'])
         output = {
             "chain_id": row["chain_id"],
             "version": row["version"],
@@ -661,8 +687,7 @@ def _write_vault_volume(conn, run_id):
             "asset_symbol": row["asset_symbol"],
             "assets_raw": row["assets_raw"],
             "shares_raw": row["shares_raw"],
-            "price_usd": row["price_usd"],
-            "price_status": row["price_status"] or "missing",
+            **quote,
             "amount_usd": _decimal_or_none(amount_usd),
         }
         write_output(conn, run_id, "vault_flows", output)
@@ -677,7 +702,8 @@ def _write_vault_volume(conn, run_id):
             v.management,
             v.protocol,
             p.price_usd,
-            p.status AS price_status
+            p.status AS price_status,
+            p.raw_json AS price_raw_json
         FROM strategy_debt_flows sdf
         LEFT JOIN vaults v
           ON v.chain_id = sdf.chain_id AND v.address = sdf.vault_address
@@ -686,7 +712,8 @@ def _write_vault_volume(conn, run_id):
         """
     ).fetchall()
     for row in debt_rows:
-        amount_usd = _usd(row["debt_delta_raw"], row["asset_decimals"], row["price_usd"])
+        quote = _valuation_quote(row)
+        amount_usd = _usd(row["debt_delta_raw"], row["asset_decimals"], quote['price_usd'])
         output = {
             "chain_id": row["chain_id"],
             "version": row["version"],
@@ -706,8 +733,7 @@ def _write_vault_volume(conn, run_id):
             "debt_delta_raw": row["debt_delta_raw"],
             "current_debt_raw": row["current_debt_raw"],
             "new_debt_raw": row["new_debt_raw"],
-            "price_usd": row["price_usd"],
-            "price_status": row["price_status"] or "missing",
+            **quote,
             "amount_usd": _decimal_or_none(amount_usd),
         }
         write_output(conn, run_id, "strategy_debt_flows", output)

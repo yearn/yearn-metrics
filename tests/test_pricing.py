@@ -1,9 +1,12 @@
+from yearn_data import pricing_clients as clients
 import pytest
 
 from eth_abi import encode as abi_encode
 
 from yearn_data.config import CHAINS
-from yearn_data.pricing import (
+from yearn_data import pricing_adapters as adapters
+from yearn_data.pricing import price_unpriced_reports, price_unpriced_volume
+from yearn_data.pricing_adapters import (
     _aave_atoken_price,
     _balancer_bpt_price,
     _curve_lp_price,
@@ -13,8 +16,6 @@ from yearn_data.pricing import (
     fetch_defillama_prices_batch,
     _yearn_v1_vault_price,
     fetch_defillama_price,
-    price_unpriced_reports,
-    price_unpriced_volume,
 )
 from yearn_data.storage import connect, init_db, seed_chains
 
@@ -136,7 +137,7 @@ def test_price_unpriced_reports_records_defillama_missing_without_fallback(postg
             for chain_id, token_address, timestamp in requests_
         }
 
-    monkeypatch.setattr("yearn_data.pricing.fetch_defillama_prices_batch", fake_defillama_batch)
+    monkeypatch.setattr("yearn_data.pricing_adapters.fetch_defillama_prices_batch", fake_defillama_batch)
     count = price_unpriced_reports(conn, source="defillama", fallback=None, onchain_fallbacks=False)
     assert count == 1
     row = conn.execute("SELECT source, price_usd, status FROM prices").fetchone()
@@ -170,7 +171,7 @@ def test_price_unpriced_volume_uses_flow_tables(postgres_database, monkeypatch, 
             for chain_id, token_address, timestamp in requests_
         }
 
-    monkeypatch.setattr("yearn_data.pricing.fetch_defillama_prices_batch", fake_defillama_batch)
+    monkeypatch.setattr("yearn_data.pricing_adapters.fetch_defillama_prices_batch", fake_defillama_batch)
     count = price_unpriced_volume(conn, source="defillama", fallback=None)
     assert count == 1
     row = conn.execute("SELECT price_usd, status FROM prices").fetchone()
@@ -178,7 +179,7 @@ def test_price_unpriced_volume_uses_flow_tables(postgres_database, monkeypatch, 
     assert row["status"] == "ok"
 
 
-def test_price_unpriced_volume_can_retry_missing_with_polygon_stable_fallback(postgres_database, monkeypatch, tmp_path):
+def test_volume_retry_rejects_legacy_polygon_parity_result(postgres_database, monkeypatch, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -218,7 +219,7 @@ def test_price_unpriced_volume_can_retry_missing_with_polygon_stable_fallback(po
             for chain_id, token_address, timestamp in requests_
         }
 
-    monkeypatch.setattr("yearn_data.pricing.fetch_defillama_prices_batch", fake_defillama_batch)
+    monkeypatch.setattr("yearn_data.pricing_adapters.fetch_defillama_prices_batch", fake_defillama_batch)
 
     count = price_unpriced_volume(
         conn,
@@ -230,12 +231,12 @@ def test_price_unpriced_volume_can_retry_missing_with_polygon_stable_fallback(po
 
     assert count == 1
     row = conn.execute("SELECT price_usd, status, raw_json FROM prices").fetchone()
-    assert row["price_usd"] == 1.0
-    assert row["status"] == "ok"
+    assert row["price_usd"] is None
+    assert row["status"] == "missing"
     assert "canonical_polygon_stable_fallback" in row["raw_json"]
 
 
-def test_price_unpriced_reports_retries_missing_with_v3_alias(postgres_database, monkeypatch, tmp_path):
+def test_report_retry_does_not_invent_arbitrum_parity_quote(postgres_database, monkeypatch, tmp_path):
     conn = connect('staging')
     init_db(conn)
     seed_chains(conn, CHAINS)
@@ -271,7 +272,7 @@ def test_price_unpriced_reports_retries_missing_with_v3_alias(postgres_database,
             for chain_id, token_address, timestamp in requests_
         }
 
-    monkeypatch.setattr("yearn_data.pricing.fetch_defillama_prices_batch", fake_defillama_batch)
+    monkeypatch.setattr("yearn_data.pricing_adapters.fetch_defillama_prices_batch", fake_defillama_batch)
     count = price_unpriced_reports(
         conn,
         source="defillama",
@@ -282,9 +283,9 @@ def test_price_unpriced_reports_retries_missing_with_v3_alias(postgres_database,
 
     assert count == 1
     row = conn.execute("SELECT price_usd, status, raw_json FROM prices").fetchone()
-    assert row["price_usd"] == 1.0
-    assert row["status"] == "ok"
-    assert "canonical_arbitrum_stable_fallback" in row["raw_json"]
+    assert row["price_usd"] is None
+    assert row["status"] == "missing"
+    assert "canonical_arbitrum_stable_fallback" not in row["raw_json"]
 
 
 def test_price_unpriced_reports_uses_curve_lp_fallback(postgres_database, monkeypatch, tmp_path):
@@ -326,8 +327,8 @@ def test_price_unpriced_reports_uses_curve_lp_fallback(postgres_database, monkey
     def fake_curve(chain_id, token_address, timestamp, block_number):
         return 123.45, {"source": "curve_lp_balance_fallback"}
 
-    monkeypatch.setattr("yearn_data.pricing.fetch_defillama_prices_batch", fake_defillama_batch)
-    monkeypatch.setattr("yearn_data.pricing._curve_lp_price", fake_curve)
+    monkeypatch.setattr("yearn_data.pricing_adapters.fetch_defillama_prices_batch", fake_defillama_batch)
+    monkeypatch.setattr("yearn_data.pricing_adapters._curve_lp_price", fake_curve)
     count = price_unpriced_reports(conn, source="defillama", fallback=None, retry_missing=True, chain_ids={1})
 
     assert count == 1
@@ -351,7 +352,7 @@ def test_curve_pool_from_registry_resolves_lp_when_minter_is_missing(monkeypatch
             return pool
         return None
 
-    monkeypatch.setattr("yearn_data.pricing._call_address", fake_call_address)
+    monkeypatch.setattr("yearn_data.pricing_adapters._call_address", fake_call_address)
 
     assert _curve_pool_from_registry(1, lp, 100) == pool
     _curve_pool_from_registry.cache_clear()
@@ -379,9 +380,9 @@ def test_exchange_rate_wrapped_price_uses_underlying_value(monkeypatch):
         assert token_address == underlying
         return 1.5, {"source": "underlying"}
 
-    monkeypatch.setattr("yearn_data.pricing._call_address", fake_call_address)
-    monkeypatch.setattr("yearn_data.pricing._call_uint256", fake_call_uint256)
-    monkeypatch.setattr("yearn_data.pricing._direct_or_alias_price", fake_direct)
+    monkeypatch.setattr("yearn_data.pricing_adapters._call_address", fake_call_address)
+    monkeypatch.setattr("yearn_data.pricing_adapters._call_uint256", fake_call_uint256)
+    monkeypatch.setattr("yearn_data.pricing_adapters.fetch_underlying_price", fake_direct)
 
     price, payload = _exchange_rate_wrapped_price(1, token, 100, 10)
 
@@ -402,8 +403,8 @@ def test_aave_atoken_price_uses_underlying_value(monkeypatch):
         assert token_address == underlying
         return 1.25, {"source": "underlying"}
 
-    monkeypatch.setattr("yearn_data.pricing._call_address", fake_call_address)
-    monkeypatch.setattr("yearn_data.pricing._direct_or_alias_price", fake_direct)
+    monkeypatch.setattr("yearn_data.pricing_adapters._call_address", fake_call_address)
+    monkeypatch.setattr("yearn_data.pricing_adapters.fetch_underlying_price", fake_direct)
 
     price, payload = _aave_atoken_price(1, token, 100, 10)
 
@@ -416,13 +417,13 @@ def test_yearn_v1_vault_price_uses_historical_share_price(monkeypatch):
     underlying = "0x00000000000000000000000000000000000000d0"
 
     monkeypatch.setattr(
-        "yearn_data.pricing._call_address",
+        "yearn_data.pricing_adapters._call_address",
         lambda chain_id, address, signature, block_number, args_hex="": (
             underlying if address == token and signature == "token()" else None
         ),
     )
     monkeypatch.setattr(
-        "yearn_data.pricing._call_uint256",
+        "yearn_data.pricing_adapters._call_uint256",
         lambda chain_id, address, signature, block_number, args_hex="": (
             1_025_000_000_000_000_000
             if address == token and signature == "getPricePerFullShare()"
@@ -430,7 +431,7 @@ def test_yearn_v1_vault_price_uses_historical_share_price(monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        "yearn_data.pricing._direct_or_alias_price",
+        "yearn_data.pricing_adapters.fetch_underlying_price",
         lambda *args: (1.0, {"source": "canonical_stable"}),
     )
 
@@ -465,10 +466,10 @@ def test_curve_lp_price_fails_closed_when_reserve_is_unpriced(monkeypatch):
             return 6 if address.lower() == stable else 18
         return None
 
-    monkeypatch.setattr("yearn_data.pricing._call_address", fake_address)
-    monkeypatch.setattr("yearn_data.pricing._call_uint256", fake_uint)
+    monkeypatch.setattr("yearn_data.pricing_adapters._call_address", fake_address)
+    monkeypatch.setattr("yearn_data.pricing_adapters._call_uint256", fake_uint)
     monkeypatch.setattr(
-        "yearn_data.pricing._resolve_reserve_price",
+        "yearn_data.pricing_adapters._resolve_reserve_price",
         lambda chain_id, address, timestamp, block_number, depth: (
             (1.0, {"source": "stable"})
             if address.lower() == stable
@@ -500,10 +501,10 @@ def test_erc4626_wrapper_price_uses_convert_to_assets(monkeypatch):
             return 105 * 10**16
         return None
 
-    monkeypatch.setattr("yearn_data.pricing._call_address", fake_address)
-    monkeypatch.setattr("yearn_data.pricing._call_uint256", fake_uint)
+    monkeypatch.setattr("yearn_data.pricing_adapters._call_address", fake_address)
+    monkeypatch.setattr("yearn_data.pricing_adapters._call_uint256", fake_uint)
     monkeypatch.setattr(
-        "yearn_data.pricing._resolve_reserve_price",
+        "yearn_data.pricing_adapters._resolve_reserve_price",
         lambda *args: (2.0, {"source": "underlying"}),
     )
 
@@ -518,7 +519,7 @@ def test_wrapper_price_uses_normalized_get_rate(monkeypatch):
     underlying = "0x00000000000000000000000000000000000000e1"
 
     monkeypatch.setattr(
-        "yearn_data.pricing._call_address",
+        "yearn_data.pricing_adapters._call_address",
         lambda chain_id, address, signature, block_number, args_hex="": (
             underlying if address.lower() == token and signature == "asset()" else None
         ),
@@ -533,9 +534,9 @@ def test_wrapper_price_uses_normalized_get_rate(monkeypatch):
             return 1_010_000_000_000_000_000
         return None
 
-    monkeypatch.setattr("yearn_data.pricing._call_uint256", fake_uint)
+    monkeypatch.setattr("yearn_data.pricing_adapters._call_uint256", fake_uint)
     monkeypatch.setattr(
-        "yearn_data.pricing._resolve_reserve_price",
+        "yearn_data.pricing_adapters._resolve_reserve_price",
         lambda *args: (1.0, {"source": "stable"}),
     )
 
@@ -569,10 +570,10 @@ def test_balancer_bpt_price_uses_actual_supply_for_phantom_pool(monkeypatch):
             return 6
         return None
 
-    monkeypatch.setattr("yearn_data.pricing._eth_call", fake_eth_call)
-    monkeypatch.setattr("yearn_data.pricing._call_uint256", fake_uint)
+    monkeypatch.setattr("yearn_data.pricing_adapters._eth_call", fake_eth_call)
+    monkeypatch.setattr("yearn_data.pricing_adapters._call_uint256", fake_uint)
     monkeypatch.setattr(
-        "yearn_data.pricing._resolve_reserve_price",
+        "yearn_data.pricing_adapters._resolve_reserve_price",
         lambda *args: (1.0, {"source": "stable"}),
     )
 
@@ -613,7 +614,7 @@ def test_refresh_onchain_fallbacks_uses_adapter_provenance_without_widening_retr
     def primary(database, rows):
         primary_calls.extend((r['asset'],r['block_timestamp']) for r in rows)
         return 0, []
-    monkeypatch.setattr(pricing, 'fetch_defillama_prices_batch', provider)
+    monkeypatch.setattr(adapters, 'fetch_defillama_prices_batch', provider)
     monkeypatch.setattr(pricing, '_price_rows_with_yearn_prices', primary)
     assert price_unpriced_reports(conn, source=source, refresh_onchain_fallbacks=True) == 1
     assert provider_calls == [(1,tokens[0],100)]
@@ -663,8 +664,8 @@ def test_price_unpriced_reports_uses_crv_derivative_fallback(postgres_database, 
     def fake_crv_derivative(chain_id, token_address, timestamp, block_number):
         return 0.42, {"source": "curve_get_dy_fallback"}
 
-    monkeypatch.setattr("yearn_data.pricing.fetch_defillama_prices_batch", fake_defillama_batch)
-    monkeypatch.setattr("yearn_data.pricing._crv_derivative_price", fake_crv_derivative)
+    monkeypatch.setattr("yearn_data.pricing_adapters.fetch_defillama_prices_batch", fake_defillama_batch)
+    monkeypatch.setattr("yearn_data.pricing_adapters._crv_derivative_price", fake_crv_derivative)
 
     count = price_unpriced_reports(conn, source="defillama", fallback=None, retry_missing=True, chain_ids={1})
 
@@ -705,10 +706,10 @@ def test_reserve_decimals_must_be_known(monkeypatch, adapter, reserve_decimals):
             ["address[]", "uint256[]", "uint256"], ([reserve], [balance], 1)
         ).hex()
 
-    monkeypatch.setattr("yearn_data.pricing._call_address", fake_address)
-    monkeypatch.setattr("yearn_data.pricing._call_uint256", fake_uint)
-    monkeypatch.setattr("yearn_data.pricing._eth_call", fake_eth_call)
-    monkeypatch.setattr("yearn_data.pricing._resolve_reserve_price", lambda *args: (1.0, {}))
+    monkeypatch.setattr("yearn_data.pricing_adapters._call_address", fake_address)
+    monkeypatch.setattr("yearn_data.pricing_adapters._call_uint256", fake_uint)
+    monkeypatch.setattr("yearn_data.pricing_adapters._eth_call", fake_eth_call)
+    monkeypatch.setattr("yearn_data.pricing_adapters._resolve_reserve_price", lambda *args: (1.0, {}))
     _curve_lp_price.cache_clear()
     try:
         price, payload = adapter(1, lp, 100, 10)
@@ -749,9 +750,9 @@ def test_curve_zero_balance_does_not_require_valuation(monkeypatch, balance_gett
         assert address.lower() == funded
         return 1.0, {}
 
-    monkeypatch.setattr("yearn_data.pricing._call_address", fake_address)
-    monkeypatch.setattr("yearn_data.pricing._call_uint256", fake_uint)
-    monkeypatch.setattr("yearn_data.pricing._resolve_reserve_price", reserve_price)
+    monkeypatch.setattr("yearn_data.pricing_adapters._call_address", fake_address)
+    monkeypatch.setattr("yearn_data.pricing_adapters._call_uint256", fake_uint)
+    monkeypatch.setattr("yearn_data.pricing_adapters._resolve_reserve_price", reserve_price)
     _curve_lp_price.cache_clear()
     try:
         price, _ = _curve_lp_price(1, lp, 100, 10)
@@ -769,12 +770,12 @@ def test_yearn_only_missing_price_never_calls_optional_adapters(postgres_databas
         chain_id,version,vault_address,strategy_address,tx_hash,log_index,
         block_number,block_timestamp,asset,asset_decimals,gain_raw,loss_raw,net_raw,extra_json)
         VALUES (1,'v3',?,?, '0xabc',0,10,100,?,6,'1','0','1','{}')''', (asset, asset, asset))
-    monkeypatch.setattr(pricing, 'fetch_yearn_prices_batch', lambda _: {})
-    monkeypatch.setattr(pricing, 'fetch_yearn_price', lambda *a: (None, 'missing', {}))
+    monkeypatch.setattr(clients, 'fetch_yearn_prices_batch', lambda _: {})
+    monkeypatch.setattr(clients, 'fetch_yearn_price', lambda *a: (None, 'missing', {}))
     def forbidden(*args, **kwargs):
         pytest.fail('Yearn-only pricing called an optional provider or adapter')
-    monkeypatch.setattr(pricing, 'fetch_defillama_prices_batch', forbidden)
-    monkeypatch.setattr(pricing, '_row_level_fallback_price', forbidden)
+    monkeypatch.setattr(adapters, 'fetch_defillama_prices_batch', forbidden)
+    monkeypatch.setattr(adapters, '_row_level_fallback_price', forbidden)
     assert pricing.price_unpriced_reports(conn, fallback=None, onchain_fallbacks=False) == 1
     assert tuple(conn.execute('SELECT source,status,price_usd FROM prices').fetchone()) == ('yearn-prices', 'missing', None)
 
@@ -795,8 +796,8 @@ def test_exhausted_defillama_target_does_not_abort_other_targets(postgres_databa
         if timestamp == 100:
             raise pricing.requests.Timeout('target unavailable')
         return 2.0, 'ok', {'timestamp': timestamp}
-    monkeypatch.setattr(pricing, 'fetch_defillama_prices_batch', failed_batch)
-    monkeypatch.setattr(pricing, 'fetch_defillama_price', exact)
+    monkeypatch.setattr(adapters, 'fetch_defillama_prices_batch', failed_batch)
+    monkeypatch.setattr(adapters, 'fetch_defillama_price', exact)
     pricing.price_unpriced_reports(conn, source='defillama', fallback=None, onchain_fallbacks=False)
     rows = conn.execute('SELECT price_usd,status FROM prices ORDER BY timestamp').fetchall()
     assert [tuple(row) for row in rows] == [(None, 'retryable'), (2.0, 'ok')]
@@ -811,7 +812,6 @@ def test_adapter_refresh_cannot_bypass_yearn_only_policy(operation):
 
 def test_volume_adapter_refresh_preserves_alias_quotes_chain_filter_and_target_limit(postgres_database, monkeypatch):
     import json
-    from yearn_data import pricing
     conn = connect('staging'); init_db(conn); seed_chains(conn, CHAINS)
     records = [(10,99,'curve_lp_balance_fallback'), (1,100,'curve_lp_balance_fallback'),
                (1,101,None), (1,102,'balancer_bpt_fallback')]
@@ -830,7 +830,7 @@ def test_volume_adapter_refresh_preserves_alias_quotes_chain_filter_and_target_l
     def provider(requests_):
         calls.extend(requests_)
         return {target:(2.0,'ok',{'source':'defillama'}) for target in requests_}
-    monkeypatch.setattr(pricing, 'fetch_defillama_prices_batch', provider)
+    monkeypatch.setattr(adapters, 'fetch_defillama_prices_batch', provider)
     assert price_unpriced_volume(conn, refresh_onchain_fallbacks=True, chain_ids={1}, limit=1) == 1
     assert calls == [(1,tokens[1],100)]
     assert [r[0] for r in conn.execute('SELECT price_usd FROM prices ORDER BY timestamp')] == [0.5,2,0.5,0.5]
@@ -845,13 +845,13 @@ def test_curve_reserve_enumeration_failure_cannot_accept_partial_price(monkeypat
     def post(url,json,timeout):
         data=json['params'][0]['data']
         result=None
-        if data==pricing._selector('minter()'):
+        if data==adapters._selector('minter()'):
             result='0x'+encode(['address'],[pool]).hex()
-        elif data==pricing._selector('decimals()'):
+        elif data==adapters._selector('decimals()'):
             result='0x'+encode(['uint256'],[18]).hex()
-        elif data==pricing._selector('totalSupply()') or data.startswith(pricing._selector('balances(uint256)')):
+        elif data==adapters._selector('totalSupply()') or data.startswith(adapters._selector('balances(uint256)')):
             result='0x'+encode(['uint256'],[100*10**18]).hex()
-        elif data.startswith(pricing._selector('coins(uint256)')):
+        elif data.startswith(adapters._selector('coins(uint256)')):
             index=int(data[-64:],16)
             if index==0 and failure!='alternate':result='0x'+encode(['address'],[coin]).hex()
             elif failure=='transport':raise pricing.requests.Timeout('private RPC detail')
@@ -859,17 +859,17 @@ def test_curve_reserve_enumeration_failure_cannot_accept_partial_price(monkeypat
                 return SimpleNamespace(raise_for_status=lambda:None,json=lambda:{
                     'error':{'code':-32005,'message':'private RPC rate limit'}})
             elif failure=='abi':result='0x01'
-        elif data.startswith(pricing._selector('coins(int128)')) and failure=='alternate' and int(data[-64:],16)==0:
+        elif data.startswith(adapters._selector('coins(int128)')) and failure=='alternate' and int(data[-64:],16)==0:
             result='0x'+encode(['address'],[coin]).hex()
         body={'result':result} if result is not None else {
             'error':{'code':3,'message':'execution reverted'}}
         return SimpleNamespace(raise_for_status=lambda:None,json=lambda:body)
     monkeypatch.setattr(pricing.requests,'post',post)
-    monkeypatch.setattr(pricing,'get_rpc_url',lambda chain:'offline-test')
-    monkeypatch.setattr(pricing,'_resolve_reserve_price',lambda *a:(1,{}))
-    pricing._curve_lp_price.cache_clear()
+    monkeypatch.setattr(adapters,'get_rpc_url',lambda chain:'offline-test')
+    monkeypatch.setattr(adapters,'_resolve_reserve_price',lambda *a:(1,{}))
+    adapters._curve_lp_price.cache_clear()
     try:
-        price,payload=pricing._curve_lp_price(1,lp,100,10)
+        price,payload=adapters._curve_lp_price(1,lp,100,10)
         assert price==(1 if failure in ('complete','alternate') else None)
         assert 'private' not in str(payload)
-    finally:pricing._curve_lp_price.cache_clear()
+    finally:adapters._curve_lp_price.cache_clear()

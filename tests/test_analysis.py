@@ -274,6 +274,7 @@ def test_lifetime_yield_selects_and_records_requested_price_source(postgres_data
         conn.execute("SELECT params_json FROM analysis_runs WHERE id=?", (run_id,)).fetchone()["params_json"]
     )
     assert params == {
+        "price_valuation_policy": "observed-or-contract-v1",
         "price_source": "yearn-prices",
         "fallback_price_source": "defillama",
         "before_timestamp": None,

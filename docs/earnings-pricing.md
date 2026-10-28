@@ -1,5 +1,10 @@
 # Price historical earnings
 
+Local fixed-parity estimates are retired under `observed-or-contract-v1`.
+Missing provider observations remain unavailable; optional contract conversions
+require underlying quotes. See the [policy, cached-estimate treatment and
+controlled coverage comparison](parity-price-policy.md).
+
 The `price` and `analyze lifetime-yield` commands use Yearn Prices first.
 By default, they can also use DefiLlama when a Yearn price is unavailable.
 

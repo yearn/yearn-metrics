@@ -26,7 +26,7 @@ def test_collection_stops_on_operator_price_errors(postgres_database, tmp_path, 
     def fail(*args, **kwargs):
         if failure == 'authentication':
             raise pricing.YearnPricesAuthenticationError('rejected credential')
-        return pricing._yearn_prices_config()
+        return pricing.yearn_prices_config()
     monkeypatch.setattr(tvl_sources, 'fetch_yearn_price', fail)
     expected = pricing.YearnPricesAuthenticationError if failure == 'authentication' else ValueError
     with pytest.raises(expected):
