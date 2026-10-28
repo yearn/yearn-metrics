@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from .storage import from_json
+from .storage import from_json, to_json
 
 
 LIFETIME_YIELD_HEADLINE_KEY = "lifetime_yield:headline"
@@ -26,7 +26,11 @@ def _iso_run_id(timestamp: int | None) -> str:
 
 
 def latest_lifetime_yield_anchor(conn, analysis_run_id: int | None = None) -> tuple[Decimal, str]:
-    """Return a fully valued completed lifetime-yield total and default run id."""
+    """Compatibility API for callers needing only the completed total and run id.
+
+    The publisher needs coverage metadata too, so it uses the same validator
+    directly. Keep this public entry point for callers of the original API.
+    """
     row, summary = _complete_lifetime_yield_run(conn, analysis_run_id)
     run_id = f"analysis-run-{row['id']}:{_iso_run_id(row['completed_at'] or row['started_at'])}"
     return Decimal(str(summary['net_yield_usd'])), run_id
@@ -65,14 +69,25 @@ def _complete_lifetime_yield_run(conn, analysis_run_id):
     counts = [summary.get(field) for field in ('reports', 'priced_reports', 'unpriced_reports')]
     if (any(type(count) is not int or count < 0 for count in counts)
             or counts[0] != counts[1] or counts[2] != 0):
-        raise ValueError(f"lifetime-yield analysis run {row['id']} has incomplete valuation")
+        if any(type(count) is not int or count < 0 for count in counts):
+            state = 'unknown-completeness'
+        elif counts[1] + counts[2] != counts[0]:
+            state = 'inconsistent-completeness'
+        elif counts[1] == 0:
+            state = 'all-unpriced'
+        else:
+            state = 'mixed-priced-unpriced'
+        raise ValueError(f"lifetime-yield analysis run {row['id']} has incomplete valuation "
+                         f"({state}; reports={counts[0]!r}, priced_reports={counts[1]!r}, "
+                         f"unpriced_reports={counts[2]!r})")
     return row, summary
 
 
-def _coverage_digest(reports):
-    # Canonical row JSON includes event identity, raw/valued amounts and provenance.
-    rows = sorted(json.dumps(row, sort_keys=True, separators=(',', ':')) for row in reports)
-    return hashlib.sha256('\n'.join(rows).encode()).hexdigest()
+def _update_coverage_digest(digest, encoded_row, *, separator):
+    # Persisted format: C-ordered canonical row JSON separated by one newline.
+    if separator:
+        digest.update(b'\n')
+    digest.update(encoded_row)
 
 
 def _comparable_previous(previous, historical_digest, policy):
@@ -101,14 +116,10 @@ def _retained_coverage(conn, run_id, expected_count, previous_cutoff, *, include
             if type(timestamp) is not int:
                 raise ValueError(f"lifetime-yield analysis run {run_id} has incomplete report coverage")
             if include_digests:
-                encoded = json.dumps(report, sort_keys=True, separators=(',', ':')).encode()
-                if count:
-                    current.update(b'\n')
-                current.update(encoded)
+                encoded = to_json(report).encode()
+                _update_coverage_digest(current, encoded, separator=count > 0)
                 if type(previous_cutoff) is int and timestamp <= previous_cutoff:
-                    if historical_count:
-                        historical.update(b'\n')
-                    historical.update(encoded)
+                    _update_coverage_digest(historical, encoded, separator=historical_count > 0)
                     historical_count += 1
             count += 1
             latest = max(latest, timestamp)
@@ -136,6 +147,8 @@ def build_lifetime_yield_headline(
         now_ms = max(now_ms, prev_as_of_ms)
         prev_value = Decimal(str(previous["net_yield_usd"]))
         if coverage_through_timestamp is not None:
+            if type(previous.get('coverage_through_timestamp')) is not int:
+                raise ValueError('previous headline requires an integer coverage_through_timestamp for a bounded rate')
             dt_seconds = Decimal(coverage_through_timestamp - previous['coverage_through_timestamp'])
         else:
             dt_seconds = Decimal(now_ms - prev_as_of_ms) / Decimal(1000)

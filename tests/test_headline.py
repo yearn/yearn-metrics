@@ -1,4 +1,5 @@
 import json
+import hashlib
 from decimal import Decimal
 
 import pytest
@@ -11,9 +12,16 @@ from yearn_data.headline import (
     lifetime_yield_headline_json,
     publish_lifetime_yield_headline,
     _comparable_previous,
-    _coverage_digest,
+    _update_coverage_digest,
 )
-from yearn_data.storage import connect, init_db
+from yearn_data.storage import connect, init_db, to_json
+
+
+def _coverage_digest(reports):
+    digest = hashlib.sha256()
+    for index, encoded in enumerate(sorted(to_json(row).encode() for row in reports)):
+        _update_coverage_digest(digest, encoded, separator=index > 0)
+    return digest.hexdigest()
 
 
 class FakeRedis:
@@ -130,8 +138,10 @@ def test_incomplete_analyses_cannot_replace_redis_anchor(postgres_database, pric
     previous = b'{"net_yield_usd":100,"as_of_ms":1000}'
     redis = FakeRedis(previous)
     if priced < 2:
-        with pytest.raises(ValueError, match='incomplete valuation'):
+        state = 'all-unpriced' if priced == 0 else 'mixed-priced-unpriced'
+        with pytest.raises(ValueError, match=state) as rejection:
             publish_lifetime_yield_headline(conn, redis_client=redis, now_ms=2000)
+        assert f'reports=2, priced_reports={priced}, unpriced_reports={2-priced}' in str(rejection.value)
         assert redis.raw == previous and redis.set_args is None
         with pytest.raises(ValueError, match='incomplete valuation'):
             publish_lifetime_yield_headline(conn, dry_run=True)
@@ -220,7 +230,8 @@ def test_streamed_coverage_preserves_digests_and_rejects_invalid_rows(postgres_d
     write_output(conn, run_id, 'reports', reports[1])
     conn.commit()
     current, historical, latest = _retained_coverage(conn, run_id, 2, 75, include_digests=include_digests)
-    assert current == (_coverage_digest(reports) if include_digests else None)
+    known = b'{"block_timestamp":100,"net_yield_usd":"100","tx_hash":"0xreport"}\n{"block_timestamp":50,"net_yield_usd":"5","tx_hash":"0xearlier"}'
+    assert current == (hashlib.sha256(known).hexdigest() if include_digests else None)
     assert historical == (_coverage_digest([reports[1]]) if include_digests else None)
     assert latest == 100
     with pytest.raises(ValueError, match='incomplete report coverage'):
@@ -276,3 +287,12 @@ def test_retained_report_outside_cutoff_cannot_replace_anchor(postgres_database,
     with pytest.raises(ValueError,match='beyond its cutoff'):
         publish_lifetime_yield_headline(conn,redis_client=redis)
     assert redis.raw==previous and redis.set_args is None
+
+
+@pytest.mark.parametrize('coverage', [None, True, '86399'])
+def test_bounded_helper_names_invalid_legacy_coverage(coverage):
+    previous = dict(net_yield_usd='100', as_of_ms=1000)
+    if coverage is not None:
+        previous['coverage_through_timestamp'] = coverage
+    with pytest.raises(ValueError, match='previous headline requires an integer coverage_through_timestamp'):
+        build_lifetime_yield_headline('105', previous, run_id='r', coverage_through_timestamp=86399)
