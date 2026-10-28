@@ -112,6 +112,8 @@ CREATE TABLE IF NOT EXISTS strategy_reports (
 
 CREATE INDEX IF NOT EXISTS strategy_reports_asset_idx
 ON strategy_reports (chain_id, asset, block_timestamp);
+CREATE INDEX IF NOT EXISTS strategy_reports_asset_lower_idx
+ON strategy_reports (chain_id, lower(asset), block_timestamp);
 CREATE INDEX IF NOT EXISTS strategy_reports_hash_identity_idx
 ON strategy_reports (chain_id, lower(tx_hash), log_index);
 
