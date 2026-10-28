@@ -59,10 +59,13 @@ stage's work; it does not make TVL run earlier in the dependency order. Suppleme
 [PR #90](https://github.com/yearn/yearn-metrics/pull/90), with twelve trials through
 actual TVL dispatch and complete preparation. Those measure the maintained
 refresh worker and its documented stage order, rather than the old update script
-end to end. Those files are not present in this branch or on main yet. This PR references
-#56 and keeps the issue open until both this optimization and the supplementary
-TVL-start evidence in #90 reach the default branch. Only then should #56 close.
-The refresh implementation remains separately reviewed in #90.
+end to end. PR #90 is merged into main at `ab9b3d7`; its
+[full-worker performance document](refresh-performance.md) and
+[raw receipt](refresh-benchmark-2026-10-27.json) are present both on main and in
+this branch. This PR references #56 and keeps it open until this coverage-read
+optimization also reaches the default branch. That is the remaining delivery
+condition for closing #56. The refresh implementation was reviewed separately
+in #90.
 No production update, publication or provider-limit experiment was run.
 
 ## Progress and recovery
