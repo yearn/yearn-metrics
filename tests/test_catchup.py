@@ -68,8 +68,12 @@ def test_discovery_unions_retained_inactive_vaults_and_resumes(db, monkeypatch):
     seed(db, '0x'+'44'*20, management='external')
     monkeypatch.setattr(catchup, 'vault_metadata_from_kong', lambda *args: {
         Web3.to_checksum_address(NEW): dict(asset=ASSET, asset_decimals=6, api_version='0.4.6')})
+    from test_catchup_performance import MeasuredConnection
+    measured = MeasuredConnection(db, 0)
+    expected_reads = len(list(inventory_targets('op'))) + 1
     client = Source()
-    result = catchup.catch_up(db, 'op', 10, 30, discover=True, chunk_size=10, client=client)
+    result = catchup.catch_up(measured, 'op', 10, 30, discover=True, chunk_size=10, client=client)
+    assert measured.coverage_reads == result['coverage_read_queries'] == expected_reads
     assert result['vaults'] == 2
     assert {a for a, _, _ in client.calls} == {VAULT, NEW}
     assert db.execute('SELECT COUNT(*) FROM strategy_reports').fetchone()[0] == 2
@@ -77,7 +81,9 @@ def test_discovery_unions_retained_inactive_vaults_and_resumes(db, monkeypatch):
     assert result['pin']['finality'] == 'finalized'
     assert db.execute('SELECT active FROM vaults WHERE address=?', (VAULT,)).fetchone()[0] == 0
     client.calls.clear()
-    repeated = catchup.catch_up(db, 'op', 10, 30, discover=True, chunk_size=7, client=client)
+    before = measured.coverage_reads
+    repeated = catchup.catch_up(measured, 'op', 10, 30, discover=True, chunk_size=7, client=client)
+    assert measured.coverage_reads-before == repeated['coverage_read_queries'] == expected_reads
     assert repeated['completed_ranges'] == repeated['inserted_rows'] == 0
     assert client.calls == []
 
