@@ -130,7 +130,9 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
     summary = dict(chain=chain, from_block=from_block, pin=pin, source=report_source,
                    completed_ranges=0, inserted_rows=0, vaults=0, skipped_vaults=[],
                    discovery="bounded" if discover else "stored inventory",
-                   coverage_read_queries=0, report_work={})
+                   coverage_read_queries=0, report_work={activity: dict(
+                       vaults=0, reused_blocks=0, reused_ranges=0, scanned_blocks=0, completed_ranges=0, seconds=0)
+                       for activity in ('active', 'inactive')})
     started = time.monotonic()
 
     def notify(event, **details):
@@ -250,8 +252,7 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
         check_release(vault)
         scope = report_scope(vault)
         activity = 'active' if vault['active'] else 'inactive'
-        work = summary['report_work'].setdefault(activity, dict(
-            vaults=0, reused_blocks=0, reused_ranges=0, scanned_blocks=0, completed_ranges=0, seconds=0))
+        work = summary['report_work'][activity]
         acquire(scope, lambda lo, hi: client.reports(vault, lo, hi, report_source),
                 "strategy_reports", report_source, report_metadata=vault,
                 retained=retained_reports.get((scope.target.lower(), scope.policy), []), work=work)

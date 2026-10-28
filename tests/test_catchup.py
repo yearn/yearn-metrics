@@ -243,10 +243,16 @@ def test_discovery_promotes_cached_member_without_inventing_deployment(db, deplo
     assert {address for address, _, _ in client.calls} == {VAULT, NEW}
 
 
-def test_prefetched_coverage_uses_enriched_policy_and_replays_changed_policy(db, monkeypatch):
+@pytest.mark.parametrize('active', [0, 1])
+def test_prefetched_coverage_uses_enriched_policy_and_replays_changed_policy(db, monkeypatch, active):
     from yearn_data.coverage import commit_range
     from yearn_data.history_sources import report_scope
     client = Source()
+    with db:
+        db.execute('UPDATE vaults SET active=? WHERE address=?', (active, VAULT))
+    activity = 'active' if active else 'inactive'
+    other = 'inactive' if active else 'active'
+    empty = dict(vaults=0, reused_blocks=0, reused_ranges=0, scanned_blocks=0, completed_ranges=0, seconds=0)
     vault = dict(db.execute('SELECT * FROM vaults WHERE address=?', (VAULT,)).fetchone())
     commit_range(db, report_scope(vault), 10, 30, source='rpc', end_hash=HASH,
                  run_id=None, write=lambda conn: 0)
@@ -256,13 +262,17 @@ def test_prefetched_coverage_uses_enriched_policy_and_replays_changed_policy(db,
     monkeypatch.setattr(catchup, 'vault_metadata_from_kong', lambda *args: {Web3.to_checksum_address(VAULT): metadata})
     result = catchup.catch_up(db, 'op', 10, 30, source='rpc', client=client)
     assert client.calls == []
-    assert result['report_work']['inactive']['reused_blocks'] == 21
+    assert result['report_work'][activity]['reused_blocks'] == 21
+    assert result['report_work'][activity]['vaults'] == 1
+    assert result['report_work'][other] == empty
     # A different policy from the same prefetched target is never proof of
     # coverage. Metadata changes require replay and invalidate the old policy.
     with db:
         db.execute('UPDATE vaults SET asset_decimals=18 WHERE address=?', (VAULT,))
     result = catchup.catch_up(db, 'op', 10, 30, source='rpc', client=client)
     assert client.calls == [(VAULT, 10, 30)]
-    assert result['report_work']['inactive']['scanned_blocks'] == 21
+    assert result['report_work'][activity]['scanned_blocks'] == 21
+    assert result['report_work'][activity]['vaults'] == 1
+    assert result['report_work'][other] == empty
     saved = db.execute('SELECT policy FROM history_coverage').fetchall()
     assert [r[0] for r in saved] == [report_scope({**vault, 'asset_decimals': 18}).policy]

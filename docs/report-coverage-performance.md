@@ -76,7 +76,9 @@ the completion event. Failure events contain public bounds/target coordinates,
 not provider exception text or endpoints.
 
 The final summary includes `coverage_read_queries`, overall post-pin `seconds`,
-and `report_work` split into active/inactive vaults: vault count, reused ranges,
+and `report_work` with guaranteed `active` and `inactive` keys, even when a
+class has no vaults. Empty classes contain zero for every counter and processing
+seconds. Each class reports vault count, reused ranges,
 reused/scanned block counts, completed ranges and processing seconds. Per-vault
 processing seconds include metadata enrichment but exclude shared batch reads
 and the initial batched metadata lookup; they are diagnostics, not additive
