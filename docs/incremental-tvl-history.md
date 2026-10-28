@@ -135,14 +135,18 @@ observation. Collection/backfill remains responsible for repairing those gaps.
 ## Benchmark and validation
 
 [The saved receipt](tvl-incremental-benchmark-2026-10-27.json) contains three
-sequential local trials against the actual original full-history implementation
-at integration commit `3db530831ce79bec597a43f5ab795d45d1ed8ab7`. The original cache
-module was loaded with the same financial accounting and the surviving guarded
-fixture builder. Each trial uses 80 vaults, one ownership edge per date, 32
-initial dates and the same final 33 dates; daily refresh adds one date, then a
-targeted repair changes a captured quote and ownership on an older date.
+sequential local trials on the final recovery-corrected implementation. Each
+trial compares the current explicit full-rebuild path (`--full-rebuild`) against
+incremental preparation, using 80 vaults, one ownership edge per date, 32 initial
+dates and the same final 33 dates. Daily refresh adds one date; targeted repair
+changes a captured quote and ownership on an older date.
 
-| Per refresh/backfill | Original full path | Incremental |
+A separate one-off probe loaded the original cache module from integration
+commit `3db530831ce79bec597a43f5ab795d45d1ed8ab7`. The receipt records that probe's
+method, but the original-module loader is not retained. That probe is not the
+source of the three saved trials or the timing medians below.
+
+| Per refresh/backfill | Current explicit full rebuild | Incremental |
 | --- | ---: | ---: |
 | Network dates accounted | 33 | 1 |
 | Dates reused | 0 | 32 |
@@ -156,7 +160,7 @@ targeted repair changes a captured quote and ownership on an older date.
 
 Median historical chart-copy time is 0.018s for daily refresh and 0.019s for
 backfill; totals-copy time is about 0.002s each. All trials retain matching
-sorted chart/totals digests between incremental and original full output.
+sorted chart/totals digests between incremental and current explicit full-rebuild output.
 An independent known first-day external total is 7,950; the corrected older
 date is 7,960. Separate integration coverage compares dependent analytics,
 unknown values, genuine zero, current-only bridge transitions, broader policy
@@ -177,10 +181,12 @@ python -m pytest -q tests/test_tvl_incremental.py tests/test_tvl_history_cache.p
 python -m pytest -q -s tests/test_tvl_incremental_benchmark.py
 ```
 
-The surviving benchmark compares the current explicit full path with incremental
-preparation. The one-off original-module probe was consolidated into the saved
-receipt; its shared fixture/result/work assertions remain in the benchmark.
-CI still runs the complete existing suite on both Python matrices.
+The retained benchmark harness compares incremental preparation against the
+current explicit full-rebuild path. The receipt's `measurement`, `baselineMethod`
+and `baselineReproducibility` fields distinguish those retained trials from the
+separate historical original-module probe. Its loader is not part of the
+supported reproduction command. CI still runs the complete existing suite on
+both Python matrices.
 
 Gap receipts begin at each chain’s first retained observation. A newly added chain
 does not create gaps before that date. Targeted-backfill receipts record the
