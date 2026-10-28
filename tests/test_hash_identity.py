@@ -124,3 +124,39 @@ def test_envio_and_rpc_inventory_reuse_legacy_hash_spelling(db, monkeypatch):
         assert write_rows(db, 'vault_inventory_events', rows) == 0
     assert db.execute('SELECT count(*) FROM vault_inventory_events').fetchone()[0] == 1
     assert db.execute('SELECT tx_hash FROM vault_inventory_events').fetchone()[0] == MIXED
+
+
+@pytest.mark.parametrize('stored_hash', [MIXED, MIXED.lower()])
+def test_volume_excludes_harvest_mints_without_rewriting_report_keys(db, monkeypatch, stored_hash):
+    from types import SimpleNamespace
+    from eth_abi import encode
+    from hexbytes import HexBytes
+    from web3 import Web3
+    from yearn_data import indexing
+
+    helpers.seed(db, version='v2')
+    user_tx = '0x' + 'ef' * 32
+    with db:
+        db.execute('''INSERT INTO strategy_reports
+            (chain_id,version,vault_address,strategy_address,tx_hash,log_index,
+             block_number,block_timestamp,asset,asset_decimals,gain_raw,loss_raw,net_raw)
+            VALUES(10,'v2',?,?,?,0,25,1000,?,6,'0','0','0')''',
+            (helpers.VAULT, helpers.ASSET, stored_hash, helpers.ASSET))
+        db.execute('INSERT INTO block_timestamps VALUES(10,25,1000)')
+        db.execute('''INSERT INTO vault_share_prices
+            (chain_id,vault_address,block_number,price_per_share_raw,share_decimals,source,updated_at)
+            VALUES(10,?,25,'1000000',6,'fixture',0)''', (helpers.VAULT,))
+    logs = [dict(address=helpers.VAULT, blockNumber=25, transactionIndex=index,
+                 logIndex=index, transactionHash=HexBytes(tx),
+                 topics=[HexBytes(indexing.erc20_transfer_topic()), HexBytes(indexing.ZERO_TOPIC),
+                         HexBytes('0x' + '00' * 12 + helpers.ASSET[2:])],
+                 data=HexBytes(encode(['uint256'], [1_000_000])))
+            for index, tx in enumerate([MIXED.lower(), user_tx])]
+    w3 = SimpleNamespace(codec=Web3().codec, eth=SimpleNamespace(
+        get_logs=lambda params: logs if params['topics'][1] == indexing.ZERO_TOPIC else []))
+    monkeypatch.setattr(indexing, 'web3_for', lambda chain: w3)
+
+    assert indexing.index_all_volume(db, chains=['op'], versions=['v2'], to_block=25) == 1
+    assert [tuple(row) for row in db.execute(
+        'SELECT tx_hash, direction, assets_raw FROM vault_flows')] == [(user_tx, 'deposit', '1000000')]
+    assert db.execute('SELECT tx_hash FROM strategy_reports').fetchone()[0] == stored_hash

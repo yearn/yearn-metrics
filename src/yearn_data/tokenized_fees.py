@@ -58,6 +58,40 @@ def validate_inventory(vault):
             'asset_decimals':decimals}
 
 
+
+def inventory_fingerprint(vault):
+    return hashlib.sha256(json.dumps(validate_inventory(vault),sort_keys=True).encode()).hexdigest()
+
+
+def pending_tokenized_ranges(conn,inventory,chain,from_block,to_block,before_timestamp,*,
+                             chunk_size=2000,confirmations=None):
+    """Reuse complete earlier-cutoff ranges with identical inventory/finality policy.
+
+    Native indexing proves each range end is before its cutoff before committing
+    it. Forward refreshes can subtract those intervals without rescanning them.
+    """
+    from .coverage import uncovered_ranges
+    if min(from_block,to_block)<0 or from_block>to_block or chunk_size<1:
+        raise ValueError('invalid Tokenized range bounds')
+    if confirmations is not None and (isinstance(confirmations,bool) or confirmations<1):
+        raise ValueError('confirmations must be positive')
+    chain_id=CHAINS[chain].chain_id
+    policy='finalized' if confirmations is None else f'latest-minus-{confirmations}'
+    targets=[]
+    seen=set()
+    for vault in sorted((validate_inventory(v) for v in inventory if v['chain_id']==chain_id),key=lambda v:v['address']):
+        if vault['address'] in seen:raise ValueError('duplicate Tokenized inventory addresses')
+        seen.add(vault['address'])
+        first=max(from_block,int(vault['deployment_block']))
+        if first>to_block:continue
+        saved=conn.execute("""SELECT from_block,to_block FROM tokenized_fee_ranges
+            WHERE chain_id=? AND vault_address=? AND inventory_hash=? AND finality_policy=?
+            AND before_timestamp<=? AND to_block>=? AND from_block<=? ORDER BY from_block,to_block""",
+            (chain_id,vault['address'],inventory_fingerprint(vault),policy,before_timestamp,first,to_block))
+        targets.extend(dict(vault=vault,fromBlock=lo,toBlock=hi) for lo,hi in
+                       uncovered_ranges(saved,first,to_block,chunk_size))
+    return targets
+
 def decode_tokenized_fee(vault, log, header):
     vault=validate_inventory(vault)
     if log.get('removed') or log['address'].lower()!=vault['address']:
@@ -87,8 +121,31 @@ def decode_tokenized_fee(vault, log, header):
             'inventory':vault}
 
 
+class TokenizedWindow:
+    """One validated finality/time window and header cache for a bounded batch."""
+    def __init__(self, client, chain, to_block, before_timestamp, confirmations=None):
+        self.client = client
+        self.chain_id = CHAINS[chain].chain_id
+        self.to_block = to_block
+        self.before_timestamp = before_timestamp
+        self.confirmations = confirmations
+        if client.eth.chain_id != self.chain_id:
+            raise ValueError('RPC chain mismatch')
+        if confirmations is not None and (isinstance(confirmations, bool) or confirmations <= 0):
+            raise ValueError('confirmations must be a positive block count')
+        self.policy = 'finalized' if confirmations is None else f'latest-minus-{confirmations}'
+        head = client.eth.get_block('finalized' if confirmations is None else 'latest')
+        self.boundary = _number(head['number']) - (confirmations or 0)
+        if to_block > self.boundary:
+            raise ValueError('requested range extends beyond selected finality boundary')
+        end = client.eth.get_block(to_block)
+        if _number(end['timestamp']) >= before_timestamp:
+            raise ValueError('requested range extends beyond exclusive time cutoff')
+        self.headers = {to_block: end}
+
+
 def index_tokenized_fees(conn, inventory, chain, from_block, to_block, before_timestamp,
-                         chunk_size=2000, max_vaults=10, client=None, confirmations=None):
+                         chunk_size=2000, max_vaults=10, client=None, confirmations=None, *, window=None):
     """Import explicit finalized ranges; commit each complete vault/chunk atomically."""
     if min(from_block,to_block)<0 or to_block<from_block or min(chunk_size,max_vaults,before_timestamp)<=0:
         raise ValueError('invalid bounded Tokenized indexing range')
@@ -101,22 +158,14 @@ def index_tokenized_fees(conn, inventory, chain, from_block, to_block, before_ti
     if len(vaults)>max_vaults:
         raise ValueError('inventory exceeds max-vaults; select a smaller inventory or raise the bound explicitly')
     client=client or web3_for(chain)
-    if client.eth.chain_id!=chain_id:
-        raise ValueError('RPC chain mismatch')
-    if confirmations is not None and (isinstance(confirmations, bool) or confirmations <= 0):
-        raise ValueError('confirmations must be a positive block count')
-    policy = 'finalized' if confirmations is None else f'latest-minus-{confirmations}'
-    head = client.eth.get_block('finalized' if confirmations is None else 'latest')
-    boundary = _number(head['number']) - (confirmations or 0)
-    if to_block > boundary:
-        raise ValueError('requested range extends beyond selected finality boundary')
-    end=client.eth.get_block(to_block)
-    if _number(end['timestamp'])>=before_timestamp:
-        raise ValueError('requested range extends beyond exclusive time cutoff')
+    window = window or TokenizedWindow(client, chain, to_block, before_timestamp, confirmations)
+    if (window.client is not client or window.chain_id != chain_id or to_block > window.to_block
+            or before_timestamp != window.before_timestamp or confirmations != window.confirmations):
+        raise ValueError('Tokenized batch window does not match request scope')
+    policy, boundary, headers = window.policy, window.boundary, window.headers
     counts={'vaults':len(vaults),'completed_chunks':0,'reused_chunks':0,'events':0,'finality_policy':policy,'finality_boundary':boundary}
-    headers={to_block:end}
     for vault in vaults:
-        fingerprint=hashlib.sha256(json.dumps(vault,sort_keys=True).encode()).hexdigest()
+        fingerprint=inventory_fingerprint(vault)
         start=max(from_block,int(vault['deployment_block']))
         for first in range(start,to_block+1,chunk_size):
             last=min(first+chunk_size-1,to_block)

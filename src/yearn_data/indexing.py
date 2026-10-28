@@ -636,10 +636,10 @@ def _strategy_report_txs_for_logs(conn, chain_id: int, logs: list[dict[str, Any]
         return set()
     found: set[tuple[str, str]] = set()
     for pair_chunk in _chunks(pairs, 400):
-        clauses = " OR ".join("(vault_address=? AND tx_hash=?)" for _ in pair_chunk)
+        clauses = " OR ".join("(vault_address=? AND lower(tx_hash)=?)" for _ in pair_chunk)
         params: list[Any] = [chain_id]
         for address, tx_hash in pair_chunk:
-            params.extend([address, tx_hash])
+            params.extend([address, tx_hash.lower()])
         rows = conn.execute(
             f"""
             SELECT vault_address, tx_hash
@@ -648,7 +648,7 @@ def _strategy_report_txs_for_logs(conn, chain_id: int, logs: list[dict[str, Any]
             """,
             params,
         ).fetchall()
-        found.update((Web3.to_checksum_address(row["vault_address"]), row["tx_hash"]) for row in rows)
+        found.update((Web3.to_checksum_address(row["vault_address"]), row["tx_hash"].lower()) for row in rows)
     return found
 
 
