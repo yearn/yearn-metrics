@@ -9,7 +9,7 @@ from test_pairing import snapshots
 from test_tvl_api import run, DAY, PARENT, CHILD, BRIDGE
 from yearn_data import canonical_history
 from yearn_data.canonical_history import consolidate
-from yearn_data.storage import connect, init_db
+from yearn_data.storage import connect, init_db, table_exists
 from yearn_data.pairing import select_pairing
 from yearn_data.tvl_api import TvlStore, TvlDataset
 from yearn_data.tvl_history_cache import prepare
@@ -110,6 +110,24 @@ def assert_consolidated(database,tvl):
 
 def test_every_historical_key_and_selected_value_survives(legacy):
     assert_consolidated(legacy[0],legacy[3])
+
+
+def test_consolidation_accepts_pre_index_chart_schema(published):
+    database, _, _, _ = published
+    # Model an already selected legacy chart: all serving data is present,
+    # but the newer incremental bookkeeping tables have never been installed.
+    with closing(connect(database)) as conn:
+        for table in canonical_history.OPTIONAL_DERIVED:
+            conn.execute('DROP TABLE ' + table)
+        conn.commit()
+    original = database_rows(database)
+    for apply in (False, True):
+        receipt = consolidate(database, apply=apply)
+        assert not canonical_history.OPTIONAL_DERIVED.intersection(receipt['derived'])
+        assert database_rows(database) == original
+        with closing(connect(database)) as conn:
+            assert all(not table_exists(conn, table)
+                       for table in canonical_history.OPTIONAL_DERIVED)
 
 
 @pytest.mark.parametrize('table', ['tvl_snapshots','tvl_positions','analysis_outputs','tvl_chart_rows'])

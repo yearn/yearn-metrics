@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlsplit
 from .tvl import account, decimal, value_nested_shares
 from .tvl_policy import VAULT_POLICIES, TARGET_CORRECTIONS, classify_vault
 from .storage import connect, database_reference, table_exists, DATABASE_ERRORS
+from .tvl_revision import accounting_revision
 
 CHAINS = {1: 'Ethereum', 10: 'Optimism', 100: 'Gnosis', 137: 'Polygon', 250: 'Fantom',
           999: 'HyperEVM', 4663: 'Yeer', 8453: 'Base', 42161: 'Arbitrum', 747474: 'Katana'}
@@ -131,6 +132,7 @@ def publish_tvl(database, publication, *, current_bridge_policy='none', before_t
             allocator_keys = [list(r) for r in conn.execute(
                 "SELECT DISTINCT chain_id,lower(vault_address) FROM strategy_reports WHERE version='v3'")]
     context = {'runs': runs, 'catalog': catalog, 'allocatorKeys': sorted(allocator_keys),
+               'accountingRevision': accounting_revision(),
                'deductInternalCuration': True,
                'ownershipAccounting': 'all-yearn-v1',
                'vaultPolicies': VAULT_POLICIES, 'targetCorrections': TARGET_CORRECTIONS,
@@ -172,6 +174,14 @@ class RetiredTvlDataset(ValueError):
 
 class TvlDataset:
     def __init__(self, manifest):
+        self._init_accounting(manifest)
+        self._lock = threading.RLock()
+        self._pending = {}
+        self._history_cache = OrderedDict()
+        self._history_cache_bytes = 0
+        self._prepared = None
+
+    def _init_accounting(self, manifest):
         self.manifest = manifest
         self.id = manifest['datasetId']
         self.database = manifest['database']
@@ -187,11 +197,6 @@ class TvlDataset:
             if previous is not None and decimal(previous['priceUsd']) != decimal(row['priceUsd']):
                 raise ValueError('TVL publication cannot use conflicting quotes at one rejection coordinate')
             self.price_rejections[coordinate] = row
-        self._lock = threading.RLock()
-        self._pending = {}
-        self._history_cache = OrderedDict()
-        self._history_cache_bytes = 0
-        self._prepared = None
 
     def history_prepared(self):
         # Preparation may finish after this API process first saw the dataset.
@@ -390,21 +395,26 @@ class TvlDataset:
                     yield timestamp,selected,related,diagnostics
             return
         with closing(read_db(self.database)) as conn, conn:
-            snapshots = groupby(self.selected_rows(conn, 'tvl_snapshots', timestamps, chain_id), lambda r: r['timestamp'])
-            edges = iter(groupby(self.selected_rows(conn, 'tvl_positions', timestamps, chain_id), lambda r: r['timestamp']))
-            edge_group = next(edges, None)
-            for timestamp, points in snapshots:
-                points = list(points)
-                while edge_group and edge_group[0] < timestamp:
-                    list(edge_group[1])
-                    edge_group = next(edges, None)
-                positions = list(edge_group[1]) if edge_group and edge_group[0] == timestamp else []
-                if edge_group and edge_group[0] == timestamp:
-                    edge_group = next(edges, None)
+            for timestamp, points, positions in self.input_frames(conn, timestamps):
                 rows, positions, diagnostics = self.account_frame(timestamp, points, positions, include_curation=include_curation)
                 # Retirement is a display filter, not an ownership boundary.
                 rows = [r for r in rows if include_retired or self.catalog.get(key(r),{}).get('active',1)]
                 yield timestamp, rows, positions, diagnostics
+
+    def input_frames(self, conn, timestamps):
+        """Stream captured inputs through the caller's transaction/snapshot."""
+        snapshots = groupby(self.selected_rows(conn, 'tvl_snapshots', timestamps), lambda r: r['timestamp'])
+        edges = iter(groupby(self.selected_rows(conn, 'tvl_positions', timestamps), lambda r: r['timestamp']))
+        edge_group = next(edges, None)
+        for timestamp, points in snapshots:
+            points = list(points)
+            while edge_group and edge_group[0] < timestamp:
+                list(edge_group[1])
+                edge_group = next(edges, None)
+            positions = list(edge_group[1]) if edge_group and edge_group[0] == timestamp else []
+            if edge_group and edge_group[0] == timestamp:
+                edge_group = next(edges, None)
+            yield timestamp, points, positions
 
     def account_frame(self, timestamp, points, positions, *, include_curation=None):
         """Account one captured close without accessing storage."""
