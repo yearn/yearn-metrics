@@ -134,7 +134,7 @@ def tvl_plan(conn,options):
         (json_extract(p.data_json,'$.owned_usd') IS NOT NULL OR
          CAST(json_extract(p.data_json,'$.debt_usd') AS NUMERIC)=0) THEN 1 ELSE 0 END)=0''',
         (*options.chain_ids,options.cutoff))}
-    missing=[];deferred=[]
+    targets=[];missing=[];deferred=[]
     for chain,expected in sorted(catalog.items()):
         retained=[day for cid,day in repairs if cid==chain]
         first=options.first_close if options.first_close is not None else ((min(retained)//DAY)*DAY+DAY-1 if retained else None)
@@ -142,7 +142,8 @@ def tvl_plan(conn,options):
         for day in range(first,options.cutoff,DAY):
             absent=expected-observations.get((chain,day),set())
             repair=(any(not repairs.get((chain,day),{}).get(v,False) for v in expected) or (chain,day) in bad_edges)
-            if absent or options.repair_history:
-                missing.append((chain,day))
+            if absent or options.repair_history:targets.append((chain,day))
+            if absent:missing.append((chain,day))
             elif repair:deferred.append(dict(chainId=chain,timestamp=day,reason='price-or-ownership-unavailable'))
-    return dict(targets=missing,deferredRepairs=deferred,expectedVaults={str(c):len(v) for c,v in catalog.items()})
+    return dict(targets=targets,unresolvedTargets=missing,deferredRepairs=deferred,
+                expectedVaults={str(c):len(v) for c,v in catalog.items()})

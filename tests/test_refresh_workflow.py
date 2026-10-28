@@ -391,3 +391,27 @@ def test_discovered_inventory_resume_keeps_financial_ids_and_ignores_bookkeeping
     assert published['status']=='selected',published
     assert 'reports:eth' in [e['stage'] for e in events if e['event']=='stage-reused']
     assert all(published['result'][k]==first['result'][k] for k in fields)
+
+
+def test_forced_tvl_repairs_report_actual_gaps_after_collection(workflow,monkeypatch):
+    from dataclasses import replace
+    options,_=workflow
+    quote=tvl_sources.fetch_yearn_price
+    def partly_unavailable(chain,asset,timestamp):
+        if timestamp==86399:return None,'missing',{'reason':'offline-price-gap'}
+        return quote(chain,asset,timestamp)
+    monkeypatch.setattr(tvl_sources,'fetch_yearn_price',partly_unavailable)
+    initial=refresh.run_refresh(options,mode='acquire')
+    assert initial['status']=='acquired',initial
+    expected=[dict(chainId=1,timestamp=86399,reason='price-or-ownership-unavailable')]
+    assert initial['result']['gaps']['unresolvedTvlChainDates']==[]
+    assert initial['result']['gaps']['deferredTvlRepairs']==expected
+    events=[]
+    repaired=refresh.run_refresh(replace(options,repair_history=True),mode='acquire',progress=events.append)
+    assert repaired['status']=='acquired',repaired
+    assert [e['timestamp'] for e in events if e['event']=='tvl-collection-started']==[86399,172799]
+    assert repaired['result']['gaps']['unresolvedTvlChainDates']==[]
+    assert repaired['result']['gaps']['deferredTvlRepairs']==expected
+    stage=next(s for s in repaired['stages'] if s['name']=='tvl-collection')
+    assert stage['result']['unresolvedChainDates']==[]
+    assert stage['result']['deferredRepairs']==expected

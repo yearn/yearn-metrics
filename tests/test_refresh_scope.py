@@ -75,7 +75,10 @@ def test_daily_plan_preserves_zero_and_lists_missing_chain_closes_and_price_repa
     plan=tvl_plan(db,options)
     assert plan['targets']==[(1,DAY+86400),(10,DAY+86400),(10,DAY+2*86400)]
     assert plan['deferredRepairs']==[dict(chainId=1,timestamp=DAY+2*86400,reason='price-or-ownership-unavailable')]
-    assert len(tvl_plan(db,replace(options,repair_history=True))['targets'])==6
+    forced=tvl_plan(db,replace(options,repair_history=True))
+    assert len(forced['targets'])==6
+    assert forced['unresolvedTargets']==plan['targets']
+    assert forced['deferredRepairs']==plan['deferredRepairs']
     with db:
         db.execute("UPDATE tvl_snapshots SET data_json=? WHERE chain_id=1 AND timestamp=?",(
             json.dumps(dict(chain_id=1,vault=PARENT,timestamp=DAY+2*86400,asset_units=None,tvl_usd=None)),DAY+2*86400))

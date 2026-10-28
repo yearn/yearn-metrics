@@ -263,7 +263,7 @@ class RefreshWorker:
                         price_source='yearn-prices',reader_factory=tvl_sources.ArchiveReader)
             result=self.drain(saved,_page(work,key),apply,key,dates=True)
             remaining=tvl_plan(conn,self.options)
-        return result|{'unresolvedChainDates':remaining['targets'],'deferredRepairs':remaining['deferredRepairs'],
+        return result|{'unresolvedChainDates':remaining['unresolvedTargets'],'deferredRepairs':remaining['deferredRepairs'],
                        'expectedVaults':remaining['expectedVaults']}
 
     def source_ages(self):
@@ -363,7 +363,7 @@ class RefreshWorker:
             tvl_gaps=tvl_plan(conn,self.options)
         return dict(canonicalReports=report_counts,reportPrices=price_counts,feePrices=fee_counts,
                     unpriceableFeeEvents=fee_work.metadata_gaps,
-                    unresolvedTvlChainDates=tvl_gaps['targets'],deferredTvlRepairs=tvl_gaps['deferredRepairs'])
+                    unresolvedTvlChainDates=tvl_gaps['unresolvedTargets'],deferredTvlRepairs=tvl_gaps['deferredRepairs'])
 
     def pipeline(self,mode):
         self.job.begin_pass()
