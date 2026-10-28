@@ -106,6 +106,7 @@ def test_publish_lifetime_yield_headline_sets_atomic_json_with_ttl(postgres_data
     # A legacy anchor has no evidence of complete valuation or stable history.
     assert payload["rate_usd_per_sec"] == 0
     assert payload['as_of_ms'] == 20_000
+    assert payload['prev_net_yield_usd'] == 100 and payload['prev_as_of_ms'] == 20_000
     assert redis.set_args == (LIFETIME_YIELD_HEADLINE_KEY, payload_json)
     assert redis.set_kwargs == {"ex": 3600}
     assert json.loads(payload_json)["run_id"] == "run"
@@ -171,7 +172,11 @@ def test_only_new_tail_earnings_contribute_to_redis_extrapolation(postgres_datab
         for report in reports:
             write_output(conn, run_id, 'reports', report)
         complete_analysis_run(conn, run_id)
+        before = redis.raw
+        dry, dry_json = publish_lifetime_yield_headline(conn, redis_client=redis, now_ms=now, dry_run=True)
+        assert redis.raw == before
         payload, serialized = publish_lifetime_yield_headline(conn, redis_client=redis, now_ms=now)
+        assert dry == payload and dry_json == serialized
         assert payload['rate_usd_per_sec'] == expected_rate
         assert json.loads(serialized)['valuation_complete'] is True
 
@@ -204,23 +209,24 @@ def test_covered_earnings_rate_is_independent_of_publication_gap(publication_gap
     assert payload['as_of_ms'] >= previous['as_of_ms']
 
 
-def test_streamed_coverage_preserves_digests_and_rejects_invalid_rows(postgres_database, tmp_path):
+@pytest.mark.parametrize('include_digests', [True, False])
+def test_streamed_coverage_preserves_digests_and_rejects_invalid_rows(postgres_database, tmp_path, include_digests):
     from yearn_data.headline import _retained_coverage
     conn, run_id = _db_with_lifetime_yield(tmp_path, value='100')
     reports = [dict(tx_hash='0xreport', block_timestamp=100, net_yield_usd='100'),
                dict(tx_hash='0xearlier', block_timestamp=50, net_yield_usd='5')]
     write_output(conn, run_id, 'reports', reports[1])
     conn.commit()
-    current, historical, latest = _retained_coverage(conn, run_id, 2, 75)
-    assert current == _coverage_digest(reports)
-    assert historical == _coverage_digest([reports[1]])
+    current, historical, latest = _retained_coverage(conn, run_id, 2, 75, include_digests=include_digests)
+    assert current == (_coverage_digest(reports) if include_digests else None)
+    assert historical == (_coverage_digest([reports[1]]) if include_digests else None)
     assert latest == 100
     with pytest.raises(ValueError, match='incomplete report coverage'):
-        _retained_coverage(conn, run_id, 3, 75)
+        _retained_coverage(conn, run_id, 3, 75, include_digests=include_digests)
     write_output(conn, run_id, 'reports', {'block_timestamp': True})
     conn.commit()
     with pytest.raises(ValueError, match='incomplete report coverage'):
-        _retained_coverage(conn, run_id, 3, 75)
+        _retained_coverage(conn, run_id, 3, 75, include_digests=include_digests)
 
 
 
@@ -243,5 +249,16 @@ def test_cutoffless_analyses_publish_totals_without_claiming_extrapolation_cover
         assert payload['net_yield_usd']==14*index
         assert payload['rate_usd_per_sec']==0
         assert payload['coverage_through_timestamp'] is None
+        assert payload['coverage_digest'] is None
+        if index == 2:
+            assert payload['prev_net_yield_usd']==14 and payload['prev_as_of_ms']==1000
         assert json.loads(serialized)['extrapolation_status']=='unbounded-analysis'
         assert json.loads(redis.raw)['net_yield_usd']==14*index
+
+
+
+def test_offline_dry_run_does_not_predict_an_unread_anchor(postgres_database,tmp_path):
+    conn,_=_db_with_lifetime_yield(tmp_path)
+    payload,_=publish_lifetime_yield_headline(conn,dry_run=True)
+    assert payload['extrapolation_status']=='anchor-not-read'
+    assert payload['rate_usd_per_sec']==0

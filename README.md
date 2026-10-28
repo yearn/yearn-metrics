@@ -92,13 +92,30 @@ Rows changed by an incident adjustment are marked in `reports.csv` with `is_adju
 
 ### Redis Headline
 
-After a completed `lifetime-yield` analysis run, publish the odometer headline payload with:
+A ticking estimate needs bounded analyses, not just `run lifetime-yield`, which
+produces unbounded totals. After indexing and pricing, analyze through an explicit
+closed UTC midnight and publish:
 
 ```bash
+CUTOFF=$(date -u -d '00:00 today' +%s)
+yearn-data analyze lifetime-yield --before-timestamp "$CUTOFF"
 REDIS_URL='rediss://...' yearn-data publish lifetime-yield --ttl 259200
 ```
 
-The publisher atomically replaces `lifetime_yield:headline` with one JSON blob containing `net_yield_usd`, `as_of_ms`, `rate_usd_per_sec`, previous anchor fields, and `run_id`. Use `--dry-run` to print the payload without touching Redis.
+The publisher atomically replaces `lifetime_yield:headline` with one JSON blob containing `net_yield_usd`, `as_of_ms`, `rate_usd_per_sec`, previous anchor fields, and `run_id`. Use `--dry-run` to inspect without writing Redis. With a Redis URL configured,
+it reads the existing anchor and makes the same extrapolation decision as a
+publish. Without Redis it reports `anchor-not-read` rather than predicting a
+reset. Unbounded analyses always report `unbounded-analysis`.
+
+The first bounded publication seeds a zero-rate anchor. Repeat at a later cutoff
+to derive a rate from a comparable covered interval. `net_yield_usd` is the stored
+value through `coverage_through_timestamp`, while `as_of_ms` is publication time.
+For a `coverage-verified` estimate, consumers tick from the coverage timestamp:
+`net_yield_usd + rate_usd_per_sec * max(0, now_ms / 1000 - coverage_through_timestamp)`.
+This includes any delay between the close and publication; it remains an estimate.
+Do not tick from `as_of_ms`. On resets or unbounded runs the rate is zero.
+The `prev_*` fields retain the actual previous publication even when no rate can
+be inferred; they do not fabricate a replacement anchor on resets.
 
 Publishing requires explicit complete valuation counts and retained report rows.
 Incomplete or legacy summaries with unknown completeness fail before replacing
@@ -113,7 +130,8 @@ with a zero rate, `coverage_through_timestamp: null` and
 `extrapolation_status: "unbounded-analysis"`; analysis start time never stands in
 for closed chain coverage. Bounded anchors report `coverage-verified` or
 `coverage-reset` according to the historical comparability check. Retained coverage is checked in
-one bounded-memory streaming pass. New reports after that history can contribute yield; backfills, changed historical
+one bounded-memory streaming pass; unbounded runs validate rows without sorting
+or computing unusable coverage digests. New reports after that history can contribute yield; backfills, changed historical
 valuations, source-policy changes and legacy anchors reset the rate to zero.
 Anchor timestamps remain monotonic across a reset. Existing Redis publications
 are not changed until this command is explicitly invoked.
