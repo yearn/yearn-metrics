@@ -11,7 +11,7 @@ from ipaddress import ip_address
 import uuid
 
 import psycopg
-from psycopg.pq import TransactionStatus
+from psycopg.pq import PipelineStatus, TransactionStatus
 
 
 QUOTED = re.compile(r"('(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|--[^\n]*(?:\n|$)|/\*[\s\S]*?\*/)")
@@ -187,9 +187,17 @@ class Connection:
             self.raw.execute(statement)
 
     def commit(self):
+        # scripts/update_postgres.py holds raw.pipeline() open across the
+        # lifetime-yield and fee-usd jobs. Their queued BEGIN/writes may still
+        # report IDLE; drain before the driver decides whether to commit.
+        if self.raw.pgconn.pipeline_status != PipelineStatus.OFF:
+            with self.raw.pipeline() as pipeline:
+                pipeline.sync()
         self.raw.commit()
 
     def rollback(self):
+        # psycopg rollback already syncs an active pipeline before checking
+        # transaction status, unlike its commit path. Delegate that recovery.
         self.raw.rollback()
 
     def close(self):

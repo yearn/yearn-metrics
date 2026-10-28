@@ -51,6 +51,19 @@ def complete_analysis_run(conn, run_id: int, status: str = "complete") -> None:
     conn.commit()
 
 
+def run_analysis(conn, name, calculate, *args, params=None):
+    run_id = create_analysis_run(conn, name, params)
+    try:
+        calculate(conn, run_id, *args)
+        # Commit outputs and the completed marker together.
+        complete_analysis_run(conn, run_id)
+    except BaseException:
+        conn.rollback()
+        complete_analysis_run(conn, run_id, status='failed')
+        raise
+    return run_id
+
+
 def write_output(conn, run_id: int, name: str, row: dict[str, Any]) -> None:
     conn.execute(
         "INSERT INTO analysis_outputs (run_id, name, row_json) VALUES (?, ?, ?)",
@@ -95,21 +108,21 @@ def run_lifetime_yield(
         raise ValueError(f"unsupported price source {price_source!r}")
     if fallback_price_source is not None and fallback_price_source not in SUPPORTED_SOURCES:
         raise ValueError(f"unsupported fallback price source {fallback_price_source!r}")
+    return run_analysis(conn, 'lifetime-yield', _write_lifetime_yield,
+        price_source, fallback_price_source, before_timestamp, params={
+            'price_source': price_source,
+            'fallback_price_source': fallback_price_source,
+            'before_timestamp': before_timestamp,
+        })
+
+
+def _write_lifetime_yield(conn, run_id, price_source, fallback_price_source, before_timestamp):
     price_sources = [price_source]
     if fallback_price_source is not None and fallback_price_source != price_source:
         price_sources.append(fallback_price_source)
     source_placeholders = ",".join("?" for _ in price_sources)
     priority = " ".join(
         f"WHEN ? THEN {position}" for position, _ in enumerate(price_sources)
-    )
-    run_id = create_analysis_run(
-        conn,
-        "lifetime-yield",
-        {
-            "price_source": price_source,
-            "fallback_price_source": fallback_price_source,
-            "before_timestamp": before_timestamp,
-        },
     )
     rows = conn.execute(
         f"""
@@ -275,9 +288,6 @@ def run_lifetime_yield(
         ):
             serialized[key] = _decimal_or_none(serialized[key])
         write_output(conn, run_id, output_name, serialized)
-    conn.commit()
-    complete_analysis_run(conn, run_id)
-    return run_id
 
 
 def _empty_fee_bucket(dimension: str, key: str, row: dict[str, Any]) -> dict[str, Any]:
@@ -389,7 +399,10 @@ def run_vault_fees(conn) -> int:
     in the same transaction as a V2 StrategyReported event.
     """
 
-    run_id = create_analysis_run(conn, "vault-fees")
+    return run_analysis(conn, 'vault-fees', _write_vault_fees)
+
+
+def _write_vault_fees(conn, run_id):
     totals: dict[tuple[str, str], dict[str, Any]] = {}
 
     v3_rows = conn.execute(
@@ -509,9 +522,6 @@ def run_vault_fees(conn) -> int:
         _add_fee_to_totals(totals, output)
 
     _write_fee_totals(conn, run_id, totals)
-    conn.commit()
-    complete_analysis_run(conn, run_id)
-    return run_id
 
 
 def _selected_price_join(table_alias: str) -> str:
@@ -606,7 +616,10 @@ def _add_volume_to_totals(
 
 
 def run_vault_volume(conn) -> int:
-    run_id = create_analysis_run(conn, "vault-volume")
+    return run_analysis(conn, 'vault-volume', _write_vault_volume)
+
+
+def _write_vault_volume(conn, run_id):
     totals: dict[tuple[str, str], dict[str, Any]] = {}
 
     vault_rows = conn.execute(
@@ -715,6 +728,3 @@ def run_vault_volume(conn) -> int:
         ):
             serialized[key] = _decimal_or_none(serialized[key])
         write_output(conn, run_id, output_name, serialized)
-    conn.commit()
-    complete_analysis_run(conn, run_id)
-    return run_id
