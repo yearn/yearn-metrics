@@ -25,6 +25,9 @@ DERIVED = {
     'analytics_publications': ('id', 'analyticsPublicationId'),
     'api_releases': ('id', 'releaseId'),
 }
+# These indexes were introduced after legacy chart publications. Required
+# serving tables must still fail verification if missing.
+OPTIONAL_DERIVED = {'tvl_chart_inputs', 'tvl_chart_preparations'}
 DERIVED_KEYS = {
     'tvl_chart_rows': 'dataset_id,timestamp,chain_id,vault',
     'tvl_chart_totals': 'dataset_id,timestamp,group_by,mode,series',
@@ -52,6 +55,11 @@ def _record_sha(conn, columns, alias=''):
     values = ','.join(alias+column for column in columns)
     body = f'CAST(json_build_array({values}) AS TEXT)'
     return _sha(conn, body)
+
+
+def _available_derived(conn):
+    return {table: fields for table, fields in DERIVED.items()
+            if table not in OPTIONAL_DERIVED or table_exists(conn, table)}
 
 
 def _stage_derived(conn, table, column, identity):
@@ -199,7 +207,7 @@ def _delete_obsolete(conn, selection, keep):
                  (selection['analyticsPublicationId'],))
     if conn.execute("SELECT 1 FROM analytics_selection WHERE name<>'powerglove' LIMIT 1").fetchone():
         raise ValueError('additional analytics selections require explicit consolidation')
-    for table, (column, field) in DERIVED.items():
+    for table, (column, field) in _available_derived(conn).items():
         conn.execute(f'DELETE FROM {table} WHERE {column}<>?', (selection[field],))
     conn.execute("DELETE FROM api_manifests WHERE NOT ((kind='fees' AND id=?) OR (kind='tvl' AND id=?))",
                  (selection['feesDatasetId'], selection['tvlDatasetId']))
@@ -237,7 +245,7 @@ def consolidate(database, *, apply=False, progress=None):
             keep = _retained_analyses(conn, manifests['fees'])
             notify('Verifying analysis event coverage')
             report['analysis_outputs'] = _stage_analyses(conn, keep)
-            for table, (column, field) in DERIVED.items():
+            for table, (column, field) in _available_derived(conn).items():
                 notify('Inventorying current publication: '+table)
                 report['derived'][table] = _stage_derived(conn, table, column, selection[field])
             if not apply:
@@ -255,7 +263,7 @@ def consolidate(database, *, apply=False, progress=None):
             if mismatches or _count(conn, 'analysis_outputs') != report['analysis_outputs']['retained_rows']:
                 raise ValueError('analysis output order/value verification failed')
             report['analysis_outputs']['missing_or_changed_rows'] = mismatches
-            for table, (column, field) in DERIVED.items():
+            for table, (column, field) in _available_derived(conn).items():
                 report['derived'][table]['missing_or_changed_keys'] = _verify_derived(
                     conn, table, report['derived'][table]['retained_rows'])
             if _selection(conn)[0] != selection:

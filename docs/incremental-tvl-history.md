@@ -18,7 +18,7 @@ It does not reacquire historical observations or change accounting policy.
 | Catalog `updated_at` only, or identical selected evidence with a new run provenance ID | No recalculation of unchanged rows |
 | Reporting cutoff changes | Compare dates normally; current-close accounting still invalidates the affected closes |
 | Aggregate `observationRevision` changes | Compare dated evidence normally; the digest names captured inputs, not accounting policy |
-| No compatible durable input index | Full history; this includes first adoption and legacy prepared sources |
+| No compatible durable input index | Full history; this includes first adoption, legacy prepared sources, and quote-rejection-only repair outputs |
 
 The global context retains every manifest field except run inventory and known
 publication metadata, and retains every catalog field except `updated_at`.
@@ -86,6 +86,12 @@ financial revision; a changed accounting revision requires a new manifest. Run w
 new collection/manifest revision for a full recalculation or validation. The
 existing `--previous-dataset-id` remains the narrower quote-rejection-only
 repair mode; it cannot be combined with the general backfill/full flags.
+That repair path intentionally writes serving rows and totals without creating
+an incremental input index. After selecting the repaired revision and
+consolidating away older indexes, the next normal preparation rebuilds the
+full history once to establish a compatible index. Subsequent compatible
+refreshes resume dated reuse. The repair receipt's recomputed dates describe
+that repair only; they do not promise reuse on the following refresh.
 
 ## Checkpoints, gaps and coherent selection
 
