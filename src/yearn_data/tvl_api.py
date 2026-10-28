@@ -109,10 +109,14 @@ def chart_response(result,top=None):
     return output
 
 
-def publish_tvl(database, publication, *, current_bridge_policy='none'):
+def publish_tvl(database, publication, *, current_bridge_policy='none', before_timestamp=None,
+                observation_revision=None):
     """Publishing the union of finished runs never selects one latest backfill."""
     if current_bridge_policy not in ('none', 'retired-registry'):
         raise ValueError('unsupported current bridge policy')
+    if before_timestamp is not None:
+        from .analysis import closed_cutoff
+        before_timestamp=closed_cutoff(before_timestamp)
     with closing(read_db(database)) as conn:
         runs = [dict(r) for r in conn.execute(
             "SELECT * FROM tvl_runs WHERE status IN ('complete','incomplete') AND completed_at IS NOT NULL ORDER BY id")]
@@ -132,6 +136,10 @@ def publish_tvl(database, publication, *, current_bridge_policy='none'):
                'vaultPolicies': VAULT_POLICIES, 'targetCorrections': TARGET_CORRECTIONS,
                'currentBridgePolicy': current_bridge_policy, 'selectionPolicy': 'known-value-then-newest-finished-common-close-9', 'bridgeMigrations': BRIDGE_MIGRATIONS, 'priceRejections': PRICE_REJECTIONS,
                'historicalBridgePolicy': 'dated-evidence-only', 'database': database_reference(database)}
+    if before_timestamp is not None:
+        context['reportingCutoff']=before_timestamp
+    if observation_revision is not None:
+        context['observationRevision'] = observation_revision
     dataset_id = hashlib.sha256(encoded(context).encode()).hexdigest()
     root = Path(publication)
     (root/'datasets').mkdir(parents=True, exist_ok=True)
@@ -150,6 +158,8 @@ def publish_tvl(database, publication, *, current_bridge_policy='none'):
         temp = target.with_suffix('.tmp')
         temp.write_text(encoded(manifest)+'\n')
         temp.replace(target)
+    else:
+        manifest = json.loads(target.read_text())
     temp = root/'.current.tmp'
     temp.write_text(encoded({'datasetId': dataset_id})+'\n')
     temp.replace(root/'current.json')
@@ -217,18 +227,31 @@ class TvlDataset:
     def dates(self):
         with closing(read_db(self.database)) as conn:
             placeholders = ','.join('?' for _ in self.run_ids)
+            cutoff=self.manifest.get('reportingCutoff')
+            bounded=' AND timestamp<?' if cutoff is not None else ''
             return tuple(r[0] for r in conn.execute(
-                f'SELECT DISTINCT timestamp FROM tvl_snapshots WHERE run_id IN ({placeholders}) ORDER BY timestamp', self.run_ids))
+                f'SELECT DISTINCT timestamp FROM tvl_snapshots WHERE run_id IN ({placeholders}){bounded} ORDER BY timestamp',
+                (*self.run_ids,cutoff) if cutoff is not None else self.run_ids))
 
     @lru_cache(maxsize=1)
     def as_of(self):
         if self.manifest.get('asOfTimestamp') is not None:
             return self.manifest['asOfTimestamp']
-        expected = {c for r in self.manifest['runs'] for c in json.loads(r['params_json']).get('chain_ids',[])}
         marks = ','.join('?' for _ in self.run_ids)
         with closing(read_db(self.database)) as conn:
+            cutoff=self.manifest.get('reportingCutoff')
+            # Keep the complete run union for canonical-history retention, but
+            # future-only runs do not define the earlier reporting close.
+            eligible=(set(self.run_ids) if cutoff is None else {r[0] for r in conn.execute(
+                f'SELECT DISTINCT run_id FROM tvl_snapshots WHERE run_id IN ({marks}) AND timestamp<?',
+                (*self.run_ids,cutoff))})
+            expected = {c for r in self.manifest['runs'] if r['id'] in eligible
+                        for c in json.loads(r['params_json']).get('chain_ids',[])}
             if not expected:
-                expected = {r[0] for r in conn.execute(f'SELECT DISTINCT chain_id FROM tvl_snapshots WHERE run_id IN ({marks})',self.run_ids)}
+                bounded=' AND timestamp<?' if cutoff is not None else ''
+                expected = {r[0] for r in conn.execute(
+                    f'SELECT DISTINCT chain_id FROM tvl_snapshots WHERE run_id IN ({marks}){bounded}',
+                    (*self.run_ids,cutoff) if cutoff is not None else self.run_ids)}
             for timestamp in reversed(self.dates()):
                 observed = {r[0] for r in conn.execute(f"SELECT DISTINCT chain_id FROM tvl_snapshots WHERE run_id IN ({marks}) AND timestamp=? AND json_extract(data_json,'$.asset_units') IS NOT NULL",(*self.run_ids,timestamp))}
                 if expected <= observed:
@@ -241,6 +264,9 @@ class TvlDataset:
         Successful later repairs supersede earlier values only at the same identity
         and timestamp. Positions remain dated and must match the selected block.
         """
+        cutoff=self.manifest.get('reportingCutoff')
+        if cutoff is not None:timestamps=tuple(t for t in timestamps if t<cutoff)
+        if not timestamps:return
         dimensions, quality = observation_selection(table)
         run_marks = ','.join('?' for _ in self.run_ids)
         date_marks = ','.join('?' for _ in timestamps)
@@ -271,6 +297,8 @@ class TvlDataset:
         return row
 
     def reference_candidates(self, conn, timestamps, chain_id=None):
+        cutoff=self.manifest.get('reportingCutoff')
+        if cutoff is not None:timestamps=tuple(t for t in timestamps if t<cutoff)
         if not timestamps:
             return
         run_marks, date_marks = ','.join('?' for _ in self.run_ids), ','.join('?' for _ in timestamps)
