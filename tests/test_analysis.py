@@ -1,11 +1,106 @@
+from contextlib import nullcontext
 from decimal import Decimal
 
 import pytest
 
-from yearn_data.analysis import run_lifetime_yield, run_vault_fees, run_vault_volume
+from yearn_data.analysis import _usd, run_lifetime_yield, run_vault_fees, run_vault_volume
 from yearn_data.config import CHAINS
 from yearn_data.incident_adjustments import adjustment_for_tx
 from yearn_data.storage import connect, from_json, init_db, seed_chains
+
+
+@pytest.mark.parametrize(('job', 'failure', 'pipeline'), [
+    (job, failure, False) for job in (run_lifetime_yield, run_vault_fees, run_vault_volume)
+    for failure in (RuntimeError, KeyboardInterrupt)
+] + [(run_lifetime_yield, 'sql', False),
+     (run_lifetime_yield, RuntimeError, True), (run_lifetime_yield, 'sql', True)])
+def test_failed_analysis_rolls_back_outputs_and_allows_clean_retry(
+    postgres_database, monkeypatch, job, failure, pipeline,
+):
+    import psycopg
+    from yearn_data import analysis
+
+    conn = connect('staging')
+    init_db(conn)
+    conn.execute('''INSERT INTO strategy_reports
+        (chain_id,version,vault_address,strategy_address,tx_hash,log_index,block_number,
+         block_timestamp,asset,asset_decimals,gain_raw,loss_raw,net_raw,total_fees_raw)
+        VALUES(1,'v3','vault','strategy','report',0,10,100,'asset',6,'7','0','7','1')''')
+    conn.execute('''INSERT INTO vault_flows
+        (chain_id,version,vault_address,direction,tx_hash,log_index,block_number,
+         block_timestamp,asset,asset_decimals,assets_raw,shares_raw)
+        VALUES(1,'v3','vault','deposit','deposit',0,10,100,'asset',6,'7','7')''')
+    conn.commit()
+    original_write = analysis.write_output
+
+    def interrupt_after_output(*args):
+        original_write(*args)
+        if failure == 'sql':
+            conn.execute('SELECT * FROM missing_analysis_relation').fetchone()
+        raise failure('interrupted analysis output')
+
+    monkeypatch.setattr(analysis, 'write_output', interrupt_after_output)
+    error_type = psycopg.errors.UndefinedTable if failure == 'sql' else failure
+    with conn.raw.pipeline() if pipeline else nullcontext():
+        with pytest.raises(error_type):
+            job(conn)
+    # A caller rollback cannot erase a committed terminal marker.
+    conn.rollback()
+    failed = conn.execute('SELECT * FROM analysis_runs').fetchone()
+    assert failed['status'] == 'failed' and failed['completed_at'] is not None
+    assert conn.execute('SELECT COUNT(*) FROM analysis_outputs').fetchone()[0] == 0
+
+    monkeypatch.setattr(analysis, 'write_output', original_write)
+    with conn.raw.pipeline() if pipeline else nullcontext():
+        run_id = job(conn)
+    assert run_id != failed['id']
+    assert conn.execute('SELECT status FROM analysis_runs WHERE id=?', (run_id,)).fetchone()[0] == 'complete'
+    assert conn.execute('SELECT COUNT(*) FROM analysis_runs WHERE status=\'running\'').fetchone()[0] == 0
+    assert conn.execute('SELECT COUNT(*) FROM analysis_outputs WHERE run_id=?', (run_id,)).fetchone()[0] > 0
+
+
+@pytest.mark.parametrize(('decimals', 'expected'), [
+    (0, Decimal('14')), (6, Decimal('0.000014')),
+    (18, Decimal('0.000000000000000014')), (None, None),
+])
+def test_valuation_preserves_zero_and_missing_decimals(decimals, expected):
+    assert _usd('7', decimals, 2) == expected
+    assert _usd('0', decimals, None) == 0
+
+
+def test_earnings_and_volume_use_explicit_asset_decimals(postgres_database):
+    conn = connect('staging')
+    init_db(conn)
+    expected = {0: '14', 6: '0.000014', 18: '0.000000000000000014', None: None}
+    for index, decimals in enumerate(expected):
+        asset = f'asset-{index}'
+        conn.execute('''INSERT INTO strategy_reports
+            (chain_id, version, vault_address, strategy_address, tx_hash, log_index,
+             block_number, block_timestamp, asset, asset_decimals, gain_raw, loss_raw, net_raw)
+            VALUES (1, 'v3', 'vault', 'strategy', ?, 0, 10, 100, ?, ?, '7', '0', '7')''',
+            (f'report-{index}', asset, decimals))
+        conn.execute('''INSERT INTO vault_flows
+            (chain_id, version, vault_address, direction, tx_hash, log_index,
+             block_number, block_timestamp, asset, asset_decimals, assets_raw, shares_raw)
+            VALUES (1, 'v3', 'vault', 'deposit', ?, 0, 10, 100, ?, ?, '7', '7')''',
+            (f'deposit-{index}', asset, decimals))
+        conn.executemany('''INSERT INTO prices
+            (chain_id, token_address, timestamp, source, price_usd, status)
+            VALUES (1, ?, 100, ?, 2, 'ok')''',
+            [(asset, source) for source in ('yearn-prices', 'defillama')])
+    conn.commit()
+    for run_id, output_name, amount_field in (
+        (run_lifetime_yield(conn), 'reports', 'net_yield_usd'),
+        (run_vault_volume(conn), 'vault_flows', 'amount_usd'),
+    ):
+        rows = [from_json(row['row_json']) for row in conn.execute(
+            'SELECT row_json FROM analysis_outputs WHERE run_id=? AND name=?',
+            (run_id, output_name))]
+        assert len(rows) == len(expected)
+        assert {row['asset']: None if row[amount_field] is None else Decimal(row[amount_field])
+                for row in rows} == {
+            f'asset-{index}': None if value is None else Decimal(value)
+            for index, value in enumerate(expected.values())}
 
 
 def test_lifetime_yield_uses_net_gain_minus_loss(postgres_database, tmp_path):

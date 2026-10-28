@@ -607,7 +607,9 @@ def _canonical_eth_source(chain_id: int, address: str) -> str | None:
 
 
 def report_amount(raw_value: str | int, decimals: int | None) -> Decimal:
-    scale = Decimal(10) ** int(decimals or 18)
+    if decimals is None:
+        raise ValueError('asset decimals are required to scale a report amount')
+    scale = Decimal(10) ** int(decimals)
     return Decimal(int(raw_value)) / scale
 
 
@@ -1385,29 +1387,45 @@ def validate_report_pricing_policy(
         _yearn_prices_config()
 
 
-def price_unpriced_reports(
-    conn,
-    limit: int | None = None,
-    source: str = DEFAULT_PRICE_SOURCE,
-    fallback: str | None = DEFAULT_FALLBACK_PRICE_SOURCE,
-    retry_missing: bool = False,
-    refresh_onchain_fallbacks: bool = False,
-    chain_ids: set[int] | None = None,
-    onchain_fallbacks: bool = True,
-) -> int:
-    validate_report_pricing_policy(source, fallback, onchain_fallbacks)
-    if refresh_onchain_fallbacks and source == 'yearn-prices' and fallback != 'defillama':
-        raise ValueError('refreshing onchain fallbacks requires DefiLlama provider fallback')
+def report_pricing_targets(conn, *, limit=None, source=DEFAULT_PRICE_SOURCE, retry_missing=False,
+                           refresh_onchain_fallbacks=False, chain_ids=None,
+                           before_timestamp=None, after=None, targets=None, retry_statuses=None):
+    """Return deterministic job targets, with explicit cutoff/cursor/retry scope.
+
+    `targets` contains (chain_id, asset, timestamp); `after` uses the chronological
+    order (timestamp, chain_id, asset). Selection never fetches or writes a quote.
+    """
+    if source not in SUPPORTED_SOURCES:
+        raise ValueError('unsupported price source')
     chain_filter = ""
     chain_params: list[int] = []
     if chain_ids:
         chain_filter = f"AND r.chain_id IN ({','.join('?' for _ in chain_ids)})"
         chain_params = sorted(chain_ids)
+    extra_filter = ''
+    extra_params = []
+    if before_timestamp is not None:
+        extra_filter += ' AND r.block_timestamp<?'
+        extra_params.append(before_timestamp)
+    if after is not None:
+        if len(after) != 3:
+            raise ValueError('price target cursor must contain timestamp, chain and asset')
+        extra_filter += ' AND (r.block_timestamp,r.chain_id,r.asset)>(?,?,?)'
+        extra_params.extend(after)
+    if targets is not None:
+        if not targets:
+            return []
+        extra_filter += ' AND (r.chain_id,r.asset,r.block_timestamp) IN (VALUES '+','.join('(?,?,?)' for _ in targets)+')'
+        extra_params.extend(value for target in targets for value in target)
     price_filter = _existing_price_filter(retry_missing)
     price_params: list[int] = []
     if source == "yearn-prices" and not retry_missing:
         price_filter = "p.token_address IS NULL OR (p.status = 'pending' AND r.block_timestamp < ?)"
         price_params = [int(time.time()) // 86_400 * 86_400]
+    if retry_missing and retry_statuses is not None:
+        marks=','.join('?' for _ in retry_statuses)
+        price_filter = _existing_price_filter(False) + (f' OR p.status IN ({marks})' if marks else '')
+        price_params = list(retry_statuses)
     refresh_join, refresh_match = _adapter_refresh_sql(refresh_onchain_fallbacks, 'r')
     sql = f"""
     SELECT
@@ -1425,13 +1443,40 @@ def price_unpriced_reports(
     {refresh_join}
     WHERE r.asset IS NOT NULL
       {chain_filter}
+      {extra_filter}
       AND (({price_filter}) OR ({refresh_match}))
     GROUP BY r.chain_id, r.asset, r.block_timestamp
-    ORDER BY r.block_timestamp
+    ORDER BY r.block_timestamp,r.chain_id,r.asset
     """
-    if limit:
-        sql += f" LIMIT {int(limit)}"
-    rows = conn.execute(sql, (source, *chain_params, *price_params)).fetchall()
+    if limit is not None:
+        if limit < 1:
+            raise ValueError('price target limit must be positive')
+        sql += ' LIMIT ?'
+    params=(source, *chain_params, *extra_params, *price_params)
+    if limit is not None:
+        params=(*params,limit)
+    return conn.execute(sql, params).fetchall()
+
+
+def price_unpriced_reports(
+    conn,
+    limit: int | None = None,
+    source: str = DEFAULT_PRICE_SOURCE,
+    fallback: str | None = DEFAULT_FALLBACK_PRICE_SOURCE,
+    retry_missing: bool = False,
+    refresh_onchain_fallbacks: bool = False,
+    chain_ids: set[int] | None = None,
+    onchain_fallbacks: bool = True,
+    before_timestamp: int | None = None,
+    targets=None,
+    retry_statuses=None,
+) -> int:
+    validate_report_pricing_policy(source, fallback, onchain_fallbacks)
+    if refresh_onchain_fallbacks and source == 'yearn-prices' and fallback != 'defillama':
+        raise ValueError('refreshing onchain fallbacks requires DefiLlama provider fallback')
+    rows = report_pricing_targets(conn, limit=limit or None, source=source, retry_missing=retry_missing,
+        refresh_onchain_fallbacks=refresh_onchain_fallbacks, chain_ids=chain_ids,
+        before_timestamp=before_timestamp, targets=targets, retry_statuses=retry_statuses)
     count, rows = _refresh_adapter_rows(conn, rows, onchain_fallbacks=onchain_fallbacks)
     if source == "defillama":
         count += _price_unpriced_reports_defillama_batched(conn, rows, fallback, onchain_fallbacks=onchain_fallbacks)

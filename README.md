@@ -132,6 +132,9 @@ For explicit per-chain RPC/Envio windows, including Optimism and Fantom, see [bo
 The [coverage performance receipt](docs/report-coverage-performance.md) documents
 batched coverage reads, active/inactive progress, and benchmark limits.
 
+For maintained multi-chain acquisition, missing daily TVL collection, durable
+resume and explicitly selected publication, see [Database refresh](docs/database-refresh.md).
+
 For the complete scriptable workflow and reproducible CSV exports, see
 [Refresh and export earnings and fees](docs/earnings-and-fees.md).
 
