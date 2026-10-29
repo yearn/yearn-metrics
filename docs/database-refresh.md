@@ -268,7 +268,7 @@ before the first committed checkpoint replays the action.
 
 The hash cache is deliberately limited to one worker invocation. A fresh job or
 resume revalidates content rather than trusting a durable hash cache. Cold full
-hashes, history input comparison and immutable history copying still cost time;
+hashes and immutable history copying still cost time;
 this change does not make financial preparation constant-time. Table-level
 markers conservatively invalidate all queries using a changed table, even if
 only an unrelated date changed. They do not replace content-based dataset IDs
@@ -281,6 +281,27 @@ and partitioned/inherited source tables fail closed. Maintenance must not bypass
 tracking during an active refresh; restart the worker after administrative
 changes. No production schema is changed until the updated worker is explicitly
 run against that database.
+
+TVL history preparation also retains transactional change markers by date for
+snapshots and positions. After one baseline preparation, unchanged dates reuse
+their saved input digests and known-chain coverage without rereading raw JSON.
+New or changed dates still select and hash their actual inputs before deciding
+whether accounting needs to run. Changes to captured run membership, dated
+price rejections, the current bridge close, and explicit backfills also trigger
+input reads. Global catalog or accounting changes invalidate the compatible
+history baseline. Only the catalog's acquisition timestamp (`updated_at`) is
+omitted from newly captured financial manifests; legacy manifest IDs are kept.
+
+The date-marker triggers aggregate bulk writes once per statement. Inserts,
+updates (including moving dates), deletes, truncation and rolled-back writes
+are tracked transactionally. The date markers, input selection and prepared
+rows share a repeatable-read snapshot. Missing or disabled triggers are restored
+under a source-table lock and invalidate all saved date hints. Legacy indexes
+without hints and source storage/schema changes conservatively reread inputs.
+Maintenance must not bypass or tamper with tracking between preparations; rebuild
+history explicitly after such maintenance. Unchanged chart and total rows are
+still copied into each new immutable dataset; shared daily-result storage is
+not part of this optimization.
 
 An independent full-versus-incremental history rebuild is a separate validation
 exercise, useful after changes to accounting or the incremental algorithm. It

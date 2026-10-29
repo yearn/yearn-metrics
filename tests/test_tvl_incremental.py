@@ -49,6 +49,8 @@ def test_refresh_and_targeted_backfill_match_full_rows_totals_and_analytics(post
     assert result['reusedDates'] == [DAY,DAY+86400]
     assert result['recomputedDates'] == [DAY+2*86400]
     assert result['copiedRows'] == 4 and result['recomputedRowsWritten'] == 2
+    assert result['inputDatesSkipped'] == [DAY, DAY+86400]
+    assert result['selectedInputRowsRead'] == 2
     assert result['totalsRowsRead'] == 2
     assert result['totalsRowsCopied'] > 0
     assert captured(old) == original
@@ -92,7 +94,8 @@ def test_global_policy_change_rebuilds_and_catalog_touch_does_not(postgres_datab
     with closing(connect('staging')) as conn:
         conn.execute('UPDATE tvl_vaults SET updated_at=2');conn.commit()
     touched = TvlStore('staging',tmp_path/'pub').get()
-    assert prepare(touched)['reusedDates'] == [DAY]
+    assert touched.id == old.id
+    assert prepare(touched)['status'] == 'already-prepared'
     manifest = deepcopy(touched.manifest)
     manifest['datasetId'] = 'd'*64
     manifest['newAccountingPolicy'] = 'new-global-rule'
@@ -362,3 +365,124 @@ def test_serving_edits_preserve_identity_but_accounting_edits_rebuild(postgres_d
         assert changed.id!=old.id
         assert prepare(changed)['fullRebuildReason']=='accounting-or-catalog-context-changed'
         assert changed.history(interval='daily')['chart']==[{'timestamp':DAY,'Ethereum':100.0}]
+
+
+def test_tracking_catches_in_place_corrections_and_membership_changes(postgres_database, tmp_path):
+    """Old prices/ownership and run status changes cannot hide behind stable counts."""
+    from yearn_data.tvl_api import publish_tvl
+    def candidate(revision):
+        return TvlDataset(publish_tvl('staging', tmp_path/'pub', observation_revision=revision))
+    with closing(connect('staging')) as conn:
+        init_db(conn)
+        run(conn, 1, DAY, [(PARENT,'100'), (CHILD,'100')], [(CHILD,'50')])
+        run(conn, 2, DAY+86400, [(PARENT,'200')])
+    original = candidate('before'); prepare(original)
+    with closing(connect('staging')) as conn:
+        conn.execute('''UPDATE tvl_snapshots SET data_json=CAST(
+            CAST(data_json AS jsonb) || '{"tvl_usd":"120","price_usd":"12"}' AS text)
+            WHERE run_id=1 AND vault=?''', (CHILD,))
+        conn.execute('''UPDATE tvl_positions SET data_json=CAST(
+            CAST(data_json AS jsonb) || '{"debt_usd":"60","owned_usd":"60"}' AS text)
+            WHERE run_id=1''')
+        conn.commit()
+    repaired = candidate('corrected'); result = prepare(repaired)
+    assert result['inputDatesRead'] == [DAY]
+    assert result['inputDatesSkipped'] == [DAY+86400]
+    assert repaired.history(interval='daily')['chart'][0]['Ethereum'] == 160
+    full_copy(repaired, '8')
+    with closing(connect('staging')) as conn:
+        # A new run is already present in storage but becomes eligible later.
+        # Its rows were tracked before the previous preparation, so membership
+        # must invalidate the date independently of the date marker.
+        run(conn, 3, DAY, [(CHILD,'200')], status='running')
+    waiting = candidate('waiting'); prepare(waiting)
+    with closing(connect('staging')) as conn:
+        conn.execute("UPDATE tvl_runs SET status='complete' WHERE id=3"); conn.commit()
+    finished = candidate('finished'); result = prepare(finished)
+    assert result['inputDatesRead'] == [DAY]
+    assert finished.history(interval='daily')['chart'][0]['Ethereum'] == 240
+    full_copy(finished, '9')
+
+
+def test_tracking_handles_rollback_date_moves_deletes_and_missing_triggers(postgres_database, tmp_path):
+    from yearn_data.tvl_api import publish_tvl
+    def candidate(revision):
+        return TvlDataset(publish_tvl('staging', tmp_path/'pub', observation_revision=revision))
+    with closing(connect('staging')) as conn:
+        init_db(conn)
+        run(conn, 1, DAY, [(PARENT,'100')])
+        run(conn, 2, DAY+86400, [(PARENT,'200')])
+        run(conn, 3, DAY+2*86400, [(PARENT,'300')])
+    old = candidate('original'); prepare(old)
+    with closing(connect('staging')) as conn:
+        conn.execute('DELETE FROM tvl_snapshots WHERE run_id=1'); conn.rollback()
+    unchanged = candidate('rolled-back'); result = prepare(unchanged)
+    assert result['selectedInputRowsRead'] == 0
+    assert result['inputDatesSkipped'] == [DAY, DAY+86400, DAY+2*86400]
+    with closing(connect('staging')) as conn:
+        conn.execute('''UPDATE tvl_snapshots SET timestamp=?,data_json=CAST(
+            CAST(data_json AS jsonb) || jsonb_build_object('timestamp',CAST(? AS bigint)) AS text)
+            WHERE run_id=2''', (DAY,DAY))
+        conn.execute('DELETE FROM tvl_snapshots WHERE run_id=1'); conn.commit()
+    moved = candidate('moved'); result = prepare(moved)
+    assert result['inputDatesRead'] == [DAY]
+    assert result['inputDatesSkipped'] == [DAY+2*86400]
+    assert result['pendingChainDates'] == [{'timestamp':DAY+86400,'chainIds':[1]}]
+    assert moved.history(interval='daily')['chart'][0]['Ethereum'] == 200
+    full_copy(moved, '7')
+    with closing(connect('staging')) as conn:
+        conn.execute('DROP TRIGGER tvl_track_days_update ON tvl_snapshots')
+        conn.execute('''UPDATE tvl_snapshots SET data_json=CAST(
+            CAST(data_json AS jsonb) || '{"tvl_usd":"250"}' AS text) WHERE run_id=2''')
+        conn.commit()
+    repaired = candidate('untracked-write'); result = prepare(repaired)
+    assert result['inputDatesSkipped'] == []
+    assert repaired.history(interval='daily')['chart'][0]['Ethereum'] == 250
+    full_copy(repaired, '6')
+
+
+def test_tracking_baseline_and_truncate_force_safe_input_scan(postgres_database, tmp_path):
+    from yearn_data.tvl_api import publish_tvl
+    def candidate(revision):
+        return TvlDataset(publish_tvl('staging', tmp_path/'pub', observation_revision=revision))
+    with closing(connect('staging')) as conn:
+        init_db(conn)
+        run(conn, 1, DAY, [(PARENT,'100'), (CHILD,'100')], [(CHILD,'50')])
+    legacy = candidate('legacy'); prepare(legacy)
+    with closing(connect('staging')) as conn:
+        # Simulate the pre-tracking preparation index: readable but no hints.
+        conn.execute('UPDATE tvl_chart_inputs SET tracking_revision=NULL,known_chains=NULL')
+        conn.execute("UPDATE tvl_chart_preparations SET receipt_json=CAST(CAST(receipt_json AS jsonb)-'dayTracking' AS text)")
+        conn.commit()
+    baseline = candidate('baseline'); result = prepare(baseline)
+    assert result['inputDatesRead'] == [DAY] and result['reusedDates'] == [DAY]
+    with closing(connect('staging')) as conn:
+        conn.execute('TRUNCATE tvl_positions'); conn.commit()
+    cleared = candidate('positions-cleared'); result = prepare(cleared)
+    assert result['inputDatesRead'] == [DAY]
+    assert cleared.history(interval='daily')['chart'][0]['Ethereum'] == 200
+    full_copy(cleared, '5')
+
+
+def test_tracking_and_inputs_share_one_snapshot_during_concurrent_correction(postgres_database, tmp_path):
+    from yearn_data.tvl_api import publish_tvl
+    def candidate(revision):
+        return TvlDataset(publish_tvl('staging', tmp_path/'pub', observation_revision=revision))
+    with closing(connect('staging')) as conn:
+        init_db(conn); run(conn, 1, DAY, [(PARENT,'100')])
+    old = candidate('before'); prepare(old)
+    current = candidate('during')
+    def correction(message):
+        if not message.startswith('History change tracking:'):
+            return
+        with closing(connect('staging')) as writer:
+            writer.execute('''UPDATE tvl_snapshots SET data_json=CAST(
+                CAST(data_json AS jsonb) || '{"tvl_usd":"120"}' AS text)''')
+            writer.commit()
+    result = prepare(current, progress=correction)
+    assert result['selectedInputRowsRead'] == 0
+    assert current.history(interval='daily')['chart'][0]['Ethereum'] == 100
+    following = candidate('after'); result = prepare(following)
+    assert result['inputDatesRead'] == [DAY]
+    assert following.history(interval='daily')['chart'][0]['Ethereum'] == 120
+    full_copy(following, '4')

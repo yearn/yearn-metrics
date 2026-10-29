@@ -125,7 +125,10 @@ def publish_tvl(database, publication, *, current_bridge_policy='none', before_t
             raise ValueError('no finished TVL observations')
         if not conn.execute("SELECT 1 FROM tvl_snapshots s JOIN tvl_runs r ON r.id=s.run_id WHERE r.status IN ('complete','incomplete') AND r.completed_at IS NOT NULL LIMIT 1").fetchone():
             raise ValueError('no stored finished TVL observations')
-        catalog = [classify_vault(r) for r in conn.execute('SELECT * FROM tvl_vaults ORDER BY chain_id,address')]
+        # Acquisition time is not financial metadata. Normalize newly captured
+        # catalogs; legacy manifests keep their original identities unchanged.
+        catalog = [{k:v for k,v in classify_vault(r).items() if k != 'updated_at'}
+                   for r in conn.execute('SELECT * FROM tvl_vaults ORDER BY chain_id,address')]
         # Allocator recognition uses positive report evidence, not a V3 display label.
         allocator_keys = []
         if table_exists(conn, 'strategy_reports'):

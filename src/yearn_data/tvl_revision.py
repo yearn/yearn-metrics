@@ -12,6 +12,7 @@ ROOTS = {
     'tvl_policy.py': ('classify_vault', 'correct_catalog'),
     'tvl_api.py': ('CHAINS', 'encoded', 'read_db', 'key', 'observation_selection', 'TvlDataset'),
     'tvl_history_cache.py': ('ready', 'totals_ready', 'rows', 'prepare', 'prepare_totals', 'prepare_price_repair'),
+    'tvl_day_tracking.py': ('install', 'state'),
     'tvl_incremental.py': ('digest', 'context_identity', 'input_identity', 'preparation', 'build'),
 }
 DATASET_METHODS = {'_init_accounting', 'dates', 'as_of', 'selected_rows',
