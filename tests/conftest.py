@@ -29,6 +29,8 @@ def database_guard(monkeypatch):
     for name in ('NEON_DB_URL', 'STAGING_DB_URL'):
         monkeypatch.setenv(name, 'postgresql://unconfigured-test.invalid/test')
     monkeypatch.setenv('YEARN_DATA_DB', 'staging')
+    # Real worker configuration may enable reporting; tests never post to GitHub.
+    monkeypatch.setenv('YEARN_REFRESH_GITHUB_REPORTING', 'off')
     monkeypatch.delenv('YEARN_DATA_DB_SCHEMA', raising=False)
 
 

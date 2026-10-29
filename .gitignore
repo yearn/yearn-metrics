@@ -20,3 +20,6 @@ artifacts/
 .vercel/
 
 build/
+
+# Intermediate agent reports, previews and scratch files are local only.
+.scratch/

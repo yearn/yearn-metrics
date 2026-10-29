@@ -6,7 +6,7 @@ import time
 import requests
 
 from . import analytics,analytics_collect,canonical_history,catchup,fee_valuation,fees,pricing
-from . import tokenized_fees,tvl_api,tvl_discovery,tvl_history_cache,tvl_sources
+from . import tokenized_fees,tvl_api,tvl_discovery,tvl_history_cache,tvl_sources,tvl_batch
 from .analysis import run_lifetime_yield
 from .chains import web3_for
 from .config import CHAINS
@@ -14,8 +14,11 @@ from .fee_products import PRODUCTS
 from .history_sources import HistoricalSource
 from .hosted_publications import publish,PublicationCleanupError,encoded as release_encoded
 from .pairing import PairingDataset,select_pairing
-from .refresh_scope import context,resolve_bounds,verify_bounds,tvl_plan,DAY
-from .refresh_state import RefreshState,WorkBudget,WorkDeferred,digest,sql_digest,drain_pages
+from .refresh_fingerprints import Fingerprints
+from .refresh_warnings import findings,write_report
+from .github_warning_report import completed as report_completed
+from .refresh_scope import context,resolve_bounds,verify_bounds,tvl_plan,DAY,since_receipt
+from .refresh_state import RefreshState,WorkBudget,WorkDeferred,digest,drain_pages,read_receipt
 from .storage import connect,init_db,table_exists
 
 
@@ -89,11 +92,17 @@ class RefreshWorker:
         self.ids=options.chain_ids
         self.marks=','.join('?' for _ in self.ids)
         self.active='bounds'
+        self.fingerprints=Fingerprints()
 
-    def signature(self,queries):
-        with closing(connect(self.options.database,readonly=True)) as conn,conn:
-            return digest([sql_digest(conn,query,params) if table_exists(conn,table) else 'missing:'+table
-                           for table,query,params in queries])
+    def signature(self,queries,*,partial=False):
+        tables={table for dependencies,_,_ in queries
+                for table in ((dependencies,) if isinstance(dependencies,str) else dependencies)}
+        with closing(connect(self.options.database)) as conn:
+            self.fingerprints.track(conn,sorted(tables))
+            # Revisions and content must describe the same database snapshot.
+            conn.raw.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+            with conn:
+                return self.fingerprints.signature(conn,queries,partial=partial)
 
     def reports(self,*,global_scope=False,chain=None):
         ids=(CHAINS[chain].chain_id,) if chain else self.ids
@@ -109,20 +118,20 @@ class RefreshWorker:
         columns='f.chain_id,f.tx_hash,f.report_log_index,f.status' if partial else 'f.*'
         clause='' if global_scope else f' AND r.chain_id IN ({self.marks})'
         params=(self.options.cutoff,) if global_scope else (self.options.cutoff,*self.ids)
-        return self.signature([('canonical_fee_reports',f'''SELECT {columns} FROM canonical_fee_reports f
+        return self.signature([(('canonical_fee_reports','strategy_reports'),f'''SELECT {columns} FROM canonical_fee_reports f
             JOIN strategy_reports r ON r.chain_id=f.chain_id AND r.tx_hash=f.tx_hash AND r.log_index=f.report_log_index
-            WHERE r.block_timestamp<?{clause}''',params)])
+            WHERE r.block_timestamp<?{clause}''',params)],partial=partial)
 
     def prices(self,partial=False,*,global_scope=False):
         columns='chain_id,token_address,timestamp,source,status' if partial else '*'
         clause='' if global_scope else f' AND chain_id IN ({self.marks})'
         params=(self.options.cutoff,) if global_scope else (self.options.cutoff,*self.ids)
-        return self.signature([('prices',f"SELECT {columns} FROM prices WHERE source='yearn-prices' AND timestamp<?"+clause,params)])
+        return self.signature([('prices',f"SELECT {columns} FROM prices WHERE source='yearn-prices' AND timestamp<?"+clause,params)],partial=partial)
 
     def fee_prices(self,partial=False):
         columns='chain_id,asset,eod_timestamp,policy,endpoint_id,status' if partial else '*'
         return self.signature([('fee_daily_prices',f'''SELECT {columns} FROM fee_daily_prices WHERE eod_timestamp<?
-            AND policy=? AND endpoint_id=?''',(self.options.cutoff,fee_valuation.POLICY,fee_valuation.endpoint_identity()))])
+            AND policy=? AND endpoint_id=?''',(self.options.cutoff,fee_valuation.POLICY,fee_valuation.endpoint_identity()))],partial=partial)
 
     def tokenized(self,partial=False,chain=None):
         columns='chain_id,tx_hash,log_index' if partial else '*'
@@ -131,7 +140,7 @@ class RefreshWorker:
         return self.signature([
             ('tokenized_fee_events',f'''SELECT {columns} FROM tokenized_fee_events WHERE
                 CAST(json_extract(event_json,'$.block_timestamp') AS BIGINT)<?{clause}''',params),
-            ('tokenized_fee_ranges','SELECT * FROM tokenized_fee_ranges WHERE before_timestamp<=?'+clause,params)])
+            ('tokenized_fee_ranges','SELECT * FROM tokenized_fee_ranges WHERE before_timestamp<=?'+clause,params)],partial=partial)
 
     def catalog(self,global_scope=False,chain=None):
         ids=(CHAINS[chain].chain_id,) if chain else self.ids
@@ -148,11 +157,11 @@ class RefreshWorker:
         edges='s.run_id,s.chain_id,s.parent,s.strategy,s.child,s.timestamp' if partial else 's.*'
         queries=[]
         for table,columns in [('tvl_snapshots',points),('tvl_positions',edges)]:
-            queries.append((table,f'''SELECT {columns} FROM {table} s JOIN tvl_runs r ON r.id=s.run_id
+            queries.append(((table,'tvl_runs'),f'''SELECT {columns} FROM {table} s JOIN tvl_runs r ON r.id=s.run_id
                 WHERE r.completed_at IS NOT NULL AND r.status IN ('complete','incomplete') AND s.timestamp<?{clause}''',params))
         if global_scope:
             queries.append(('tvl_runs',"SELECT * FROM tvl_runs WHERE completed_at IS NOT NULL AND status IN ('complete','incomplete')",()))
-        return self.signature(queries)
+        return self.signature(queries,partial=partial)
 
     def analytics_inputs(self):
         return self.signature([('analytics_inputs',"""SELECT DISTINCT ON(kind) * FROM analytics_inputs
@@ -182,6 +191,10 @@ class RefreshWorker:
             checkpoint=checkpoint,batch_size=1 if dates else 500)
 
     def establish_bounds(self):
+        if self.options.baseline_job:
+            previous=read_receipt(self.options.database,self.options.baseline_job)
+            for chain in self.options.chains:
+                self.sources[chain].verify_pin(previous['bounds'][chain]['pin'])
         if not self.job.bounds:
             with closing(connect(self.options.database)) as conn:
                 self.job.set_bounds({c:resolve_bounds(conn,self.options,c,self.sources[c]) for c in self.options.chains})
@@ -191,7 +204,7 @@ class RefreshWorker:
         bounds=self.job.bounds[chain]
         with closing(connect(self.options.database)) as conn:
             result=catchup.catch_up(conn,chain,bounds['fromBlock'],bounds['toBlock'],source=self.options.source,
-                confirmations=self.options.confirmations.get(chain),chunk_size=self.options.chunk_size,
+                confirmations=self.options.confirmations.get(chain),chunk_size=self.options.report_chunk_size(chain),workers=self.options.report_workers,
                 discover=True,client=ProgressSource(self.sources[chain],self.job.emit))
         return result|{'checkpointStatus':'incomplete' if result['skipped_vaults'] else 'complete'}
 
@@ -199,9 +212,22 @@ class RefreshWorker:
         bounds=self.job.bounds[chain]
         with closing(connect(self.options.database)) as conn:
             summary=tvl_discovery.discover_catalog(conn,chain_ids=[CHAINS[chain].chain_id],
-                from_block=bounds['fromBlock'],to_block=bounds['toBlock'],chunk_size=self.options.chunk_size)
+                from_block=bounds['fromBlock'],to_block=bounds['toBlock'],chunk_size=self.options.chunk_size or 50_000)
+            # Capture the metadata available at acquisition time, so later
+            # reports can explain the gap without consulting a newer catalog.
+            for source in summary['sources']:
+                for failure in source.get('failures',[]):
+                    if not failure.get('address') or failure.get('chain_id') is None:continue
+                    row=conn.execute('''SELECT name,asset,asset_symbol,asset_decimals FROM tvl_vaults
+                        WHERE chain_id=? AND lower(address)=?''',
+                        (failure['chain_id'],failure['address'].lower())).fetchone()
+                    if row:
+                        failure.update(vault_name=row['name'],retained_asset=row['asset'],
+                                       retained_asset_symbol=row['asset_symbol'],retained_asset_decimals=row['asset_decimals'])
         return dict(status=summary['status'],runId=summary['run_id'],catalogVaults=summary['catalog_vaults'],
-                    sources=[{'source':s['source'],'status':s['status'],'failures':len(s.get('failures',[]))} for s in summary['sources']],
+                    sources=[{'source':s['source'],'status':s['status'],'failures':len(s.get('failures',[])),
+                              'findings':s.get('failures',[]),
+                              **{key:s[key] for key in ('discovered','enriched') if key in s}} for s in summary['sources']],
                     checkpointStatus='complete' if summary['status']=='complete' else 'incomplete')
 
     def acquire_tokenized(self,chain,saved):
@@ -211,7 +237,7 @@ class RefreshWorker:
         bounds=self.job.bounds[chain]
         with closing(connect(self.options.database)) as conn:
             work=tokenized_fees.pending_tokenized_ranges(conn,inventory,chain,0,bounds['toBlock'],self.options.cutoff,
-                                                       confirmations=self.options.confirmations.get(chain),chunk_size=self.options.chunk_size)
+                                                       confirmations=self.options.confirmations.get(chain),chunk_size=self.options.chunk_size or 50_000)
             def apply(rows):
                 client=self.sources[chain].w3
                 window=tokenized_fees.TokenizedWindow(client,chain,bounds['toBlock'],
@@ -234,25 +260,30 @@ class RefreshWorker:
 
     def price_reports(self,saved):
         with closing(connect(self.options.database)) as conn:
-            def select(after,limit):return pricing.report_pricing_targets(conn,source='yearn-prices',retry_missing=True,
+            def select(after,limit):return pricing.report_pricing_targets(conn,source='yearn-prices',retry_missing=False,
                 retry_statuses=('missing','pending','retryable'),chain_ids=set(self.ids),before_timestamp=self.options.cutoff,
                 after=after,limit=limit)
             def apply(rows):pricing.price_unpriced_reports(conn,source='yearn-prices',fallback=None,onchain_fallbacks=False,
-                retry_missing=True,retry_statuses=('missing','pending','retryable'),before_timestamp=self.options.cutoff,
+                retry_missing=False,retry_statuses=('missing','pending','retryable'),before_timestamp=self.options.cutoff,
                 targets=[(r['chain_id'],r['asset'],r['block_timestamp']) for r in rows])
             return self.drain(saved,select,apply,lambda r:(r['block_timestamp'],r['chain_id'],r['asset']))
 
     def price_fees(self,saved):
         with closing(connect(self.options.database)) as conn:
-            targets=fee_valuation.fee_pricing_work(conn,before_timestamp=self.options.cutoff,retry_missing=True,
+            targets=fee_valuation.fee_pricing_work(conn,before_timestamp=self.options.cutoff,retry_missing=False,
                 retry_statuses=('missing','pending','retryable'),chain_ids=set(self.ids)).targets
             def apply(rows):fee_valuation.price_fees(conn,before_timestamp=self.options.cutoff,
-                limit=len(rows),retry_missing=True,targets=set(rows),
+                limit=len(rows),retry_missing=False,targets=set(rows),
                 retry_statuses=('missing','pending','retryable'),chain_ids=set(self.ids))
             return self.drain(saved,_page(targets,lambda r:r),apply,lambda r:r)
 
     def collect_tvl(self,saved):
         with closing(connect(self.options.database)) as conn:
+            readers = {}
+            def reader_factory(chain):
+                if chain not in readers:
+                    readers[chain] = tvl_batch.reader(conn, chain, retry_missing=self.options.repair_history)
+                return readers[chain]
             plan=tvl_plan(conn,self.options)
             work=[dict(chain=chain,day=day) for chain,day in plan['targets']]
             key=lambda r:(r['chain'],r['day'])
@@ -260,7 +291,7 @@ class RefreshWorker:
                 for row in rows:
                     self.job.emit('tvl-collection-started',chainId=row['chain'],timestamp=row['day'])
                     tvl_sources.collect_tvl(conn,row['day'],row['day'],chain_ids=[row['chain']],
-                        price_source='yearn-prices',reader_factory=tvl_sources.ArchiveReader)
+                        price_source='yearn-prices',reader_factory=reader_factory)
             result=self.drain(saved,_page(work,key),apply,key,dates=True)
             remaining=tvl_plan(conn,self.options)
         return result|{'unresolvedChainDates':remaining['unresolvedTargets'],'deferredRepairs':remaining['deferredRepairs'],
@@ -300,7 +331,7 @@ class RefreshWorker:
         return {'attempt':attempt,'sources':self.source_ages()}
 
     def run_analysis(self,kind):
-        with closing(connect(self.options.database)) as conn:
+        with closing(connect(self.options.database)) as conn,conn.raw.pipeline():
             identity=(run_lifetime_yield(conn,price_source='yearn-prices',fallback_price_source=None,
                                         before_timestamp=self.options.cutoff) if kind=='earnings' else
                       fee_valuation.run_fee_usd(conn,before_timestamp=self.options.cutoff,
@@ -365,6 +396,19 @@ class RefreshWorker:
                     unpriceableFeeEvents=fee_work.metadata_gaps,
                     unresolvedTvlChainDates=tvl_gaps['unresolvedTargets'],deferredTvlRepairs=tvl_gaps['deferredRepairs'])
 
+    def report_findings(self,result):
+        stages=[dict(name=r['name'],status=r['status'],result=json.loads(r['result_json']))
+                for r in self.job.conn.execute(
+                    "SELECT name,status,result_json FROM refresh_stages WHERE job_id=? AND name<>'publication' ORDER BY ordinal",
+                    (self.job.id,))]
+        warnings=findings(stages,result,self.job.bounds)
+        result=result|dict(warnings=warnings,warningCount=len(warnings),
+                           incompleteStages=[s['name'] for s in stages if s['status']=='incomplete'])
+        write_report(self.root,self.job.id,result)
+        self.job.emit('refresh-findings',warningCount=len(warnings),warnings=warnings,
+                      publicationBlockers=result.get('publicationBlockers',[]))
+        return result
+
     def pipeline(self,mode):
         self.job.begin_pass()
         for chain in self.options.chains:
@@ -383,8 +427,10 @@ class RefreshWorker:
                            lambda _:self.analytics_inputs(),lambda _:self.refresh_analytics_sources())
         gaps=self.processing_gaps()
         result=dict(cutoff=self.options.cutoff,refreshedChains=list(self.options.chains),
-                    analysisScope='retained-database-through-cutoff',gaps=gaps,analyticsSources=self.source_ages())
-        if mode=='acquire':return result
+                    analysisScope='retained-database-through-cutoff',
+                    acquisitionWindow=dict(firstClose=self.options.first_close or (None if self.options.repair_history else self.options.window_start+DAY-1),
+                                           baselineJob=self.options.baseline_job,olderHistory='explicit-repair-only'),gaps=gaps,analyticsSources=self.source_ages())
+        if mode=='acquire':return self.report_findings(result)
         earnings=self.stage('earnings',lambda:[self.reports(global_scope=True),self.prices(global_scope=True)],
                             self.analysis_output,lambda _:self.run_analysis('earnings'))
         fee_usd=self.stage('fee-usd',lambda:[self.reports(global_scope=True),self.canonical(global_scope=True),
@@ -396,17 +442,22 @@ class RefreshWorker:
         history=self.stage('history',lambda:[tvl,self.tvl(global_scope=True)],self.history_output,lambda _:self.prepare_history(tvl))
         owned=self.stage('analytics',lambda:[pair,tvl,history,self.analytics_inputs()],
                          self.analytics_output,lambda _:self.prepare_analytics(pair,tvl))
-        incomplete=[r['name'] for r in self.job.conn.execute(
-            "SELECT name FROM refresh_stages WHERE job_id=? AND name<>'publication' AND status<>'complete'",(self.job.id,))]
-        ready=(not incomplete and all(b['cutoffReached'] for b in self.job.bounds.values())
-               and owned['cutoffTimestamp']==self.options.cutoff and owned['tvlAsOfTimestamp']==self.options.cutoff-1
-               and owned['feesDatasetId']==pair['datasetId'] and owned['tvlDatasetId']==tvl['datasetId'])
-        return result|dict(earningsRunId=earnings['runId'],feesRunId=fee_usd['runId'],
+        blockers=[]
+        unfinished=[r['name'] for r in self.job.conn.execute(
+            "SELECT name FROM refresh_stages WHERE job_id=? AND name<>'publication' AND status NOT IN ('complete','incomplete')",
+            (self.job.id,))]
+        if unfinished:blockers.append(dict(code='unfinished-stages',stages=unfinished))
+        if (owned['cutoffTimestamp']!=self.options.cutoff or owned['tvlAsOfTimestamp']!=self.options.cutoff-1
+                or tvl['asOfTimestamp']!=self.options.cutoff-1):
+            blockers.append(dict(code='prepared-cutoff-mismatch'))
+        if owned['feesDatasetId']!=pair['datasetId'] or owned['tvlDatasetId']!=tvl['datasetId']:
+            blockers.append(dict(code='prepared-dataset-mismatch'))
+        return self.report_findings(result|dict(earningsRunId=earnings['runId'],feesRunId=fee_usd['runId'],
             feeDatasetId=pair['datasetId'],tvlDatasetId=tvl['datasetId'],analyticsPublicationId=owned['publicationId'],
-            tvlAsOfTimestamp=tvl['asOfTimestamp'],history=history,publishReady=ready,incompleteStages=incomplete)
+            tvlAsOfTimestamp=tvl['asOfTimestamp'],history=history,publishReady=not blockers,publicationBlockers=blockers))
 
     def publish_prepared(self,result):
-        if not result.get('publishReady'):raise ValueError('prepared datasets are incomplete or do not match the requested cutoff')
+        if not result.get('publishReady'):raise ValueError('prepared datasets failed publication integrity checks')
         for chain,bounds in self.job.bounds.items():verify_bounds(self.options,chain,bounds,self.sources[chain])
         import hashlib
         expected=hashlib.sha256(release_encoded(dict(feesDatasetId=result['feeDatasetId'],tvlDatasetId=result['tvlDatasetId'],
@@ -438,6 +489,7 @@ class RefreshWorker:
 
 def run_refresh(options,*,mode='prepare',resume=None,progress=None):
     if mode not in ('acquire','prepare','publish'):raise ValueError('select acquire, prepare or publish')
+    options=since_receipt(options)
     with RefreshState(options.database,context(options),None if resume else {},resume=resume,progress=progress,
                       initial_release=lambda:selection(options.database)) as job:
         worker=None
@@ -449,7 +501,8 @@ def run_refresh(options,*,mode='prepare',resume=None,progress=None):
                 result=previous
                 worker=RefreshWorker(options,job)
                 if previous.get('consolidation')!='complete':job.finish('selected-cleanup-failed',previous)
-                return worker.recover_selection(previous) if mode=='publish' else job.receipt()
+                if mode=='publish':worker.recover_selection(previous)
+                return report_completed(job)
             worker=RefreshWorker(options,job)
             worker.establish_bounds()
             for _ in range(3):
@@ -469,7 +522,7 @@ def run_refresh(options,*,mode='prepare',resume=None,progress=None):
                                      lambda _:worker.publish_prepared(prepared))
                     job.finish('selected' if result['consolidation']=='complete' else 'selected-cleanup-failed',result)
                 else:job.finish('acquired' if mode=='acquire' else 'prepared',result)
-                return job.receipt()
+                return report_completed(job)
             raise ValueError('upstream refresh outputs did not stabilize; retry after the other writer finishes')
         except WorkDeferred:
             return job.receipt()
@@ -482,4 +535,4 @@ def run_refresh(options,*,mode='prepare',resume=None,progress=None):
                     'failureClass':type(exc).__name__,'servingReleaseId':selection(options.database)})
             job.emit('refresh-failed',stage=worker.active if worker else 'initialization',failureClass=type(exc).__name__)
             if isinstance(exc,(KeyboardInterrupt,SystemExit)):raise
-            return job.receipt()
+            return report_completed(job)

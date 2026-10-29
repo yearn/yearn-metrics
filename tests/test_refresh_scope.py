@@ -41,7 +41,7 @@ def test_resolve_retained_scope_strict_cutoff_watermark_and_changed_pin(db,tmp_p
     options=RefreshOptions('staging',('eth',),172800,tmp_path,source='envio')
     source=Source()
     bounds=resolve_bounds(db,options,'eth',source)
-    assert (bounds['fromBlock'],bounds['toBlock'],bounds['startReason'])==(10,172,'retained-coverage')
+    assert (bounds['fromBlock'],bounds['toBlock'],bounds['startReason'])==(10,172,'weekly-window')
     assert bounds['pin']['timestamp']==172000 and bounds['cutoffReached'] is True
     verify_bounds(options,'eth',bounds,source)
     source.watermark=100

@@ -99,6 +99,7 @@ def test_restart_restores_saved_batch_exports_without_recollection(postgres_data
         def block_at(self,timestamp):return 100
         def exists(self,*args):return True
         def uint(self,*args):return 100*10**18
+        def price(self,*args):return 1,'ok',{}
     class Prices:
         def __init__(self,*args):self.cache={}
         def get(self,*args):return 1,'ok',{}
@@ -106,8 +107,6 @@ def test_restart_restores_saved_batch_exports_without_recollection(postgres_data
     monkeypatch.setattr(b,'BatchedReader',Reader)
     monkeypatch.setattr(b,'Prices',Prices)
     monkeypatch.setattr(b,'deployment',lambda *a:(1,ts('2020-01-01')-86399))
-    # main temporarily installs its persisted price reader in the source module.
-    monkeypatch.setattr(b.sources,'fetch_yearn_price',b.sources.fetch_yearn_price)
     collect=Mock(wraps=b.sources.collect_tvl);monkeypatch.setattr(b.sources,'collect_tvl',collect)
     real_export=b.export_tvl;attempts=[]
     def fail_once(conn,path,run):

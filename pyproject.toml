@@ -30,6 +30,9 @@ where = ["src"]
 [tool.setuptools.package-data]
 yearn_data = ["inventories/*.json"]
 
+[tool.setuptools.data-files]
+"share/yearn-data/.github" = [".github/weekly-sync-warning-report.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

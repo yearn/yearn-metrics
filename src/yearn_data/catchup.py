@@ -2,6 +2,9 @@
 
 import json
 import time
+from collections import deque
+from threading import Lock
+from concurrent.futures import ThreadPoolExecutor
 
 from web3 import Web3
 
@@ -109,7 +112,7 @@ def check_release(vault):
 
 
 def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=None,
-             chunk_size=50_000, discover=False, experimental=False, client=None, progress=None):
+             chunk_size=50_000, discover=False, experimental=False, client=None, progress=None, workers=1):
     """Acquire an explicit window and reuse successfully committed ranges.
 
     The caller chooses historical bounds; existing observations are not treated
@@ -117,6 +120,8 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
     when they have no current registry membership. Exceptions stop this call;
     completed ranges are reusable when the same command is repeated.
     """
+    if type(workers) is not int or not 1 <= workers <= 32:
+        raise ValueError('report workers must be between 1 and 32')
     if from_block < 0 or to_block < from_block or chunk_size < 1:
         raise ValueError("invalid catch-up bounds or chunk size")
     if experimental and not discover:
@@ -133,18 +138,23 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
                    coverage_read_queries=0, report_work={activity: dict(
                        vaults=0, reused_blocks=0, reused_ranges=0, scanned_blocks=0, completed_ranges=0, seconds=0)
                        for activity in ('active', 'inactive')})
+    summary['report_fetch_workers'] = workers
+    summary['work_seconds_policy'] = 'summed-planning-and-fetch-time; concurrent ranges may overlap'
     started = time.monotonic()
+    event_lock = Lock()
 
     def notify(event, **details):
         if progress:
-            progress(json.dumps({'stage': 'report-acquisition', 'event': event, 'chain': chain,
-                                 'source': report_source, **details}, sort_keys=True))
+            with event_lock:
+                progress(json.dumps({'stage': 'report-acquisition', 'event': event, 'chain': chain,
+                                     'source': report_source, **details}, sort_keys=True))
 
     notify('started', from_block=from_block, to_block=to_block)
 
     verified_coverage = {}
+    report_tasks = []
 
-    def acquire(scope, fetch, table, selected_source, report_metadata=None, retained=None, work=None):
+    def acquire(scope, fetch, table, selected_source, report_metadata=None, retained=None, work=None, defer=False):
         # Verify only reused coverage relevant to this request, not old unrelated
         # scans. New range rows and their coverage commit in one transaction.
         if retained is None:
@@ -168,37 +178,89 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
             work['reused_ranges'] += len(retained)
         notify('coverage-planned', target=scope.target, family=scope.family,
                reused_ranges=len(retained), pending_ranges=len(gaps))
-        for lo, hi in gaps:
-            notify('range-started', target=scope.target, family=scope.family, from_block=lo, to_block=hi)
+        tasks = [(scope, fetch, table, selected_source, report_metadata, work, lo, hi) for lo, hi in gaps]
+        if defer:
+            report_tasks.extend(tasks)
+        else:
+            for task in tasks:
+                commit(task, fetch_range(task))
+
+    def fetch_range(task):
+        scope, fetch, _, _, _, _, lo, hi = task
+        notify('range-started', target=scope.target, family=scope.family, from_block=lo, to_block=hi)
+        started = time.monotonic()
+        def read(first, last):
             try:
-                end_hash = _hex(client.block(hi)["hash"])
-                rows = fetch(lo, hi)
-                client.verify_pin(dict(number=hi, hash=end_hash))
-            except Exception:
-                # Provider exception text can contain private endpoints. A failed
-                # range is neither empty coverage nor a successful retry.
-                notify('range-failed', target=scope.target, family=scope.family, from_block=lo, to_block=hi)
-                raise
+                return fetch(first, last)
+            except Exception as exc:
+                # Split provider range/result-size limits, never transport errors,
+                # rate limits, invalid evidence or arbitrary provider failures.
+                message = str(exc).lower()
+                if first == last or not any(term in message for term in
+                        ('block range too', 'block range limit', 'too many results',
+                         'query returned more', 'response size exceeded', 'log response size')):
+                    raise
+                middle = (first + last) // 2
+                notify('range-split', target=scope.target, family=scope.family,
+                       from_block=first, to_block=last)
+                return read(first, middle) + read(middle+1, last)
+        try:
+            end_hash = _hex(client.block(hi)["hash"])
+            rows = read(lo, hi)
+            return rows, end_hash, time.monotonic()-started
+        except Exception:
+            notify('range-failed', target=scope.target, family=scope.family, from_block=lo, to_block=hi)
+            raise
 
-            def persist(db):
-                count = write_rows(db, table, rows, report_metadata=report_metadata)
-                if report_metadata is not None:
-                    # Reconciliation changes shared report rows. An earlier
-                    # metadata policy must not skip replay if that value returns.
-                    db.execute("""DELETE FROM history_coverage WHERE chain_id=? AND target=?
-                        AND family=? AND policy<>?""", scope.key)
-                return count
+    def commit(task, fetched):
+        scope, _, table, selected_source, report_metadata, work, lo, hi = task
+        rows, end_hash, seconds = fetched
+        # Recheck immediately before the main-thread commit as other fetches
+        # may have completed while this result waited in the bounded queue.
+        try:
+            client.verify_pin(dict(number=hi, hash=end_hash))
+        except Exception:
+            notify('range-failed', target=scope.target, family=scope.family, from_block=lo, to_block=hi)
+            raise
+        def persist(db):
+            count = write_rows(db, table, rows, report_metadata=report_metadata)
+            if report_metadata is not None:
+                db.execute("""DELETE FROM history_coverage WHERE chain_id=? AND target=?
+                    AND family=? AND policy<>?""", scope.key)
+            return count
+        inserted = commit_range(conn, scope, lo, hi, source=selected_source,
+                                end_hash=end_hash, run_id=None, write=persist)
+        summary['completed_ranges'] += 1
+        summary['inserted_rows'] += inserted
+        if work is not None:
+            work['scanned_blocks'] += hi-lo+1
+            work['completed_ranges'] += 1
+            work['seconds'] += seconds
+        notify('range-committed', target=scope.target, family=scope.family,
+               from_block=lo, to_block=hi, observed_rows=len(rows), inserted_rows=inserted)
 
-            inserted = commit_range(conn, scope, lo, hi, source=selected_source,
-                                    end_hash=end_hash, run_id=None,
-                                    write=persist)
-            summary["completed_ranges"] += 1
-            summary["inserted_rows"] += inserted
-            if work is not None:
-                work['scanned_blocks'] += hi-lo+1
-                work['completed_ranges'] += 1
-            notify('range-committed', target=scope.target, family=scope.family,
-                   from_block=lo, to_block=hi, observed_rows=len(rows), inserted_rows=inserted)
+    def drain_reports():
+        if workers == 1:
+            for task in report_tasks:
+                commit(task, fetch_range(task))
+            return
+        # At most workers fetched results can be retained. Only this caller
+        # touches Postgres; failed/queued/uncommitted fetches certify no coverage.
+        tasks = iter(report_tasks)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            pending = deque()
+            try:
+                for task in tasks:
+                    pending.append((task, pool.submit(fetch_range, task)))
+                    if len(pending) == workers:
+                        ready, future = pending.popleft()
+                        commit(ready, future.result())
+                while pending:
+                    ready, future = pending.popleft()
+                    commit(ready, future.result())
+            finally:
+                for _, future in pending:
+                    future.cancel()
 
     if discover:
         for target in inventory_targets(chain, experimental):
@@ -253,12 +315,13 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
         scope = report_scope(vault)
         activity = 'active' if vault['active'] else 'inactive'
         work = summary['report_work'][activity]
-        acquire(scope, lambda lo, hi: client.reports(vault, lo, hi, report_source),
+        acquire(scope, lambda lo, hi, vault=vault: client.reports(vault, lo, hi, report_source),
                 "strategy_reports", report_source, report_metadata=vault,
-                retained=retained_reports.get((scope.target.lower(), scope.policy), []), work=work)
+                retained=retained_reports.get((scope.target.lower(), scope.policy), []), work=work, defer=workers > 1)
         work['vaults'] += 1
         work['seconds'] += time.monotonic()-vault_started
         summary["vaults"] += 1
+    drain_reports()
     client.verify_pin(pin)
     summary['seconds'] = time.monotonic()-started
     notify('completed', **summary)
