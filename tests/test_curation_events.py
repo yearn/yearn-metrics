@@ -103,11 +103,25 @@ def test_dynamic_vault_adapter_empty_range_requires_registered_creation_and_comp
     with pytest.raises(CurationUnavailable,match='canonical'):
         CurationEvents(CHAIN,header,gql).logs(VAULT,ADD_ADAPTER_EVENT,START,END)
     # Reuse of a previously checked anchor must still detect a later fork.
-    gql=Graphql([[],[]]);source=CurationEvents(CHAIN,header,gql)
+    gql=Graphql([[],[],[]]);gql.anchor['block_number']=str(END+500)
+    source=CurationEvents(CHAIN,header,gql)
     assert source.logs(VAULT,ADD_ADAPTER_EVENT,START,END)==[]
+    assert source.logs(VAULT,ADD_ADAPTER_EVENT,START,END)==[]
+    assert len([q for q,v in gql.calls if 'raw_events' in q])==1
     source.anchor_block=lambda n:dict(header(n),hash=bytes.fromhex('ef'*32))
     with pytest.raises(CurationUnavailable,match='canonical'):
         source.logs(VAULT,ADD_ADAPTER_EVENT,START,END)
+
+
+def test_forced_rpc_reads_are_distinct_from_no_reads_in_source_receipt(monkeypatch):
+    from yearn_data.tvl_discovery import event_read_summary
+    monkeypatch.setenv('YEARN_CURATION_EVENT_SOURCE','rpc')
+    gql=Graphql();calls=[];r=reader(gql,lambda args:calls.append(args) or [])
+    assert event_read_summary({CHAIN:r})['event_sources']=={'envio':0,'rpc':0}
+    assert r.logs(FACTORY,ABI,START,START+1)==[]
+    summary=event_read_summary({CHAIN:r})
+    assert summary=={'event_sources':{'envio':0,'rpc':1},'event_fallbacks':{}}
+    assert len(calls)==1 and gql.calls==[]
 
 
 def test_scope_manifest_inventory_and_global_owner_include_verified_missing_products():

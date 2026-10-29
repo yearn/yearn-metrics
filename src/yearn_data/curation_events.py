@@ -71,7 +71,7 @@ class CurationEvents:
             raise CurationUnavailable('factory indexing coverage unavailable')
         # Check an indexed canonical anchor at or beyond this range. A chain
         # height alone cannot distinguish stale indexer data after a reorg.
-        if self.anchor is None or self.anchor['block_number']<end:
+        if self.anchor is None or int(self.anchor['block_number'])<end:
             data=self.query('''query($chain:Int!,$end:Int!,$through:Int!){raw_events(limit:1,
                 order_by:{serial:desc},where:{chain_id:{_eq:$chain},
                 block_number:{_gte:$end,_lte:$through}}){chain_id block_number block_hash}}''',

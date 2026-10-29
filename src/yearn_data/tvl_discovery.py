@@ -79,6 +79,8 @@ class DiscoveryReader(ArchiveReader):
                 return result
             except Exception as exc:
                 indexed.failed(exc)
+        elif indexed is not None:
+            indexed.sources['rpc']+=1
         self.last_event_source='rpc'
         def fetch(lo,hi):
             raw = self.w3.eth.get_logs({'address':Web3.to_checksum_address(address),
