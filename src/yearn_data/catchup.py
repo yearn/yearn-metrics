@@ -2,9 +2,9 @@
 
 import json
 import time
-from collections import deque
+from collections import defaultdict
 from threading import Lock
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
 from web3 import Web3
 
@@ -14,6 +14,7 @@ from .config import CHAINS
 from .coverage import commit_range, uncovered_ranges
 from .history_sources import HistoricalSource, inventory_targets, report_scope, route, write_rows
 from .indexing import _hex
+from .storage import table_columns
 from .kong import vault_metadata_from_kong
 
 REPORT_COVERAGE_BATCH_SIZE = 100
@@ -153,6 +154,7 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
 
     verified_coverage = {}
     report_tasks = []
+    inventory_tasks = []
 
     def acquire(scope, fetch, table, selected_source, report_metadata=None, retained=None, work=None, defer=False):
         # Verify only reused coverage relevant to this request, not old unrelated
@@ -180,7 +182,7 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
                reused_ranges=len(retained), pending_ranges=len(gaps))
         tasks = [(scope, fetch, table, selected_source, report_metadata, work, lo, hi) for lo, hi in gaps]
         if defer:
-            report_tasks.extend(tasks)
+            (report_tasks if report_metadata is not None else inventory_tasks).extend(tasks)
         else:
             for task in tasks:
                 commit(task, fetch_range(task))
@@ -239,34 +241,78 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
         notify('range-committed', target=scope.target, family=scope.family,
                from_block=lo, to_block=hi, observed_rows=len(rows), inserted_rows=inserted)
 
+    batch_fetch = getattr(client, 'reports_many', None) if getattr(client, 'batch_reports_supported', True) else None
+    report_columns = table_columns(conn,'strategy_reports')
+
+    def fetch_group(tasks):
+        if not callable(batch_fetch):
+            return [(task,fetch_range(task)) for task in tasks]
+        started=time.monotonic()
+        first,last=tasks[0][-2:]
+        end_hash=_hex(client.block(last)['hash'])
+        members=[task[4] for task in tasks]
+        allowed={v['address'].lower() for v in members}
+        rows=batch_fetch(members,first,last,report_source)
+        by_address=defaultdict(list)
+        for row in rows:
+            values=row if isinstance(row,dict) else dict(zip(report_columns,row))
+            address=values['vault_address'].lower()
+            if address not in allowed or values['chain_id']!=chain_id or not first<=values['block_number']<=last:
+                raise ValueError('batched report scope mismatch')
+            by_address[address].append(row)
+        seconds=(time.monotonic()-started)/len(tasks)
+        return [(task,(by_address[task[4]['address'].lower()],end_hash,seconds)) for task in tasks]
+
     def drain_reports():
-        if workers == 1:
+        groups=[]
+        if callable(batch_fetch):
+            compatible=defaultdict(list)
             for task in report_tasks:
-                commit(task, fetch_range(task))
+                compatible[(task[4]['version'],task[-2],task[-1])].append(task)
+            for tasks in compatible.values():
+                groups.extend(tasks[i:i+50] for i in range(0,len(tasks),50))
+        else:
+            groups=[[task] for task in report_tasks]
+        summary['report_fetch_groups']=summary.get('report_fetch_groups',0)+len(groups)
+        run_groups(groups,fetch_group)
+
+    def run_groups(groups,fetcher):
+        def persist(fetched):
+            for task,result in fetched:
+                commit(task,result)
+        if workers==1:
+            for group in groups:persist(fetcher(group))
             return
-        # At most workers fetched results can be retained. Only this caller
-        # touches Postgres; failed/queued/uncommitted fetches certify no coverage.
-        tasks = iter(report_tasks)
+        # Fetches finish independently. Refill freed slots immediately, while
+        # keeping all commits and coverage verification on the caller thread.
+        tasks=iter(groups)
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            pending = deque()
+            pending={}
+            def fill():
+                while len(pending)<workers:
+                    group=next(tasks,None)
+                    if group is None:break
+                    pending[pool.submit(fetcher,group)]=group
             try:
-                for task in tasks:
-                    pending.append((task, pool.submit(fetch_range, task)))
-                    if len(pending) == workers:
-                        ready, future = pending.popleft()
-                        commit(ready, future.result())
+                fill()
                 while pending:
-                    ready, future = pending.popleft()
-                    commit(ready, future.result())
+                    done,_=wait(pending,return_when=FIRST_COMPLETED)
+                    fetched=[]
+                    for future in done:
+                        pending.pop(future)
+                        fetched.append(future.result())
+                    fill()
+                    for result in fetched:persist(result)
             finally:
-                for _, future in pending:
-                    future.cancel()
+                for future in pending:future.cancel()
 
     if discover:
         for target in inventory_targets(chain, experimental):
             selected_source = route(chain_id, target.scope.family, source)
-            acquire(target.scope, lambda lo, hi: client.inventory(target, lo, hi, selected_source),
-                    "vault_inventory_events", selected_source)
+            acquire(target.scope, lambda lo, hi, target=target, selected_source=selected_source: client.inventory(target, lo, hi, selected_source),
+                    "vault_inventory_events", selected_source, defer=workers>1)
+        run_groups([[task] for task in inventory_tasks],
+                   lambda tasks:[(task,fetch_range(task)) for task in tasks])
         materialize_inventory(conn, inventory_vaults(conn, chain, to_block, experimental))
 
     # No active flag or current registry join: both previously retained and newly
@@ -300,6 +346,11 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
         vault_started = time.monotonic()
         check_release(vault)
         if not vault["asset"] or vault["asset_decimals"] is None or not vault["api_version"]:
+            # Preserve completed eligible work before a later vault's metadata
+            # can fail. Ordinary fully enriched inventories still batch together.
+            if report_tasks:
+                drain_reports()
+                report_tasks.clear()
             try:
                 enriched = enrich_metadata(conn, client, vault, to_block,
                                            metadata_by_address.get(Web3.to_checksum_address(vault["address"])))
@@ -317,7 +368,7 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
         work = summary['report_work'][activity]
         acquire(scope, lambda lo, hi, vault=vault: client.reports(vault, lo, hi, report_source),
                 "strategy_reports", report_source, report_metadata=vault,
-                retained=retained_reports.get((scope.target.lower(), scope.policy), []), work=work, defer=workers > 1)
+                retained=retained_reports.get((scope.target.lower(), scope.policy), []), work=work, defer=workers > 1 or callable(batch_fetch))
         work['vaults'] += 1
         work['seconds'] += time.monotonic()-vault_started
         summary["vaults"] += 1

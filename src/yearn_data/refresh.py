@@ -81,6 +81,18 @@ class ProgressSource:
         return self.fetch(target.scope.family,target.scope.target,first,last,
                           lambda:self.source.inventory(target,first,last,source))
 
+    @property
+    def batch_reports_supported(self):
+        return getattr(self.source,'batch_reports_supported',callable(getattr(self.source,'reports_many',None)))
+
+    def reports_many(self,vaults,first,last,source):
+        method=getattr(self.source,'reports_many',None)
+        if not callable(method):
+            return [row for vault in vaults for row in self.reports(vault,first,last,source)]
+        target=','.join(v['address'] for v in vaults)
+        return self.fetch('reports',target,first,last,
+                          lambda:method(vaults,first,last,source))
+
 
 class RefreshWorker:
     def __init__(self,options,job):

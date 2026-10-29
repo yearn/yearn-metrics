@@ -132,6 +132,7 @@ def _gql(
     query: str,
     variables: dict[str, Any] | None = None,
     timeout: int = DEFAULT_REQUEST_TIMEOUT,
+    split_timeouts: bool = False,
 ) -> dict[str, Any]:
     """POST a GraphQL query to Envio with bounded retry on transient errors."""
     payload: dict[str, Any] = {"query": query}
@@ -152,6 +153,10 @@ def _gql(
                 return body["data"]
         except requests.HTTPError:
             raise
+        except requests.Timeout as exc:
+            if split_timeouts:
+                raise
+            last_error = exc
         except requests.RequestException as exc:
             last_error = exc
         if attempt < 4:

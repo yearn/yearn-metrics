@@ -63,7 +63,7 @@ def test_since_receipt_covers_a_missed_week_and_rejects_incomplete_baseline(work
 
 
 def test_parallel_ranges_overlap_but_all_database_work_stays_on_caller(catchup_db,monkeypatch):
-    entered=Event();both=Event();guard=Lock();threads=set();main=get_ident()
+    entered=Event();both=Event();third=Event();guard=Lock();threads=set();main=get_ident()
     original=catchup_db.execute
     def execute(*args,**kwargs):
         assert get_ident()==main
@@ -76,6 +76,8 @@ def test_parallel_ranges_overlap_but_all_database_work_stays_on_caller(catchup_d
             if entered.is_set():both.set()
             entered.set()
         assert both.wait(3),'report fetches did not overlap'
+        if lo==10:assert third.wait(3),'slow first request prevented refilling a free worker'
+        if lo==30:third.set()
         return native(vault,lo,hi,selected)
     monkeypatch.setattr(source,'reports',reports)
     result=catchup.catch_up(catchup_db,'op',10,39,chunk_size=10,workers=2,client=source)
@@ -128,17 +130,25 @@ def test_financial_analyses_use_real_pipeline_and_keep_known_outputs(workflow,mo
     assert entered==[True]
 
 
-def test_parallel_failure_commits_only_the_successful_prefix(catchup_db,monkeypatch):
-    source=ReportSource();native=source.reports
+def test_parallel_failure_keeps_completed_ranges_and_retries_only_the_failure(catchup_db,monkeypatch):
+    source=ReportSource();native=source.reports;release=Event()
+    execute=catchup_db.execute
+    def commit_signal(statement,params=()):
+        result=execute(statement,params)
+        if statement.startswith('INSERT INTO history_coverage') and params[4]==30:release.set()
+        return result
+    monkeypatch.setattr(catchup_db,'execute',commit_signal)
     def reports(vault,lo,hi,selected):
-        if lo==20:raise RuntimeError('provider unavailable')
+        if lo==20:
+            assert release.wait(3)
+            raise RuntimeError('provider unavailable')
         return native(vault,lo,hi,selected)
     monkeypatch.setattr(source,'reports',reports)
     with pytest.raises(RuntimeError,match='provider unavailable'):
         catchup.catch_up(catchup_db,'op',10,39,chunk_size=10,workers=3,client=source)
-    assert [tuple(r) for r in catchup_db.execute('SELECT from_block,to_block FROM history_coverage')]==[(10,19)]
+    assert {tuple(r) for r in catchup_db.execute('SELECT from_block,to_block FROM history_coverage')}=={(10,19),(30,39)}
     monkeypatch.setattr(source,'reports',native)
-    assert catchup.catch_up(catchup_db,'op',10,39,chunk_size=10,workers=3,client=source)['completed_ranges']==2
+    assert catchup.catch_up(catchup_db,'op',10,39,chunk_size=10,workers=3,client=source)['completed_ranges']==1
     assert catchup_db.execute('SELECT count(*) FROM strategy_reports').fetchone()[0]==1
 
 
@@ -155,6 +165,6 @@ def test_cli_exposes_weekly_window_and_provider_tuning_without_starting_a_run(mo
         '--report-workers','2','--chain-chunk-size','op:250000'])==0
     options=captured[0]
     assert options.baseline_job=='baseline' and options.window_days==14 and options.report_workers==2
-    assert options.report_chunk_size('op')==250000 and options.report_chunk_size('eth')==50000
-    assert replace(options,chain_chunk_sizes={}).report_chunk_size('op')==1000000
+    assert options.report_chunk_size('op')==250000 and options.report_chunk_size('eth')==1000000
+    assert replace(options,chain_chunk_sizes={}).report_chunk_size('op')==50000
     assert replace(options,chunk_size=100,chain_chunk_sizes={}).report_chunk_size('op')==100

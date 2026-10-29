@@ -125,3 +125,23 @@ It leaves existing coordinator tables intact but does not use a coordinator run.
 Run fee accounting, pricing, analysis, and export separately.
 Use a separate command for Tokenized Strategy fees.
 `catch-up` does not fetch volume or debt flows, change financial outputs, or copy the database.
+
+## Grouped fetching and recovery
+
+Native report adapters group up to 50 compatible vault addresses with identical
+missing intervals. Each returned event is checked against the requested emitter
+set and normalized with that vault's asset metadata. Envio pagination continues
+through an empty terminal page, including when the server returns short pages.
+RPC decodes the requested event signatures and rejects logs outside the emitter
+set or block range.
+
+Reads use bounded source-specific windows that grow on fast sparse results and
+split on explicit provider limits or bounded timeouts. Provider address-count
+limits fall back to smaller address groups. Coverage remains per vault and
+interval, including verified empty results. Failed fetches certify no coverage.
+
+Registry inventory scans also fetch concurrently, with membership materialized
+after all required scans finish. Concurrent requests are processed in completion order. Already committed valid
+ranges remain reusable if another range fails, even when they are later in block
+order. Repeating the same command fetches only the remaining gaps. All database
+writes and canonical end-hash checks stay on the coordinating thread.

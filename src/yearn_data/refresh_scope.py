@@ -59,7 +59,7 @@ class RefreshOptions:
             raise ValueError('first close must be a closed UTC day end before cutoff')
 
     def report_chunk_size(self, chain):
-        return self.chain_chunk_sizes.get(chain, self.chunk_size or (1_000_000 if chain == 'op' else 50_000))
+        return self.chain_chunk_sizes.get(chain, self.chunk_size or (1_000_000 if route(CHAINS[chain].chain_id,'reports',self.source)=='envio' else 50_000))
 
     @property
     def window_start(self):

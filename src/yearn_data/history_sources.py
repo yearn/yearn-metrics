@@ -96,6 +96,10 @@ class HistoricalSource:
         self.gql = gql or envio._gql
         self.headers = {}
 
+    @property
+    def batch_reports_supported(self):
+        return type(self).reports is HistoricalSource.reports and 'reports' not in self.__dict__
+
     def block(self, number):
         if number not in self.headers:
             block = self.w3.eth.get_block(number)
@@ -138,12 +142,17 @@ class HistoricalSource:
         block = self.block(number)
         return {"number": number, "hash": _hex(block["hash"]), "timestamp": int(block["timestamp"]), "finality": policy}
 
-    def envio_nodes(self, entity, fields, address_field, address, lo, hi):
+    def envio_nodes(self, entity, fields, address_field, address, lo, hi, *, bounded=False):
         query = envio._page_query(entity, fields + " blockHash", self.chain_id, lo, hi, address_field)
+        addresses = [address] if isinstance(address, str) else list(address)
+        allowed = {a.lower() for a in addresses}
         cursor = (lo, -1)
         while True:
-            data = self.gql(query, {"lb": cursor[0], "li": cursor[1], "n": 1000,
-                                    "addresses": list(dict.fromkeys([address.lower(), Web3.to_checksum_address(address)]))})
+            variables = {"lb": cursor[0], "li": cursor[1], "n": 1000,
+                         "addresses": list(dict.fromkeys(form for a in addresses
+                             for form in (a.lower(), Web3.to_checksum_address(a))))}
+            data = (self.gql(query, variables, timeout=15, split_timeouts=True)
+                    if bounded and self.gql is envio._gql else self.gql(query, variables))
             if entity not in data or not isinstance(data[entity], list):
                 raise HistorySourceError("missing Envio entity response")
             nodes = data[entity]
@@ -153,7 +162,7 @@ class HistoricalSource:
                     raise HistorySourceError("Envio pagination or range mismatch")
                 if not re.fullmatch(r"0x[0-9a-fA-F]{64}", node["transactionHash"]):
                     raise HistorySourceError("invalid Envio transaction hash")
-                if int(node["chainId"]) != self.chain_id or node[address_field].lower() != address.lower():
+                if int(node["chainId"]) != self.chain_id or node[address_field].lower() not in allowed:
                     raise HistorySourceError("Envio scope mismatch")
                 block = self.block(position[0])
                 if node["blockHash"].lower() != _hex(block["hash"]).lower() or int(node["blockTimestamp"]) != int(block["timestamp"]):
@@ -166,15 +175,18 @@ class HistoricalSource:
 
     def rpc_logs(self, address, event_abis, lo, hi, topics_tail=()):
         decoders = {_hex(event_abi_to_log_topic(abi)).lower(): abi for abi in event_abis}
-        logs = self.w3.eth.get_logs({"address": Web3.to_checksum_address(address),
+        addresses = [address] if isinstance(address, str) else list(address)
+        allowed = {a.lower() for a in addresses}
+        emitters = [Web3.to_checksum_address(a) for a in addresses]
+        logs = self.w3.eth.get_logs({"address": emitters[0] if len(emitters)==1 else emitters,
                                      "fromBlock": lo, "toBlock": hi,
                                      "topics": [list(decoders), *topics_tail]})
         if len(logs) >= 10_000:
-            raise HistorySourceError("possible RPC result cap; retry with a smaller chunk size")
+            raise HistorySourceError("too many results: possible RPC result cap; retry with a smaller chunk size")
         seen = set()
         for log in sorted(logs, key=lambda item: (int(item["blockNumber"]), int(item["logIndex"]))):
             number = int(log["blockNumber"])
-            if log.get("removed") or log["address"].lower() != address.lower() or not lo <= number <= hi:
+            if log.get("removed") or log["address"].lower() not in allowed or not lo <= number <= hi:
                 raise HistorySourceError("RPC log scope mismatch")
             block = self.block(number)
             if _hex(log["blockHash"]).lower() != _hex(block["hash"]).lower():
@@ -229,6 +241,49 @@ class HistoricalSource:
             if version == "v2":
                 args.setdefault("debtPaid", 0)
             rows.append(normalize_strategy_report(self.chain_id, version, vault["address"], vault["asset"], vault["asset_decimals"], log, ts, args))
+        return rows
+
+
+    def reports_many(self, vaults, lo, hi, source):
+        """Fetch compatible emitters together; every window is fully paginated.
+
+        Custom single-vault adapters retain their behavior. Native batching is
+        deliberately limited to one ABI family and a bounded address count.
+        """
+        if type(self).reports is not HistoricalSource.reports or 'reports' in self.__dict__:
+            return [row for vault in vaults for row in self.reports(vault, lo, hi, source)]
+        from .report_windows import read_windows, LIMITS
+        def fetch(members,first,last):
+            try:
+                return self._report_batch(members,first,last,source)
+            except Exception as exc:
+                message=str(exc).lower()
+                address_limit=any(term in message for term in
+                    ('too many addresses','address limit','address must be a string','cannot unmarshal array'))
+                dense_block=first==last and any(term in message for term in LIMITS)
+                if len(members)<2 or not (address_limit or dense_block):raise
+                middle=len(members)//2
+                return fetch(members[:middle],first,last)+fetch(members[middle:],first,last)
+        return read_windows(lambda first,last:fetch(vaults,first,last),lo,hi,source)
+
+    def _report_batch(self, vaults, lo, hi, source):
+        versions = {v['version'] for v in vaults}
+        if not vaults or len(versions)!=1 or len({v['address'].lower() for v in vaults})!=len(vaults):
+            raise ValueError('report batch requires unique compatible vaults')
+        version = vaults[0]['version']
+        by_address = {v['address'].lower():v for v in vaults}
+        if source == 'envio':
+            entity, fields, decode = ('StrategyReported',envio.V3_REPORT_FIELDS,envio._v3_report_args) if version=='v3' else ('V2StrategyReported',envio.V2_REPORT_FIELDS,envio._v2_report_args)
+            events = ((dict(envio._log(n),address=n['vaultAddress']),int(n['blockTimestamp']),decode(n),'StrategyReported') for n in
+                      self.envio_nodes(entity,fields,'vaultAddress',list(by_address),lo,hi,bounded=True))
+        else:
+            event_abis = [abis.V3_STRATEGY_REPORTED_EVENT] if version=='v3' else abis.V2_STRATEGY_REPORTED_EVENTS
+            events = self.rpc_logs(list(by_address),event_abis,lo,hi)
+        rows=[]
+        for log,ts,args,_ in events:
+            vault=by_address[log['address'].lower()]
+            if version=='v2':args.setdefault('debtPaid',0)
+            rows.append(normalize_strategy_report(self.chain_id,version,vault['address'],vault['asset'],vault['asset_decimals'],log,ts,args))
         return rows
 
 

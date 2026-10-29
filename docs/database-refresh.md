@@ -50,16 +50,30 @@ This does not certify older gaps or backfill late-discovered vaults before the
 accepted baseline; those remain explicit historical repair work.
 
 Report fetches use four concurrent workers by default (`--report-workers 1`
-restores serial fetching; maximum 32). Requests run concurrently across vaults
-and ranges, with at most the worker count of pending results; all database
-commits remain serial and retain canonical hash checks. Default report chunks
-are 1,000,000 blocks for Optimism and 50,000 for other chains. `--chunk-size N`
-overrides that default; `--chain-chunk-size op:N` overrides one chain. Provider
-range/result-size errors split into smaller requests; arbitrary failures and
-rate limits never become successful empty coverage. Uncommitted queued results
-are refetched on resume. These settings are part of checkpoint identity.
-Catalog and Tokenized collectors retain their 50,000-block default unless the
-global chunk size is explicitly set.
+restores serial fetching; maximum 32). Compatible vaults with the same missing
+block interval are fetched in groups of up to 50 addresses. Envio retains both
+producer address spellings and complete cursor pagination; RPC queries use an
+address list and the appropriate event ABI. Active and inactive vaults remain
+in scope, and coverage is still recorded individually for each vault.
+
+Registry inventory scans also use the bounded fetch pool before membership is
+materialized. Free workers are refilled as requests finish, so a slow earlier request does
+not hold up unrelated fetches. Database commits remain on the caller thread,
+with fresh canonical-hash verification. Completed independent ranges can be
+retained after another request fails; failed and uncommitted ranges are retried.
+A later metadata-enrichment failure retains already completed eligible work.
+
+Default report planning windows are 1,000,000 blocks for Envio and 50,000 for
+RPC. `--chunk-size N` overrides that default; `--chain-chunk-size op:N` overrides
+one chain. Inside each planning window, batched reads start at up to 250,000
+Envio blocks or 10,000 RPC blocks, grow on fast sparse responses and shrink after
+slow responses. Explicit provider range/result-size limits split further;
+timeouts allow at most two additional split levels along a failing path.
+Address-limit errors split address batches. Source changes, invalid evidence,
+rate limits and arbitrary failures never become successful empty coverage.
+Coverage commits only after a member's entire planned interval was fetched.
+These settings are part of checkpoint identity. Catalog and Tokenized collectors
+retain their 50,000-block default unless the global chunk size is explicitly set.
 
 Automatic report source routing uses the existing chain
 policy; `--source rpc` or `envio` explicitly selects a supported source. The worker
