@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import fcntl
 import json
@@ -16,14 +16,11 @@ from pathlib import Path
 import sys
 import time
 
-import requests
 from web3 import Web3
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from yearn_data.config import load_environment, TVL_EXCLUDED_CHAIN_IDS
-from yearn_data.multicall import MULTICALL3, MULTICALL3_ABI
 from yearn_data.pricing import fetch_yearn_price, fetch_yearn_prices_batch, yearn_prices_token_key
-from yearn_data.pricing import YearnPricesAuthenticationError, YearnPricesConfigurationError
 from yearn_data.storage import connect, init_db, database_reference
 from yearn_data.tvl import export_tvl, BACKFILL_SCHEMA
 from yearn_data import tvl_sources as sources
