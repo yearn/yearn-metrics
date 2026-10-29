@@ -238,6 +238,7 @@ class RefreshWorker:
                                        retained_asset_symbol=row['asset_symbol'],retained_asset_decimals=row['asset_decimals'])
         return dict(status=summary['status'],runId=summary['run_id'],catalogVaults=summary['catalog_vaults'],
                     sources=[{'source':s['source'],'status':s['status'],'failures':len(s.get('failures',[])),
+                              'eventSources':s.get('event_sources',{}),'eventFallbacks':s.get('event_fallbacks',{}),
                               'findings':s.get('failures',[]),
                               **{key:s[key] for key in ('discovered','enriched') if key in s}} for s in summary['sources']],
                     checkpointStatus='complete' if summary['status']=='complete' else 'incomplete')

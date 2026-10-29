@@ -23,6 +23,9 @@ class DiscoveryReader(ArchiveReader):
         super().__init__(chain_id)
         if int(self.w3.eth.chain_id) != chain_id:
             raise ValueError('RPC chain mismatch')
+        from .curation_events import CurationEvents
+        self.curation_events = CurationEvents(chain_id, self.block,
+            anchor_block=lambda number:self.w3.eth.get_block(number))
 
     def call(self, address, name, output, args=(), *, block=None):
         inputs = [{'name': f'arg{i}', 'type': kind} for i, (kind, _) in enumerate(args)]
@@ -45,20 +48,58 @@ class DiscoveryReader(ArchiveReader):
         return lo
 
     def block(self, number):
-        return self.w3.eth.get_block(number)
+        headers = self.__dict__.setdefault('discovery_blocks',{})
+        if number not in headers:
+            headers[number] = self.w3.eth.get_block(number)
+        return headers[number]
+
+    def verify_block(self, number, expected_hash):
+        if Web3.to_hex(self.w3.eth.get_block(number)['hash']).lower()!=expected_hash.lower():
+            raise ValueError('discovery range changed before commit')
+
+    def event_chunk_size(self, address, abi, start, end, chunk_size):
+        import os
+        if os.environ.get('YEARN_CURATION_EVENT_SOURCE','auto')=='rpc':return chunk_size
+        try:
+            self.curation_events.eligible(address,abi['name'],start,end)
+            return max(chunk_size,1_000_000)
+        except Exception:
+            return chunk_size
 
     def logs(self, address, abi, start, end):
         from eth_utils import event_abi_to_log_topic
         from web3._utils.events import get_event_data
-        raw = self.w3.eth.get_logs({'address':Web3.to_checksum_address(address),
-            'fromBlock':start,'toBlock':end,'topics':[event_abi_to_log_topic(abi)]})
-        decoded = []
-        for log in raw:
-            if (log['address'].lower()!=address.lower() or not start<=int(log['blockNumber'])<=end
-                    or log.get('removed')):
-                raise ValueError('RPC log scope mismatch')
-            decoded.append(dict(get_event_data(self.w3.codec,abi,log)))
-        return decoded
+        import os
+        self.block(end)  # Pin before fetching; verify again immediately before commit.
+        indexed = getattr(self,'curation_events',None)
+        if indexed is not None and os.environ.get('YEARN_CURATION_EVENT_SOURCE','auto') != 'rpc':
+            try:
+                result=indexed.logs(address,abi,start,end)
+                self.last_event_source='envio'
+                return result
+            except Exception as exc:
+                indexed.failed(exc)
+        self.last_event_source='rpc'
+        def fetch(lo,hi):
+            raw = self.w3.eth.get_logs({'address':Web3.to_checksum_address(address),
+                'fromBlock':lo,'toBlock':hi,'topics':[event_abi_to_log_topic(abi)]})
+            if len(raw)>=10_000:
+                raise ValueError('too many results in discovery RPC range')
+            decoded = []
+            seen = set()
+            for log in raw:
+                if (log['address'].lower()!=address.lower() or not lo<=int(log['blockNumber'])<=hi
+                        or log.get('removed')):
+                    raise ValueError('RPC log scope mismatch')
+                key=(Web3.to_hex(log['transactionHash']).lower(),int(log['logIndex']))
+                if key in seen:raise ValueError('duplicate RPC discovery log')
+                seen.add(key)
+                decoded.append(dict(get_event_data(self.w3.codec,abi,log)))
+            return decoded
+        if end-start+1>50_000:
+            from .report_windows import read_windows
+            return read_windows(fetch,start,end,'rpc')
+        return fetch(start,end)
 
     def metadata(self, address, family, *, block=None):
         block = int(self.head['number']) if block is None else block
@@ -111,6 +152,17 @@ def store_candidate(conn, chain_id, address, family, category, source, *, metada
             updated_at=excluded.updated_at
     """,
         (chain_id,address.lower(),source,status,to_json(evidence or {}),now))
+
+
+def event_read_summary(readers):
+    sources = {'envio':0,'rpc':0}
+    failures = {}
+    for reader in readers.values():
+        client = getattr(reader,'curation_events',None)
+        if client is None:continue
+        for key,count in client.sources.items():sources[key]+=count
+        for key,count in client.failures.items():failures[key]=failures.get(key,0)+count
+    return {'event_sources':sources,'event_fallbacks':failures}
 
 
 def source_summary(source):
@@ -273,6 +325,8 @@ def scan_factory(conn, factory, reader, *, from_block=None, to_block=None, chunk
     owners = owners_for_chain(factory['chain_id'])
     abi = FACTORY_EVENTS[factory['family']]
     scope = Scope(factory['chain_id'],factory['address'],'inventory:tvl-curation',fingerprint([abi,sorted(owners)]))
+    if start<=end and hasattr(reader,'event_chunk_size'):
+        chunk_size=reader.event_chunk_size(factory['address'],abi,start,end,chunk_size)
     for lo,hi in missing_ranges(conn,scope,start,end,chunk_size,table='tvl_history_coverage'):
         logs = reader.logs(factory['address'],abi,lo,hi)
         # Reject a possible capped response instead of certifying a truncated scan.
@@ -306,7 +360,8 @@ def scan_factory(conn, factory, reader, *, from_block=None, to_block=None, chunk
                                 deployment_block=int(log['blockNumber']))
             return len(accepted)
         end_hash = Web3.to_hex(reader.block(hi)['hash'])
-        commit_range(conn,scope,lo,hi,source='rpc',end_hash=end_hash,run_id=None,write=write,table='tvl_history_coverage')
+        if hasattr(reader,'verify_block'):reader.verify_block(hi,end_hash)
+        commit_range(conn,scope,lo,hi,source=getattr(reader,'last_event_source','rpc'),end_hash=end_hash,run_id=None,write=write,table='tvl_history_coverage')
     rows = conn.execute('''SELECT vault_address,MIN(block_number) AS deployment_block FROM tvl_inventory_events
         WHERE chain_id=? AND source_kind='tvl-curation-factory' AND lower(source_address)=?
         AND block_number<=? GROUP BY vault_address''',(factory['chain_id'],factory['address'].lower(),end))
@@ -345,9 +400,9 @@ def discover_curation(conn, *, chain_ids=None, reader_factory=DiscoveryReader, r
         result['factories'].append(scope)
         if progress:
             progress(f"Curation factory chain {chain} {factory['address']}: {scope['status']}")
-    for extra in CURATION_REGISTRY['extra_vaults']:
+    for extra in [*CURATION_REGISTRY['extra_vaults'],*CURATION_REGISTRY.get('known_vaults',[])]:
         if extra['chain_id'] not in TVL_EXCLUDED_CHAIN_IDS and (chain_ids is None or extra['chain_id'] in chain_ids):
-            candidates.append({**extra,'category':'curation','evidence':{'source':'extra-product','label':extra['label']}})
+            candidates.append({**extra,'category':'curation','evidence':{'source':'known-product','label':extra['label']}})
     # API and factory evidence must agree on a contract family. Generic extras are
     # allowed to add a product without replacing an already known Morpho family.
     merged = {}
@@ -366,6 +421,7 @@ def discover_curation(conn, *, chain_ids=None, reader_factory=DiscoveryReader, r
     result.update(enrichment)
     result['failures'] = failures+result['failures']
     result['status'] = 'incomplete' if result['failures'] else 'complete'
+    result.update(event_read_summary(readers))
     return result
 
 ADD_ADAPTER_EVENT = _event('AddAdapter',[('account','address',True)])
@@ -386,6 +442,8 @@ def historical_adapters(conn, parent, reader, *, from_block=None, to_block=None,
     start = max(deployment,from_block if from_block is not None else deployment)
     scope = Scope(chain,address,'tvl-adapter-membership',fingerprint(ADD_ADAPTER_EVENT))
     if start<=end:
+        if hasattr(reader,'event_chunk_size'):
+            chunk_size=reader.event_chunk_size(address,ADD_ADAPTER_EVENT,start,end,chunk_size)
         for lo,hi in missing_ranges(conn,scope,start,end,chunk_size,table='tvl_history_coverage'):
             logs = reader.logs(address,ADD_ADAPTER_EVENT,lo,hi)
             if len(logs)>=10_000:
@@ -405,7 +463,9 @@ def historical_adapters(conn, parent, reader, *, from_block=None, to_block=None,
                     from .tvl_sources import put_strategy
                     put_strategy(db,chain,address,adapter,'morpho-adapter-event')
                 return len(logs)
-            commit_range(conn,scope,lo,hi,source='rpc',end_hash=Web3.to_hex(reader.block(hi)['hash']),run_id=None,write=write,table='tvl_history_coverage')
+            end_hash=Web3.to_hex(reader.block(hi)['hash'])
+            if hasattr(reader,'verify_block'):reader.verify_block(hi,end_hash)
+            commit_range(conn,scope,lo,hi,source=getattr(reader,'last_event_source','rpc'),end_hash=end_hash,run_id=None,write=write,table='tvl_history_coverage')
     rows = conn.execute('''SELECT decoded_json,MIN(block_number) AS block_number FROM tvl_events_raw
         WHERE chain_id=? AND lower(contract_address)=? AND event_name='AddAdapter' AND block_number<=?
         GROUP BY decoded_json''',(chain,address.lower(),end))
@@ -521,6 +581,7 @@ def discover_adapter_relations(conn, *, chain_ids=None, reader_factory=Discovery
         if progress:
             progress(f"Curation relationships chain {chain} parent {address}: checked")
     result['status'] = 'incomplete' if result['failures'] else 'complete'
+    result.update(event_read_summary(readers))
     return result
 
 

@@ -15,9 +15,7 @@
     },
     {
       "address": "0x518C21DC88D9780c0A1Be566433c571461A70149",
-      "chain_ids": [
-        747474
-      ]
+      "chain_ids": null
     }
   ],
   "factories": [
@@ -92,6 +90,18 @@
       "address": "0xD7217E5687FF1071356C780b5fe4803D9D967da7",
       "from_block": 14188393,
       "family": "morpho-v2"
+    },
+    {
+      "chain_id": 10,
+      "address": "0x3Bb6A6A0Bc85b367EFE0A5bAc81c5E52C892839a",
+      "from_block": 130770189,
+      "family": "morpho-v1"
+    },
+    {
+      "chain_id": 4663,
+      "address": "0x0FBad98595b0186dA120E41f77C102beb49f803c",
+      "from_block": 288,
+      "family": "morpho-v2"
     }
   ],
   "extra_vaults": [
@@ -106,6 +116,379 @@
       "address": "0x581Cc9a73Ec7431723A4a80699B8f801205841F1",
       "label": "OUSD",
       "family": "erc4626"
+    }
+  ],
+  "known_vaults": [
+    {
+      "chain_id": 1,
+      "address": "0x5B8b9FA8e4145eE06025F642cAdB1B47e5F39F04",
+      "family": "morpho-v1",
+      "label": "OUSD Vault V1",
+      "deployment_block": 23998013
+    },
+    {
+      "chain_id": 1,
+      "address": "0x3Dfe70B05657949A5dB340754aD664810ac63b21",
+      "family": "morpho-v1",
+      "label": "WETH ARM Vault",
+      "deployment_block": 24271272
+    },
+    {
+      "chain_id": 1,
+      "address": "0xdC2Dd5189F70Fe2832D9caf7b17d27AA3D79dbE1",
+      "family": "morpho-v1",
+      "label": "Yearn Degen USDC",
+      "deployment_block": 22880731
+    },
+    {
+      "chain_id": 1,
+      "address": "0x3DC15A363f5Dcf3B9dB90a5C0e2a5Cdf8f1CD77E",
+      "family": "morpho-v1",
+      "label": "Yearn OG DAI",
+      "deployment_block": 22374085
+    },
+    {
+      "chain_id": 1,
+      "address": "0xF9bdDd4A9b3A45f980e11fDDE96e16364dDBEc49",
+      "family": "morpho-v1",
+      "label": "Yearn OG USDC",
+      "deployment_block": 22659677
+    },
+    {
+      "chain_id": 1,
+      "address": "0xE89371eAaAC6D46d4C3ED23453241987916224FC",
+      "family": "morpho-v1",
+      "label": "Yearn OG WETH",
+      "deployment_block": 22337946
+    },
+    {
+      "chain_id": 1,
+      "address": "0x68Aea7b82Df6CcdF76235D46445Ed83f85F845A3",
+      "family": "morpho-v1",
+      "label": "Yearn USDC",
+      "deployment_block": 22630659
+    },
+    {
+      "chain_id": 1,
+      "address": "0x0963232eB842BAF53E8e517691f81745C1F228a0",
+      "family": "morpho-v1",
+      "label": "Yearn USDT",
+      "deployment_block": 24995500
+    },
+    {
+      "chain_id": 1,
+      "address": "0x2bB005127069A0F0325Fb7370967E8A2b64FB77E",
+      "family": "morpho-v1",
+      "label": "Yearn WBTC",
+      "deployment_block": 24995316
+    },
+    {
+      "chain_id": 1,
+      "address": "0xFB154c729A16802c4ad1E8f7FF539a8b9f49c960",
+      "family": "morpho-v2",
+      "label": "OUSD Vault V2",
+      "deployment_block": 24027547
+    },
+    {
+      "chain_id": 1,
+      "address": "0xFb44F0aCE2D757c4368001EF6755F5C3d58f94B0",
+      "family": "morpho-v2",
+      "label": "OUSD Vault V2",
+      "deployment_block": 24021545
+    },
+    {
+      "chain_id": 1,
+      "address": "0xB885F6d448dA7E2C642Ec31190B629E40E87B069",
+      "family": "morpho-v2",
+      "label": "Yearn OG USDC",
+      "deployment_block": 23885389
+    },
+    {
+      "chain_id": 1,
+      "address": "0xbe518068EB6135117207256F8C9aFf81B4382DB1",
+      "family": "morpho-v2",
+      "label": "Yearn OG WETH V2",
+      "deployment_block": 23999043
+    },
+    {
+      "chain_id": 1,
+      "address": "0xaA8d9E2aBa210639cE6C7cE21385e7c673ACa6f3",
+      "family": "morpho-v2",
+      "label": "Yearn USDC",
+      "deployment_block": 24249867
+    },
+    {
+      "chain_id": 1,
+      "address": "0x594d91044Aa50d642C90f23F02418911D3503a30",
+      "family": "morpho-v2",
+      "label": "Yearn USDT",
+      "deployment_block": 24991919
+    },
+    {
+      "chain_id": 1,
+      "address": "0x3e625e12a1d0f21bbFC771546C7e63e8c7a07b7E",
+      "family": "morpho-v2",
+      "label": "Yearn WBTC",
+      "deployment_block": 24994180
+    },
+    {
+      "chain_id": 10,
+      "address": "0xfD370cB6F9246d5e994b04B6c59580D315FBf537",
+      "family": "morpho-v1",
+      "label": "OUSD Vault V1",
+      "deployment_block": 148909208
+    },
+    {
+      "chain_id": 999,
+      "address": "0x0fb7e41A0A85Eb0BcA55172b73942cc6685e2B2E",
+      "family": "morpho-v1",
+      "label": "OUSD Vault V1",
+      "deployment_block": 29644703
+    },
+    {
+      "chain_id": 999,
+      "address": "0x7bdB0F32ceE4847407BFd391594E19b23f5519D0",
+      "family": "morpho-v1",
+      "label": "Yearn Degen USDT0",
+      "deployment_block": 16460688
+    },
+    {
+      "chain_id": 999,
+      "address": "0xe90959cbe7e56b5ebff9ad12de611a4976f2d2b1",
+      "family": "morpho-v2",
+      "label": "OUSD Vault V2",
+      "deployment_block": 29650315
+    },
+    {
+      "chain_id": 4663,
+      "address": "0x8c258f25fc6fbe3f01ccc828e2c3840a46a4a9a2",
+      "family": "morpho-v2",
+      "label": "Yearn Stonk USDG",
+      "deployment_block": 72392181
+    },
+    {
+      "chain_id": 8453,
+      "address": "0x581Cc9a73Ec7431723A4a80699B8f801205841F1",
+      "family": "morpho-v1",
+      "label": "OUSD Vault V1",
+      "deployment_block": 41337044
+    },
+    {
+      "chain_id": 8453,
+      "address": "0xef417a2512C5a41f69AE4e021648b69a7CdE5D03",
+      "family": "morpho-v1",
+      "label": "Yearn OG USDC",
+      "deployment_block": 26515523
+    },
+    {
+      "chain_id": 8453,
+      "address": "0x1D795E29044A62Da42D927c4b179269139A28A6B",
+      "family": "morpho-v1",
+      "label": "Yearn OG WETH",
+      "deployment_block": 28493006
+    },
+    {
+      "chain_id": 8453,
+      "address": "0xDfE856774201C7A5f4ecDF5e2918A7505DD81c7c",
+      "family": "morpho-v2",
+      "label": "(unnamed)",
+      "deployment_block": 38121864
+    },
+    {
+      "chain_id": 8453,
+      "address": "0xEF349BDA1c96712A1dCD0c6F78b6CE8d76E9aF0C",
+      "family": "morpho-v2",
+      "label": "(unnamed)",
+      "deployment_block": 39439714
+    },
+    {
+      "chain_id": 8453,
+      "address": "0x2Ba14b2e1E7D2189D3550b708DFCA01f899f33c1",
+      "family": "morpho-v2",
+      "label": "OUSD Vault V2",
+      "deployment_block": 41340316
+    },
+    {
+      "chain_id": 8453,
+      "address": "0xDbc890056D898c8Bc01C35A6102bEA674694676e",
+      "family": "morpho-v2",
+      "label": "OUSD Vault V2",
+      "deployment_block": 41340054
+    },
+    {
+      "chain_id": 8453,
+      "address": "0x1F113af19BB2407822C4f28663b62cC0DeEAb976",
+      "family": "morpho-v2",
+      "label": "Yearn OG USDC V2",
+      "deployment_block": 39441498
+    },
+    {
+      "chain_id": 8453,
+      "address": "0x3FbD8c8E123ce473482933be4B3A292bbCDB2360",
+      "family": "morpho-v2",
+      "label": "Yearn OG USDC V2",
+      "deployment_block": 39439948
+    },
+    {
+      "chain_id": 8453,
+      "address": "0xe7D0DBE3493830e2Ab62619211A2BfF0Fc60dB42",
+      "family": "morpho-v2",
+      "label": "Yearn OG USDC V2",
+      "deployment_block": 41373353
+    },
+    {
+      "chain_id": 8453,
+      "address": "0x2EfD54529329AD364B8Df988CE3BAb5Ff256ab3E",
+      "family": "morpho-v2",
+      "label": "Yearn OG WETH V2",
+      "deployment_block": 41373825
+    },
+    {
+      "chain_id": 8453,
+      "address": "0xB2d2bfdF380aB653B99E46d345A8086eeC4AB37f",
+      "family": "morpho-v2",
+      "label": "Yearn OG WETH V2",
+      "deployment_block": 39439510
+    },
+    {
+      "chain_id": 8453,
+      "address": "0xeAA2657dB82229e241e0c972306c0e75324b2947",
+      "family": "morpho-v2",
+      "label": "Yearn OG WETH V2",
+      "deployment_block": 39439594
+    },
+    {
+      "chain_id": 42161,
+      "address": "0x36b69949d60d06ECcC14DE0Ae63f4E00cc2cd8B9",
+      "family": "morpho-v1",
+      "label": "Yearn Degen USDC",
+      "deployment_block": 377976262
+    },
+    {
+      "chain_id": 42161,
+      "address": "0x87DEAE530841A9671326C9D5B9f91bdB11F3162c",
+      "family": "morpho-v1",
+      "label": "Yearn OG USDC",
+      "deployment_block": 360355659
+    },
+    {
+      "chain_id": 42161,
+      "address": "0x3574B6b307f86C0ca6bd263dCa12d8f3031e57B9",
+      "family": "morpho-v1",
+      "label": "Yearn OG WETH",
+      "deployment_block": 360363523
+    },
+    {
+      "chain_id": 747474,
+      "address": "0xAA0C0f9CDf571e2767Aa897f1DbA10f1E681c990",
+      "family": "morpho-v1",
+      "label": "Yearn KAT",
+      "deployment_block": 25722867
+    },
+    {
+      "chain_id": 747474,
+      "address": "0x2672c0FAeA0FdF14fcc97a00108e4a13F0E5B4fE",
+      "family": "morpho-v1",
+      "label": "Yearn OG AUSD",
+      "deployment_block": 12157711
+    },
+    {
+      "chain_id": 747474,
+      "address": "0xFaDe0C546f44e33C134c4036207B314AC643dc2E",
+      "family": "morpho-v1",
+      "label": "Yearn OG ETH",
+      "deployment_block": 4535962
+    },
+    {
+      "chain_id": 747474,
+      "address": "0xCE2b8e464Fc7b5E58710C24b7e5EBFB6027f29D7",
+      "family": "morpho-v1",
+      "label": "Yearn OG USDC",
+      "deployment_block": 4544531
+    },
+    {
+      "chain_id": 747474,
+      "address": "0x8ED68f91AfbE5871dCE31ae007a936ebE8511d47",
+      "family": "morpho-v1",
+      "label": "Yearn OG USDT",
+      "deployment_block": 4548441
+    },
+    {
+      "chain_id": 747474,
+      "address": "0xe107cCdeb8e20E499545C813f98Cc90619b29859",
+      "family": "morpho-v1",
+      "label": "Yearn OG WBTC",
+      "deployment_block": 4705733
+    },
+    {
+      "chain_id": 747474,
+      "address": "0x4fd2FDDC8973077B95D614980Fd298B120f3148B",
+      "family": "morpho-v1",
+      "label": "d3nity dUSD",
+      "deployment_block": 14590550
+    },
+    {
+      "chain_id": 747474,
+      "address": "0x39D91a9AE178bEaA323C78efE53aEcFe135335af",
+      "family": "morpho-v2",
+      "label": "(unnamed)",
+      "deployment_block": 17428500
+    },
+    {
+      "chain_id": 747474,
+      "address": "0xbfd40b250F1529F3d0f3913B1f2E53621F5419Dd",
+      "family": "morpho-v2",
+      "label": "(unnamed)",
+      "deployment_block": 17428098
+    },
+    {
+      "chain_id": 747474,
+      "address": "0xA2d38c8A3D810EBcF4C2075821c5eC8F976bb692",
+      "family": "morpho-v2",
+      "label": "Yearn Degen USDC",
+      "deployment_block": 32966522
+    },
+    {
+      "chain_id": 747474,
+      "address": "0x9b1aE9548E4B46cEB6650f6CEc702bAf5CF2b8CC",
+      "family": "morpho-v2",
+      "label": "Yearn KAT",
+      "deployment_block": 27205286
+    },
+    {
+      "chain_id": 747474,
+      "address": "0x5920A6FC553af799542EDA628AdfCc9eA52e141C",
+      "family": "morpho-v2",
+      "label": "Yearn OG ETH",
+      "deployment_block": 30212642
+    },
+    {
+      "chain_id": 747474,
+      "address": "0xca44cbe1FB03691d43d2d93AA460e2fCB03878fE",
+      "family": "morpho-v2",
+      "label": "Yearn OG USDC",
+      "deployment_block": 30272831
+    },
+    {
+      "chain_id": 747474,
+      "address": "0x4284d4F9f4d61eA57B8F0943547c7C19C5B9B249",
+      "family": "morpho-v2",
+      "label": "Yearn OG USDT",
+      "deployment_block": 30275766
+    },
+    {
+      "chain_id": 747474,
+      "address": "0x22c01834e1A261F8BebCa7D7B459db2F389785FF",
+      "family": "morpho-v2",
+      "label": "Yearn OG WBTC",
+      "deployment_block": 30274797
+    },
+    {
+      "chain_id": 747474,
+      "address": "0xf71da79a6eD40F894e883874dCE3f54B1493d930",
+      "family": "morpho-v2",
+      "label": "d3nity dUSD V2",
+      "deployment_block": 17440628
     }
   ]
 }

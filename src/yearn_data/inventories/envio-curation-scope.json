@@ -1,0 +1,475 @@
+{
+  "version": 1,
+  "stride": 1000,
+  "chains": [
+    {
+      "chainId": 1,
+      "startBlock": 18925584
+    },
+    {
+      "chainId": 10,
+      "startBlock": 130770189
+    },
+    {
+      "chainId": 8453,
+      "startBlock": 13978134
+    },
+    {
+      "chainId": 42161,
+      "startBlock": 296447195
+    },
+    {
+      "chainId": 747474,
+      "startBlock": 2741420
+    },
+    {
+      "chainId": 999,
+      "startBlock": 1988677
+    },
+    {
+      "chainId": 4663,
+      "startBlock": 288
+    }
+  ],
+  "contracts": [
+    {
+      "chainId": 1,
+      "address": "0x0963232eb842baf53e8e517691f81745c1f228a0",
+      "family": "morpho-v1",
+      "startBlock": 24995500
+    },
+    {
+      "chainId": 1,
+      "address": "0x2bb005127069a0f0325fb7370967e8a2b64fb77e",
+      "family": "morpho-v1",
+      "startBlock": 24995316
+    },
+    {
+      "chainId": 1,
+      "address": "0x31a5684983eee865d943a696aac155363ba024f9",
+      "family": "morpho-v1",
+      "startBlock": 22490587
+    },
+    {
+      "chainId": 1,
+      "address": "0x3dc15a363f5dcf3b9db90a5c0e2a5cdf8f1cd77e",
+      "family": "morpho-v1",
+      "startBlock": 22374085
+    },
+    {
+      "chainId": 1,
+      "address": "0x3dfe70b05657949a5db340754ad664810ac63b21",
+      "family": "morpho-v1",
+      "startBlock": 24271272
+    },
+    {
+      "chainId": 1,
+      "address": "0x5b8b9fa8e4145ee06025f642cadb1b47e5f39f04",
+      "family": "morpho-v1",
+      "startBlock": 23998013
+    },
+    {
+      "chainId": 1,
+      "address": "0x68aea7b82df6ccdf76235d46445ed83f85f845a3",
+      "family": "morpho-v1",
+      "startBlock": 22630659
+    },
+    {
+      "chainId": 1,
+      "address": "0x812b2c6ab3f4471c0e43d4bb61098a9211017427",
+      "family": "morpho-v1",
+      "startBlock": 22490868
+    },
+    {
+      "chainId": 1,
+      "address": "0xbeefb9f61cc44895d8aec381373555a64191a9c4",
+      "family": "morpho-v1",
+      "startBlock": 22488129
+    },
+    {
+      "chainId": 1,
+      "address": "0xc54b4e08c1dcc199fdd35c6b5ab589ffd3428a8d",
+      "family": "morpho-v1",
+      "startBlock": 22490820
+    },
+    {
+      "chainId": 1,
+      "address": "0xdc2dd5189f70fe2832d9caf7b17d27aa3d79dbe1",
+      "family": "morpho-v1",
+      "startBlock": 22880731
+    },
+    {
+      "chainId": 1,
+      "address": "0xe89371eaaac6d46d4c3ed23453241987916224fc",
+      "family": "morpho-v1",
+      "startBlock": 22337946
+    },
+    {
+      "chainId": 1,
+      "address": "0xf9bddd4a9b3a45f980e11fdde96e16364ddbec49",
+      "family": "morpho-v1",
+      "startBlock": 22659677
+    },
+    {
+      "chainId": 1,
+      "address": "0x1897a8997241c1cd4bd0698647e4eb7213535c24",
+      "family": "morpho-v1-factory",
+      "startBlock": 21439510
+    },
+    {
+      "chainId": 1,
+      "address": "0xa9c3d3a366466fa809d1ae982fb2c46e5fc41101",
+      "family": "morpho-v1-factory",
+      "startBlock": 18925584
+    },
+    {
+      "chainId": 1,
+      "address": "0x3e625e12a1d0f21bbfc771546c7e63e8c7a07b7e",
+      "family": "morpho-v2",
+      "startBlock": 24994180
+    },
+    {
+      "chainId": 1,
+      "address": "0x594d91044aa50d642c90f23f02418911d3503a30",
+      "family": "morpho-v2",
+      "startBlock": 24991919
+    },
+    {
+      "chainId": 1,
+      "address": "0xaa8d9e2aba210639ce6c7ce21385e7c673aca6f3",
+      "family": "morpho-v2",
+      "startBlock": 24249867
+    },
+    {
+      "chainId": 1,
+      "address": "0xb885f6d448da7e2c642ec31190b629e40e87b069",
+      "family": "morpho-v2",
+      "startBlock": 23885389
+    },
+    {
+      "chainId": 1,
+      "address": "0xbe518068eb6135117207256f8c9aff81b4382db1",
+      "family": "morpho-v2",
+      "startBlock": 23999043
+    },
+    {
+      "chainId": 1,
+      "address": "0xfb154c729a16802c4ad1e8f7ff539a8b9f49c960",
+      "family": "morpho-v2",
+      "startBlock": 24027547
+    },
+    {
+      "chainId": 1,
+      "address": "0xfb44f0ace2d757c4368001ef6755f5c3d58f94b0",
+      "family": "morpho-v2",
+      "startBlock": 24021545
+    },
+    {
+      "chainId": 1,
+      "address": "0xa1d94f746defa1928926b84fb2596c06926c0405",
+      "family": "morpho-v2-factory",
+      "startBlock": 23375073
+    },
+    {
+      "chainId": 10,
+      "address": "0xfd370cb6f9246d5e994b04b6c59580d315fbf537",
+      "family": "morpho-v1",
+      "startBlock": 148909208
+    },
+    {
+      "chainId": 10,
+      "address": "0x3bb6a6a0bc85b367efe0a5bac81c5e52c892839a",
+      "family": "morpho-v1-factory",
+      "startBlock": 130770189
+    },
+    {
+      "chainId": 999,
+      "address": "0x0fb7e41a0a85eb0bca55172b73942cc6685e2b2e",
+      "family": "morpho-v1",
+      "startBlock": 29644703
+    },
+    {
+      "chainId": 999,
+      "address": "0x7bdb0f32cee4847407bfd391594e19b23f5519d0",
+      "family": "morpho-v1",
+      "startBlock": 16460688
+    },
+    {
+      "chainId": 999,
+      "address": "0xec051b19d654c48c357dc974376deb6272f24e53",
+      "family": "morpho-v1-factory",
+      "startBlock": 1988677
+    },
+    {
+      "chainId": 999,
+      "address": "0xe90959cbe7e56b5ebff9ad12de611a4976f2d2b1",
+      "family": "morpho-v2",
+      "startBlock": 29650315
+    },
+    {
+      "chainId": 999,
+      "address": "0xd7217e5687ff1071356c780b5fe4803d9d967da7",
+      "family": "morpho-v2-factory",
+      "startBlock": 14188393
+    },
+    {
+      "chainId": 4663,
+      "address": "0x8c258f25fc6fbe3f01ccc828e2c3840a46a4a9a2",
+      "family": "morpho-v2",
+      "startBlock": 72392181
+    },
+    {
+      "chainId": 4663,
+      "address": "0x0fbad98595b0186da120e41f77c102beb49f803c",
+      "family": "morpho-v2-factory",
+      "startBlock": 288
+    },
+    {
+      "chainId": 8453,
+      "address": "0x1d795e29044a62da42d927c4b179269139a28a6b",
+      "family": "morpho-v1",
+      "startBlock": 28493006
+    },
+    {
+      "chainId": 8453,
+      "address": "0x581cc9a73ec7431723a4a80699b8f801205841f1",
+      "family": "morpho-v1",
+      "startBlock": 41337044
+    },
+    {
+      "chainId": 8453,
+      "address": "0xef417a2512c5a41f69ae4e021648b69a7cde5d03",
+      "family": "morpho-v1",
+      "startBlock": 26515523
+    },
+    {
+      "chainId": 8453,
+      "address": "0xa9c3d3a366466fa809d1ae982fb2c46e5fc41101",
+      "family": "morpho-v1-factory",
+      "startBlock": 13978134
+    },
+    {
+      "chainId": 8453,
+      "address": "0xff62a7c278c62ed665133147129245053bbf5918",
+      "family": "morpho-v1-factory",
+      "startBlock": 23928808
+    },
+    {
+      "chainId": 8453,
+      "address": "0x1f113af19bb2407822c4f28663b62cc0deeab976",
+      "family": "morpho-v2",
+      "startBlock": 39441498
+    },
+    {
+      "chainId": 8453,
+      "address": "0x2ba14b2e1e7d2189d3550b708dfca01f899f33c1",
+      "family": "morpho-v2",
+      "startBlock": 41340316
+    },
+    {
+      "chainId": 8453,
+      "address": "0x2efd54529329ad364b8df988ce3bab5ff256ab3e",
+      "family": "morpho-v2",
+      "startBlock": 41373825
+    },
+    {
+      "chainId": 8453,
+      "address": "0x3fbd8c8e123ce473482933be4b3a292bbcdb2360",
+      "family": "morpho-v2",
+      "startBlock": 39439948
+    },
+    {
+      "chainId": 8453,
+      "address": "0xb2d2bfdf380ab653b99e46d345a8086eec4ab37f",
+      "family": "morpho-v2",
+      "startBlock": 39439510
+    },
+    {
+      "chainId": 8453,
+      "address": "0xdbc890056d898c8bc01c35a6102bea674694676e",
+      "family": "morpho-v2",
+      "startBlock": 41340054
+    },
+    {
+      "chainId": 8453,
+      "address": "0xdfe856774201c7a5f4ecdf5e2918a7505dd81c7c",
+      "family": "morpho-v2",
+      "startBlock": 38121864
+    },
+    {
+      "chainId": 8453,
+      "address": "0xe7d0dbe3493830e2ab62619211a2bff0fc60db42",
+      "family": "morpho-v2",
+      "startBlock": 41373353
+    },
+    {
+      "chainId": 8453,
+      "address": "0xeaa2657db82229e241e0c972306c0e75324b2947",
+      "family": "morpho-v2",
+      "startBlock": 39439594
+    },
+    {
+      "chainId": 8453,
+      "address": "0xef349bda1c96712a1dcd0c6f78b6ce8d76e9af0c",
+      "family": "morpho-v2",
+      "startBlock": 39439714
+    },
+    {
+      "chainId": 8453,
+      "address": "0x4501125508079a99ebbebce205dec9593c2b5857",
+      "family": "morpho-v2-factory",
+      "startBlock": 35615206
+    },
+    {
+      "chainId": 42161,
+      "address": "0x3574b6b307f86c0ca6bd263dca12d8f3031e57b9",
+      "family": "morpho-v1",
+      "startBlock": 360363523
+    },
+    {
+      "chainId": 42161,
+      "address": "0x36b69949d60d06eccc14de0ae63f4e00cc2cd8b9",
+      "family": "morpho-v1",
+      "startBlock": 377976262
+    },
+    {
+      "chainId": 42161,
+      "address": "0x87deae530841a9671326c9d5b9f91bdb11f3162c",
+      "family": "morpho-v1",
+      "startBlock": 360355659
+    },
+    {
+      "chainId": 42161,
+      "address": "0x878988f5f561081deea117717052164ea1ef0c82",
+      "family": "morpho-v1-factory",
+      "startBlock": 296447195
+    },
+    {
+      "chainId": 42161,
+      "address": "0x6b46fa3cc9ebf8ab230abac664e37f2966bf7971",
+      "family": "morpho-v2-factory",
+      "startBlock": 387016724
+    },
+    {
+      "chainId": 747474,
+      "address": "0x2672c0faea0fdf14fcc97a00108e4a13f0e5b4fe",
+      "family": "morpho-v1",
+      "startBlock": 12157711
+    },
+    {
+      "chainId": 747474,
+      "address": "0x4fd2fddc8973077b95d614980fd298b120f3148b",
+      "family": "morpho-v1",
+      "startBlock": 14590550
+    },
+    {
+      "chainId": 747474,
+      "address": "0x8ed68f91afbe5871dce31ae007a936ebe8511d47",
+      "family": "morpho-v1",
+      "startBlock": 4548441
+    },
+    {
+      "chainId": 747474,
+      "address": "0xaa0c0f9cdf571e2767aa897f1dba10f1e681c990",
+      "family": "morpho-v1",
+      "startBlock": 25722867
+    },
+    {
+      "chainId": 747474,
+      "address": "0xce2b8e464fc7b5e58710c24b7e5ebfb6027f29d7",
+      "family": "morpho-v1",
+      "startBlock": 4544531
+    },
+    {
+      "chainId": 747474,
+      "address": "0xe107ccdeb8e20e499545c813f98cc90619b29859",
+      "family": "morpho-v1",
+      "startBlock": 4705733
+    },
+    {
+      "chainId": 747474,
+      "address": "0xfade0c546f44e33c134c4036207b314ac643dc2e",
+      "family": "morpho-v1",
+      "startBlock": 4535962
+    },
+    {
+      "chainId": 747474,
+      "address": "0x1c8de6889acee12257899bfeaa2b7e534de32e16",
+      "family": "morpho-v1-factory",
+      "startBlock": 2741420
+    },
+    {
+      "chainId": 747474,
+      "address": "0x22c01834e1a261f8bebca7d7b459db2f389785ff",
+      "family": "morpho-v2",
+      "startBlock": 30274797
+    },
+    {
+      "chainId": 747474,
+      "address": "0x39d91a9ae178beaa323c78efe53aecfe135335af",
+      "family": "morpho-v2",
+      "startBlock": 17428500
+    },
+    {
+      "chainId": 747474,
+      "address": "0x4284d4f9f4d61ea57b8f0943547c7c19c5b9b249",
+      "family": "morpho-v2",
+      "startBlock": 30275766
+    },
+    {
+      "chainId": 747474,
+      "address": "0x5920a6fc553af799542eda628adfcc9ea52e141c",
+      "family": "morpho-v2",
+      "startBlock": 30212642
+    },
+    {
+      "chainId": 747474,
+      "address": "0x9b1ae9548e4b46ceb6650f6cec702baf5cf2b8cc",
+      "family": "morpho-v2",
+      "startBlock": 27205286
+    },
+    {
+      "chainId": 747474,
+      "address": "0xa2d38c8a3d810ebcf4c2075821c5ec8f976bb692",
+      "family": "morpho-v2",
+      "startBlock": 32966522
+    },
+    {
+      "chainId": 747474,
+      "address": "0xbeef042bad4472c3f7eb9a73070703788b5362d7",
+      "family": "morpho-v2",
+      "startBlock": 33046983
+    },
+    {
+      "chainId": 747474,
+      "address": "0xbeeff2d5d126d4809195eea02b605423917bb6c6",
+      "family": "morpho-v2",
+      "startBlock": 33046804
+    },
+    {
+      "chainId": 747474,
+      "address": "0xbfd40b250f1529f3d0f3913b1f2e53621f5419dd",
+      "family": "morpho-v2",
+      "startBlock": 17428098
+    },
+    {
+      "chainId": 747474,
+      "address": "0xca44cbe1fb03691d43d2d93aa460e2fcb03878fe",
+      "family": "morpho-v2",
+      "startBlock": 30272831
+    },
+    {
+      "chainId": 747474,
+      "address": "0xf71da79a6ed40f894e883874dce3f54b1493d930",
+      "family": "morpho-v2",
+      "startBlock": 17440628
+    },
+    {
+      "chainId": 747474,
+      "address": "0xfcb8b57e56787bb29e130fca67f3c5a1232975d1",
+      "family": "morpho-v2-factory",
+      "startBlock": 13096629
+    }
+  ],
+  "scopeHash": "7d017b721b49fc7cffd29bda6bec7f691f73e40989fcb10e04f88bbb3e6dafce"
+}
