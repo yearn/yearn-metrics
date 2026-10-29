@@ -73,7 +73,7 @@ class CurationEvents:
         # height alone cannot distinguish stale indexer data after a reorg.
         if self.anchor is None or self.anchor['block_number']<end:
             data=self.query('''query($chain:Int!,$end:Int!,$through:Int!){raw_events(limit:1,
-                order_by:{block_number:desc},where:{chain_id:{_eq:$chain},
+                order_by:{serial:desc},where:{chain_id:{_eq:$chain},
                 block_number:{_gte:$end,_lte:$through}}){chain_id block_number block_hash}}''',
                 {'chain':self.chain_id,'end':end,'through':int(self.state['throughBlock'])})
             anchors=data.get('raw_events') or []
