@@ -77,7 +77,8 @@ def benchmark_history(root, monkeypatch):
         assert values[0]['reusedDates']==32
         assert values[1]['accountedDates']==33
         assert values[0]['totalsRowsRead']==80 and values[1]['totalsRowsRead']==2640
-        assert values[0]['selectedInputRowsRead']==values[1]['selectedInputRowsRead']==2673
+        assert values[0]['selectedInputRowsRead']==81  # 80 vault snapshots and one position for the changed date.
+        assert values[1]['selectedInputRowsRead']==2673  # All 33 dates in the independent full rebuild.
         assert values[0]['copiedChartRows']==2560
         assert values[0]['copiedTotalsRows']==128
         chart=candidate.history(interval='daily')['chart']
@@ -86,7 +87,7 @@ def benchmark_history(root, monkeypatch):
             assert chart[15]['Ethereum']==7960
         results.append(dict(phase=phase,runs=values))
     return dict(inventory=80,initialDates=32,finalDates=33,positionEdgesPerDate=1,
-                limits='Offline fixed inputs and local Postgres; logical rows returned/read/written, not physical page or query-plan I/O; selected inputs and immutable row copy remain full-history costs.',
+                limits='Offline fixed inputs and local Postgres; logical rows returned/read/written, not physical page or query-plan I/O; selected inputs are limited to changed dates; immutable row copy remains a full-history cost.',
                 phases=results)
 
 
