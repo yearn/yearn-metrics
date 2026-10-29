@@ -134,6 +134,30 @@ def test_adaptive_windows_grow_split_limits_and_bound_timeouts(monkeypatch):
     assert len(calls)==1
 
 
+def test_envio_gateway_retry_exhaustion_splits_with_bounded_timeout_depth(monkeypatch):
+    from types import SimpleNamespace
+    from yearn_data import envio
+    responses=[];windows=[]
+    monkeypatch.setenv('YEARN_ENVIO_GRAPHQL_URL','https://envio.invalid/graphql')
+    monkeypatch.setattr(envio.time,'sleep',lambda _:None)
+    def post(url,*,json,timeout):
+        lo,hi=json['variables']['lo'],json['variables']['hi']
+        responses.append((lo,hi))
+        return SimpleNamespace(status_code=504 if hi-lo>=2 else 200,
+            raise_for_status=lambda:None,json=lambda:{'data':{'rows':list(range(lo,hi+1))}})
+    monkeypatch.setattr(envio.requests,'post',post)
+    def fetch(lo,hi):
+        windows.append((lo,hi))
+        return envio._gql('query',{'lo':lo,'hi':hi},split_timeouts=True)['rows']
+    assert read_windows(fetch,0,7,'envio')==list(range(8))
+    assert windows==[(0,7),(0,3),(0,1),(2,3),(4,7),(4,5),(6,7)]
+    assert responses.count((0,7))==5 and responses.count((0,3))==5
+    windows.clear()
+    with pytest.raises(RuntimeError,match='after retries'):
+        read_windows(fetch,0,15,'envio')
+    assert windows==[(0,15),(0,7),(0,3)]  # Two split levels, never unbounded retries.
+
+
 def test_parallel_inventory_binds_each_registry_and_finishes_before_reports(postgres_database,monkeypatch):
     from yearn_data.history_sources import inventory_targets
     targets=list(inventory_targets('op'));third=Event();guard=Lock();finished=set();caller=get_ident()

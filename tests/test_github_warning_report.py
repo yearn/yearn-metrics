@@ -141,6 +141,33 @@ def test_catalog_report_explains_retained_metadata_and_uncertain_discovery_cause
     assert '{"address"' not in body
 
 
+def test_analytics_refresh_outage_keeps_other_warnings_and_updates_same_issue(receipt,monkeypatch):
+    receipt['result']['warnings'].append(dict(code='incomplete-source',stage='analytics-sources',message='Incomplete',
+        details=dict(attempt={'status':'unavailable','failureClass':'ConnectionError'},sources={
+            'defillama':dict(availability='partial',observedAt=1793059200,retainedRows=2),
+            'membership':dict(availability='available',observedAt=1793059200,retainedRows=0),
+            'fee-config':dict(availability='unavailable',observedAt=None,retainedRows=0)})))
+    body=report.render(receipt)
+    assert 'Analytics source refresh' in body and 'DefiLlama evidence is partial' in body
+    assert 'Analytics fee configuration evidence is unavailable' in body
+    assert '2 rows use retained evidence' in body and 'ConnectionError' in body
+    assert '7,240 missing' in body and 'affected vaults' in body and '0x123' in body
+    monkeypatch.setenv('YEARN_REFRESH_GITHUB_TEMPLATE_SHA256',report.template_digest())
+    current={'title':report.TITLE,'body':'Old report','state':'open',
+             'html_url':'https://github.com/yearn/yearn-metrics/issues/92'}
+    def gh(method,endpoint,payload=None):
+        assert endpoint=='repos/yearn/yearn-metrics/issues/92'
+        if method=='PATCH':current.update(payload)
+        return deepcopy(current)
+    monkeypatch.setattr(report,'gh',gh)
+    # Exercise completed() so the outcome is also preserved in the run receipt.
+    monkeypatch.setattr(report,'connect',lambda *a:(_ for _ in ()).throw(RuntimeError('offline receipt')))
+    job=SimpleNamespace(database='staging',id=receipt['jobId'],receipt=lambda:deepcopy(receipt),emit=lambda *a,**k:None)
+    assert report.completed(job)['result']['githubWarningReport']['status']=='updated'
+    assert report.completed(job)['result']['githubWarningReport']['status']=='unchanged'
+    assert current['body']==body
+
+
 def test_github_template_is_canonical_and_changes_refresh_identity(tmp_path,monkeypatch):
     from yearn_data import refresh_scope
     assert report.TEMPLATE_PATH.parts[-2:]==('.github','weekly-sync-warning-report.md')

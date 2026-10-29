@@ -7,7 +7,8 @@ import platform
 
 from .config import CHAINS,normalize_chain_key,TVL_EXCLUDED_CHAIN_IDS
 from .analysis import closed_cutoff
-from .history_sources import route
+from .coverage import uncovered_ranges
+from .history_sources import route,report_scope
 from .refresh_state import digest
 from .github_warning_report import TEMPLATE_PATH
 
@@ -125,7 +126,24 @@ def resolve_bounds(conn,options,chain,client):
     selected=route(CHAINS[chain].chain_id,'reports',options.source)
     pin=client.pin(end=lo,confirmations=confirmations,use_envio=selected=='envio')
     return dict(fromBlock=first,startReason=reason,toBlock=lo,pin=pin,source=selected,
-                finalizedTimestamp=safe['timestamp'],cutoffReached=safe['timestamp']>=options.cutoff)
+                finalizedTimestamp=safe['timestamp'],cutoffReached=safe['timestamp']>=options.cutoff,
+                deferredReportRanges=deferred_report_ranges(conn,CHAINS[chain].chain_id,first))
+
+
+def deferred_report_ranges(conn,chain_id,first):
+    """Expose old holes and skipped tails without expanding acquisition."""
+    scopes={report_scope(dict(row)).key for row in conn.execute('''SELECT * FROM vaults
+        WHERE chain_id=? AND version IN ('v2','v3') AND asset IS NOT NULL
+        AND asset_decimals IS NOT NULL''',(chain_id,))}
+    spans={}
+    for target,policy,lo,hi in conn.execute('''SELECT target,policy,from_block,to_block
+        FROM history_coverage WHERE chain_id=? AND family='reports' AND from_block<?
+        ORDER BY target,policy,from_block,to_block''',(chain_id,first)):
+        if (chain_id,target,'reports',policy) in scopes:
+            spans.setdefault((target,policy),[]).append((lo,hi))
+    return [dict(target=target,policy=policy,fromBlock=lo,toBlock=hi)
+            for (target,policy),ranges in spans.items()
+            for lo,hi in uncovered_ranges(ranges,ranges[0][0],first-1,first)]
 
 
 def verify_bounds(options,chain,bounds,client):

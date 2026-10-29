@@ -6,6 +6,10 @@ import json
 def findings(stages, result, bounds=None):
     warnings = []
     for chain, bound in (bounds or {}).items():
+        if bound.get('deferredReportRanges'):
+            warnings.append(dict(code='report-coverage-gap',stage='reports:'+chain,
+                message='Retained report coverage has unscanned block ranges before the acquisition window.',
+                details=bound['deferredReportRanges']))
         if not bound['cutoffReached']:
             warnings.append(dict(code='chain-freshness',stage='reports:'+chain,
                 message='The finalized chain head is older than the requested cutoff; only the verified pinned interval was acquired.',
