@@ -15,6 +15,8 @@ from test_refresh_scope import db as db, Source as BoundSource
 from test_catchup import db as catchup_db, Source as ReportSource, VAULT
 from test_refresh_workflow import workflow as workflow
 
+__all__ = ["catchup_db"]
+
 
 def test_weekly_window_does_not_repair_old_holes_or_use_global_maximum(db, tmp_path):
     cutoff=20*86400

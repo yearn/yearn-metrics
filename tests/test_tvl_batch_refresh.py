@@ -4,7 +4,6 @@ import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from web3 import Web3
 
 from yearn_data import refresh, tvl_batch, tvl_sources
 from yearn_data.refresh_scope import RefreshOptions
