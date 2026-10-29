@@ -18,12 +18,14 @@ def read_windows(fetch, lo, hi, source):
         try:
             return fetch(first,last)
         except Exception as exc:
-            message=str(exc).lower()
             cause=exc
             timeout=False
+            messages=[]
             while cause is not None:
+                messages.append(str(cause).lower())
                 timeout |= isinstance(cause,requests.Timeout)
                 cause=cause.__cause__
+            message=' '.join(messages)
             limited=any(term in message for term in LIMITS)
             timeout |= 'query timeout' in message or 'request timed out' in message or 'envio http 504' in message
             if first==last or not (limited or (timeout and timeout_splits<2)):

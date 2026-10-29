@@ -45,7 +45,8 @@ def area(stage):
             'feePrices':'Fee prices','deferredTvlRepairs':'TVL price / ownership coverage',
             'unresolvedTvlChainDates':'TVL balance coverage','unpriceableFeeEvents':'Fee asset metadata',
             'comparison-evidence':'Analytics comparison evidence','fee-config':'Analytics fee configuration',
-            'membership':'Analytics membership','history':'Retained TVL history'}
+            'membership':'Analytics membership','history':'Retained TVL history',
+            'analytics-sources':'Analytics source refresh','defillama':'DefiLlama'}
     if ':' in stage:
         family,chain=stage.split(':',1)
         name=CHAINS[chain].name if chain in CHAINS else chain
@@ -63,11 +64,22 @@ def render(receipt):
         code=w['code'];stage=w['stage'];d=w['details'];label=area(stage)
         description=w['message'];meaning='The available evidence does not establish the cause.'
         if code=='incomplete-source':
-            sources=[source for source in d.get('sources',[]) if source['status']!='complete']
+            all_sources=d.get('sources',[])
+            if isinstance(all_sources,dict):
+                all_sources=[dict(value,source=kind,
+                    status='complete' if value['availability']=='available' else 'incomplete')
+                    for kind,value in all_sources.items()]
+            sources=[source for source in all_sources if source['status']!='complete']
             descriptions=[];context_notes=[];targets=[]
             for source in sources:
                 failures=source.get('findings',[])
-                if failures and all(f.get('reason')=='missing_asset_metadata' for f in failures):
+                if 'availability' in source:
+                    descriptions.append(f"{area(source['source'])} evidence is {source['availability']}.")
+                    if source.get('observedAt') is not None:
+                        context_notes.append(f"{area(source['source'])} selected evidence was observed on {date(source['observedAt'])} UTC.")
+                    if source.get('retainedRows'):
+                        context_notes.append(f"{source['retainedRows']:,} rows use retained evidence.")
+                elif failures and all(f.get('reason')=='missing_asset_metadata' for f in failures):
                     descriptions.append(f"{source['source']} returned incomplete underlying-token metadata for {source['failures']:,} vaults.")
                     retained=sum(bool(f.get('retained_asset')) and f.get('retained_asset_decimals') is not None for f in failures)
                     if retained:
@@ -88,7 +100,7 @@ def render(receipt):
                         text+='; retained asset: '+safe(f.get('retained_asset_symbol') or f['retained_asset'])+', '+str(f['retained_asset_decimals'])+' decimals'
                     text+='; finding: '+safe(f.get('reason','unavailable metadata'))+'.'
                     targets.append(text)
-            for source in d.get('sources',[]):
+            for source in all_sources:
                 if source['status']=='complete' and source.get('source')=='kong' and source.get('discovered') is not None:
                     context_notes.append(f"Kong refreshed {source['discovered']:,} tracked vaults successfully.")
             if d.get('attempt'):
@@ -126,6 +138,15 @@ def render(receipt):
         elif code=='chain-freshness':
             description='The finalized head is dated '+date(d['finalizedTimestamp'])+' UTC; the requested cutoff is '+date(d['cutoff'])+' UTC.'
             meaning='Acquisition covers the verified pinned interval. This finding alone does not establish whether the chain stopped or its provider is stale.'
+        elif code=='report-coverage-gap':
+            description=f'{len(d):,} vault report ranges before the acquisition window were not scanned.'
+            meaning='Reports, earnings and fees may be incomplete for these blocks. This run kept its bounded scope; the missing intervals need a separate catch-up.'
+            targets=[]
+            for gap in d:
+                if target_count>=25:omitted+=1;continue
+                target_count+=1
+                targets.append('- Vault `'+safe(gap['target'])+'`: blocks '+str(gap['fromBlock'])+'–'+str(gap['toBlock'])+'.')
+            if targets:sections.append('### '+safe(label)+' — unscanned report ranges\n\n'+'\n'.join(targets))
         rows.append('| '+safe(label)+' | '+safe(description)+' | '+safe(meaning)+' |')
     if warnings is None:summary='A complete warning summary was not produced. Warning counts are unavailable.'
     elif rows:summary='| Area | What was observed | Context / significance |\n| --- | --- | --- |\n'+'\n'.join(rows)

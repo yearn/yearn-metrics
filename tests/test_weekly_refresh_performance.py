@@ -9,6 +9,7 @@ import pytest
 
 from yearn_data import catchup, refresh
 from yearn_data.coverage import Scope, commit_range
+from yearn_data.history_sources import report_scope
 from yearn_data.refresh_scope import RefreshOptions, resolve_bounds, since_receipt, tvl_plan
 from yearn_data.storage import connect
 from test_refresh_scope import db as db, Source as BoundSource
@@ -32,6 +33,46 @@ def test_weekly_window_does_not_repair_old_holes_or_use_global_maximum(db, tmp_p
     assert plan['targets']==[(1,day*86400-1) for day in range(14,21)]
     assert len(tvl_plan(db,replace(options,first_close=86399))['targets'])==20
     assert resolve_bounds(db,replace(options,repair_history=True),'eth',BoundSource(head=2000))['fromBlock']==10
+
+
+def test_skipped_week_warns_per_vault_without_expanding_window_or_blocking_publication(db,tmp_path):
+    from yearn_data.refresh_warnings import findings
+    from yearn_data.github_warning_report import render
+    addresses=[VAULT,'0x'+'55'*20]
+    scopes=[]
+    for address in addresses:
+        db.execute("""INSERT INTO vaults(chain_id,version,address,asset,asset_decimals,updated_at)
+            VALUES(1,'v3',?,?,6,0)""",(address,'0x'+'66'*20))
+        scopes.append(report_scope(dict(db.execute('SELECT * FROM vaults WHERE address=?',(address,)).fetchone())))
+    db.commit()
+    commit_range(db,scopes[0],10,20,source='rpc',end_hash='old',run_id=None,write=lambda c:0)
+    commit_range(db,scopes[1],10,1500,source='rpc',end_hash='recent',run_id=None,write=lambda c:0)
+    # Old metadata policies must not produce false gaps for a currently covered vault.
+    commit_range(db,Scope(1,addresses[1],'reports','obsolete'),10,20,source='rpc',end_hash='old',run_id=None,write=lambda c:0)
+    options=RefreshOptions('staging',('eth',),20*86400,tmp_path,source='rpc')
+    bounds=resolve_bounds(db,options,'eth',BoundSource(head=2000))
+    assert (bounds['fromBlock'],bounds['toBlock'])==(1124,1727)
+    assert bounds['deferredReportRanges']==[dict(target=VAULT,policy=scopes[0].policy,fromBlock=21,toBlock=1123)]
+    result=dict(cutoff=options.cutoff,gaps={},publishReady=True,publicationBlockers=[])
+    warnings=findings([],result,{'eth':bounds})
+    assert warnings==[dict(code='report-coverage-gap',stage='reports:eth',
+        message='Retained report coverage has unscanned block ranges before the acquisition window.',
+        details=bounds['deferredReportRanges'])]
+    receipt=dict(jobId='skipped-week',createdAt=1,status='prepared',context=dict(database='staging',
+        cutoff=options.cutoff,chains=['eth']),result=result|dict(warnings=warnings))
+    rendered=render(receipt)
+    assert VAULT in rendered and '21–1123' in rendered and '1 vault report ranges' in rendered
+    assert result['publishReady'] and not result['publicationBlockers']
+    assert resolve_bounds(db,replace(options,repair_history=True),'eth',BoundSource(head=2000))['deferredReportRanges']==[]
+    # Newer weekly coverage cannot hide the old hole in a later run's warning.
+    commit_range(db,scopes[0],1124,1727,source='rpc',end_hash='weekly',run_id=None,write=lambda c:0)
+    later=resolve_bounds(db,replace(options,cutoff=21*86400),'eth',BoundSource(head=2000))
+    assert later['fromBlock']==1210
+    assert later['deferredReportRanges']==bounds['deferredReportRanges']
+    # A separate catch-up clears the warning without widening the next weekly run.
+    commit_range(db,scopes[0],21,1123,source='rpc',end_hash='repaired',run_id=None,write=lambda c:0)
+    repaired=resolve_bounds(db,options,'eth',BoundSource(head=2000))
+    assert repaired['fromBlock']==1124 and repaired['deferredReportRanges']==[]
 
 
 def test_since_receipt_covers_a_missed_week_and_rejects_incomplete_baseline(workflow,monkeypatch):

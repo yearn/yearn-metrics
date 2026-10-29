@@ -26,6 +26,10 @@ coverage still determines which recent ranges need fetching. A chain with no
 retained inventory/coverage requires an explicit initial `--from-block`.
 TVL planning applies its lower bound in SQL. Older gaps are left for explicit
 repair, and all retained financial history still participates in preparation.
+If a vault's retained report coverage has unscanned blocks before the window,
+the receipt records them in a `report-coverage-gap` warning. The developer
+GitHub report lists the affected vaults and block ranges. This does not widen the
+weekly run or block publication; use a separate catch-up to recover those reports.
 Use `--from-block CHAIN:N` and `--first-close TIMESTAMP` for deliberate wider
 acquisition; `--repair-history` retains the older retained-history repair behavior.
 Inactive vaults remain eligible.
