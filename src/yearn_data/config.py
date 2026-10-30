@@ -35,9 +35,9 @@ CHAINS: dict[str, ChainConfig] = {
     "kat": ChainConfig("kat", 747474, "Katana", "KAT_RPC_URL", "katana", None),
 }
 
-# Optimism and Fantom are explicitly selectable for historical RPC work;
-# keep default Envio jobs on chains with verified endpoint coverage.
-DEFAULT_CHAINS = ("eth", "polygon", "base", "arb", "kat")
+# Default collection uses chains with verified Envio endpoint coverage.
+# Fantom remains explicitly selectable for historical RPC work.
+DEFAULT_CHAINS = ("eth", "polygon", "base", "arb", "op", "kat")
 
 # Explicitly outside this project's TVL scope. Retain existing catalog evidence.
 TVL_EXCLUDED_CHAIN_IDS = frozenset({146, 80094})

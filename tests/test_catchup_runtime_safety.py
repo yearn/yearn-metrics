@@ -144,12 +144,12 @@ def test_reorg_during_fetch_leaves_no_orphaned_rows_or_successful_coverage(db):
         return rows
     client.reports = fetch
     with pytest.raises(ValueError, match='hash changed'):
-        catchup.catch_up(db, 'op', 10, 30, confirmations=10, chunk_size=10, client=client)
+        catchup.catch_up(db, 'op', 10, 30, source='rpc', confirmations=10, chunk_size=10, client=client)
     assert [tuple(r) for r in db.execute('SELECT from_block,to_block FROM history_coverage')] == [(10, 19)]
     assert db.execute('SELECT count(*) FROM strategy_reports').fetchone()[0] == 0
     assert db.execute('SELECT count(*) FROM events_raw').fetchone()[0] == 0
     fresh, _ = helpers.source([], block_hash=block_hash)
     fresh.w3.eth.block_number = 100
-    result = catchup.catch_up(db, 'op', 10, 30, confirmations=10, chunk_size=10, client=fresh)
+    result = catchup.catch_up(db, 'op', 10, 30, source='rpc', confirmations=10, chunk_size=10, client=fresh)
     assert result['completed_ranges'] == 2 and result['inserted_rows'] == 0
     assert db.execute('SELECT count(*) FROM strategy_reports').fetchone()[0] == 0

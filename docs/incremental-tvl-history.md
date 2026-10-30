@@ -1,6 +1,6 @@
 # Incremental captured TVL history
 
-Routine preparation compares all selected daily inputs, reuses unchanged
+Routine preparation identifies changed daily inputs, reuses unchanged
 accounted dates, and recalculates new or corrected network frames. It then
 copies the complete immutable chart revision and reuses unchanged totals.
 It does not reacquire historical observations or change accounting policy.
@@ -13,20 +13,40 @@ It does not reacquire historical observations or change accounting policy.
 | Changed ownership/position evidence | The whole affected date, including both cross-chain endpoints |
 | Changed dated price-rejection policy | Each affected date, including derived dependencies |
 | Advancing the current close under current-only bridge retirement | The previous latest close and the new latest close |
-| Catalog metadata, allocator recognition, global accounting policy, unknown future context fields | Full history |
+| Catalog additions, removals, or metadata changes | Dates with snapshots or ownership endpoints referencing the changed vaults |
+| Catalog chain membership changes under current-only bridge retirement | Also the current close when a bridge points to an added or removed chain |
+| Allocator recognition, global accounting policy, unknown future global context fields | Full history |
 | Accounting/preparation implementation revision | A new dataset identity and full history |
 | Catalog `updated_at` only, or identical selected evidence with a new run provenance ID | No recalculation of unchanged rows |
 | Reporting cutoff changes | Compare dates normally; current-close accounting still invalidates the affected closes |
 | Aggregate `observationRevision` changes | Compare dated evidence normally; the digest names captured inputs, not accounting policy |
 | No compatible durable input index | Full history; this includes first adoption, legacy prepared sources, and quote-rejection-only repair outputs |
 
-The global context retains every manifest field except run inventory and known
-publication metadata, and retains every catalog field except `updated_at`.
-Daily hashes cover the selected snapshots, positions, dated quote rejections,
+The global context retains every manifest field except run inventory, catalog,
+and known publication metadata. Each preparation stores per-vault catalog
+fingerprints retaining all metadata fields except `updated_at`, including
+unknown future fields. Catalog address casing does not change those fingerprints.
+Daily hashes cover the selected snapshots, positions, relevant catalog
+fingerprints, dated quote rejections, current-close bridge target availability,
 and whether the date is the current close. They exclude only `source_run_id`,
 which is absent from the slim chart outputs and does not affect accounting.
 The native network accounting function handles each changed frame; preparation
 does not introduce a second financial calculation.
+
+Catalog dependency planning checks retained snapshots and both parent and child
+position endpoints, including cross-chain children without their own snapshots.
+It uses the union of the previous and current captured runs. Potentially affected
+dates are selected and hashed again; unrelated dates keep their fast reuse path.
+Recalculation always covers the whole date's network so ownership deductions
+stay consistent. An added vault with no historical evidence does not invalidate
+unrelated dates. Adding a catalog chain can still affect a retired bridge on
+another chain at the current close, even without target-chain observations.
+
+The `daily-inputs-v2` index records catalog fingerprints and affected dates in
+the preparation receipt (`dayTracking.catalog` and `catalogAffectedDates`).
+Adopting this algorithm requires one new compatible baseline; older immutable
+prepared publications remain available, but are not reused under the new input
+identity. Subsequent catalog-only changes use scoped invalidation.
 
 When a bounded refresh supplies `reportingCutoff`, that field limits the reporting
 window rather than changing global accounting policy. Future-only collection

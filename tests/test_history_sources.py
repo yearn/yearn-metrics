@@ -33,12 +33,16 @@ def registry_log(abi, values):
 
 
 def test_matrix_and_inventory():
-    assert route(1, 'reports') == 'envio'
-    assert route(10, 'reports') == route(250, 'reports') == 'rpc'
+    for chain in (1, 137, 8453, 42161, 10, 747474):
+        assert route(chain, 'reports') == route(chain, 'reports', 'envio') == 'envio'
+    for target in inventory_targets('op', True):
+        assert route(10, target.scope.family) == route(10, target.scope.family, 'envio') == 'envio'
+        assert route(10, target.scope.family, 'rpc') == 'rpc'
+    assert route(250, 'reports') == 'rpc'
     assert route(1, 'flows') == 'rpc'
-    assert route(1, 'reports', 'rpc') == 'rpc'
+    assert route(10, 'flows') == route(10, 'reports', 'rpc') == 'rpc'
     with pytest.raises(ValueError):
-        route(10, 'reports', 'envio')
+        route(250, 'reports', 'envio')
     for chain in ['op', 'ftm']:
         assert list(inventory_targets(chain))
         assert all(t.version == 'v2' for t in inventory_targets(chain))
@@ -58,15 +62,16 @@ def test_pin_and_wrong_chain():
         source.verify_pin(dict(number=90, hash='wrong'))
 
 
-def test_envio_outage_does_not_fallback_and_watermark_bounds():
+@pytest.mark.parametrize('chain,chain_id', [('eth', 1), ('op', 10)])
+def test_envio_outage_does_not_fallback_and_watermark_bounds(chain, chain_id):
     calls = []
     def failed(*args):
         calls.append(1)
         raise RuntimeError('offline')
     with pytest.raises(RuntimeError):
-        HistoricalSource('eth', client(1), failed).pin()
+        HistoricalSource(chain, client(chain_id), failed).pin()
     assert len(calls) == 1
-    source = HistoricalSource('eth', client(1), lambda *args: {'chain_metadata': [{'latest_processed_block': 70}]})
+    source = HistoricalSource(chain, client(chain_id), lambda *args: {'chain_metadata': [{'latest_processed_block': 70}]})
     assert source.pin()['number'] == 70
     with pytest.raises(ValueError, match='watermark'):
         source.pin(end=80)

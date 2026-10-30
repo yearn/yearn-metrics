@@ -156,14 +156,18 @@ def test_interruption_rolls_back_reuse_index_and_reports_daily_gaps(postgres_dat
     assert repaired.history(interval='daily')['chart'][1]['Ethereum']==0
 
 
-def test_global_identity_keeps_future_catalog_and_accounting_fields():
-    manifest = dict(runs=[],catalog=[dict(updated_at=1,name='a')],database='staging',allocatorKeys=[])
+def test_catalog_identity_is_scoped_but_future_accounting_fields_remain_global():
+    from yearn_data.tvl_incremental import catalog_state
+    meta = dict(chain_id=1,address=PARENT,updated_at=1,name='a')
+    manifest = dict(runs=[],catalog=[meta],database='staging',allocatorKeys=[])
     original = context_identity(SimpleNamespace(manifest=manifest))
     def identity(**changes):
         return context_identity(SimpleNamespace(manifest=manifest|changes))
-    assert identity(catalog=[dict(updated_at=2,name='a')]) == original
-    assert identity(catalog=[dict(updated_at=1,name='b')]) != original
-    assert identity(catalog=[dict(updated_at=1,name='a',futureField='new')]) != original
+    state = catalog_state(SimpleNamespace(manifest=manifest))
+    for change in (dict(updated_at=2), dict(name='b'), dict(futureField='new')):
+        changed = manifest | {'catalog':[meta | change]}
+        assert context_identity(SimpleNamespace(manifest=changed)) == original
+        assert (catalog_state(SimpleNamespace(manifest=changed)) == state) == ('updated_at' in change)
     assert identity(futurePolicy='new') != original
     assert identity(reportingCutoff=DAY+1) == identity(reportingCutoff=DAY+86401)
     # Refresh uses this whole-input identity for immutable manifests; daily
@@ -174,6 +178,72 @@ def test_global_identity_keeps_future_catalog_and_accounting_fields():
         build(SimpleNamespace(manifest=manifest|{'accountingRevision':'old-code'}))
     with pytest.raises(ValueError,match='ordered inclusive'):
         build(SimpleNamespace(manifest=manifest),backfill=(2,1))
+
+
+def test_catalog_add_edit_remove_only_rebuilds_referenced_days(postgres_database,tmp_path):
+    with closing(connect('staging')) as conn:
+        init_db(conn)
+        run(conn,1,DAY,[(PARENT,'100')])
+        run(conn,2,DAY+86400,[(PARENT,'100'),(CHILD,'100')],[(CHILD,'50')])
+    old=TvlStore('staging',tmp_path/'pub').get();prepare(old)
+    manifest=deepcopy(old.manifest)
+    child=dict(chain_id=1,address=CHILD,active=1,updated_at=1)
+    for index,catalog in enumerate(([child],[child|{'futureField':'changed'}],[])):
+        manifest['datasetId']=str(index+1)*64;manifest['catalog']=catalog
+        changed=TvlDataset(deepcopy(manifest));result=prepare(changed)
+        assert result['fullRebuildReason'] is None
+        assert result['catalogAffectedDates']==result['recomputedDates']==[DAY+86400]
+        assert result['reusedDates']==result['inputDatesSkipped']==[DAY]
+        assert changed.history(interval='daily')['chart']==[
+            {'timestamp':DAY,'Ethereum':100.0},{'timestamp':DAY+86400,'Ethereum':150.0}]
+        full_copy(changed,'abcdef'[index])
+    manifest['datasetId']='9'*64
+    manifest['catalog']=[dict(chain_id=1,address=BRIDGE,updated_at=1)]
+    unused=TvlDataset(manifest);result=prepare(unused)
+    assert result['reusedDates']==[DAY,DAY+86400]
+    assert result['inputDatesRead']==result['catalogAffectedDates']==[]
+    full_copy(unused,'f')
+
+
+@pytest.mark.parametrize('endpoint', ['parent','cross-chain-child'])
+def test_catalog_changes_follow_position_endpoints_without_snapshots(postgres_database,tmp_path,endpoint):
+    with closing(connect('staging')) as conn:
+        init_db(conn);run(conn,1,DAY,[(BRIDGE,'100')])
+        run(conn,2,DAY+86400,[(BRIDGE,'100')],[(CHILD,'50')])
+        conn.execute("UPDATE tvl_positions SET data_json=jsonb_set(data_json::jsonb,'{child_chain_id}','10')::text")
+        conn.commit()
+    old=TvlStore('staging',tmp_path/'pub').get();prepare(old)
+    manifest=deepcopy(old.manifest);manifest['datasetId']='c'*64
+    chain,address=(1,PARENT) if endpoint=='parent' else (10,CHILD)
+    manifest['catalog']=[dict(chain_id=chain,address=address,active=1)]
+    changed=TvlDataset(manifest);result=prepare(changed)
+    assert result['catalogAffectedDates']==result['recomputedDates']==[DAY+86400]
+    assert result['reusedDates']==[DAY]
+    full_copy(changed,'d')
+
+
+def test_new_catalog_chain_recalculates_retired_bridge_without_target_observations(postgres_database,tmp_path):
+    with closing(connect('staging')) as conn:
+        init_db(conn)
+        conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,active,updated_at) VALUES(1,'v3',?,0,1)",(BRIDGE,))
+        conn.commit()
+        run(conn,1,DAY,[(BRIDGE,'100')]);run(conn,2,DAY+86400,[(PARENT,'50')])
+        run(conn,3,DAY+2*86400,[(BRIDGE,'100')])
+    old=TvlStore('staging',tmp_path/'pub',current_bridge_policy='retired-registry').get();prepare(old)
+    assert captured(old)[0][-1][-1]=='100'
+    manifest=deepcopy(old.manifest);manifest['datasetId']='c'*64
+    manifest['catalog'].append(dict(chain_id=10,address=CHILD,active=1))
+    changed=TvlDataset(manifest);result=prepare(changed)
+    assert result['reusedDates']==[DAY,DAY+86400]
+    assert result['catalogAffectedDates']==result['recomputedDates']==[DAY+2*86400]
+    assert captured(changed)[0][-1][-1]=='0'
+    full_copy(changed,'d')
+    manifest['datasetId']='e'*64;manifest['catalog'].pop()
+    removed=TvlDataset(manifest);result=prepare(removed)
+    assert result['catalogAffectedDates']==result['recomputedDates']==[DAY+2*86400]
+    assert result['reusedDates']==[DAY,DAY+86400]
+    assert captured(removed)[0][-1][-1]=='100'
+    full_copy(removed,'f')
 
 
 def test_competing_builder_cannot_write_partial_rows(postgres_database,tmp_path):
