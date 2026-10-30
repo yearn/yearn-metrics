@@ -120,7 +120,7 @@ def _load_rows(conn, run_id, name):
 class PairingDataset:
     """Immutable, bounded result set; queries make no RPC or price requests."""
 
-    def __init__(self, database, earnings_run_id, fees_run_id, *, vault_names=None):
+    def __init__(self, database, earnings_run_id, fees_run_id, *, vault_names=None, strategy_ownership=None):
         self.database = database_reference(database)
         with closing(connect(self.database, readonly=True)) as conn:
             runs = []
@@ -195,6 +195,15 @@ class PairingDataset:
             'consistentPricedAssetDays': len(selected_prices),
             'sharedPricedAssetDays': len(shared_prices),
         }
+        self.strategy_earnings = None
+        if strategy_ownership is not None:
+            from .strategy_earnings import apply_ownership
+            extra, self.strategy_earnings = apply_ownership(self.fees, strategy_ownership)
+            if any(p['until'] > self.cutoff for p in self.strategy_earnings['coveragePeriods']):
+                raise ValueError('strategy ownership coverage exceeds the selected cutoff')
+            self.earnings = self.earnings + extra
+            self.context['earningsFamilies'] = list(FAMILIES)
+            self.context['strategyEarningsAccounting'] = self.strategy_earnings
         self.id = hashlib.sha256(_json(self.context | {'vaultNames': vault_names}).encode()).hexdigest()
 
     def view_rows(self, since, end, chains, vault_address):
@@ -375,17 +384,22 @@ class PairingDataset:
                     } | vault_totals(*buckets[timestamp], compact=True))
                     start = following
             result = {'interval': interval, 'dataCutoffTimestamp': self.cutoff, 'buckets': history}
+        accounting = getattr(self, 'strategy_earnings', None)
+        if accounting is not None:
+            result = result | {'strategyEarningsAccounting': accounting}
         return result | {'datasetId': self.id, 'aggregationScope': scope}
 
 
-def select_pairing(database, earnings_run_id, fees_run_id, publication):
+def select_pairing(database, earnings_run_id, fees_run_id, publication, *, strategy_ownership=None):
     """Validate first, then atomically select; prior selections remain available."""
-    dataset = PairingDataset(database, earnings_run_id, fees_run_id)
+    dataset = PairingDataset(database, earnings_run_id, fees_run_id, strategy_ownership=strategy_ownership)
     root = Path(publication).resolve()
     snapshots = root / 'datasets'
     snapshots.mkdir(parents=True, exist_ok=True)
     manifest = dataset.context | {'datasetId': dataset.id, 'database': str(dataset.database),
                                   'vaultNames': dataset.vault_names, 'selectedAt': int(time.time())}
+    if strategy_ownership is not None:
+        manifest['strategyOwnership'] = strategy_ownership
     target = snapshots / f'{dataset.id}.json'
     if not target.exists():
         temp = snapshots / f'.{dataset.id}.tmp'
@@ -406,7 +420,7 @@ class PairingStore:
     def _load(self, dataset_id):
         manifest = json.loads((self.root / 'datasets' / f'{dataset_id}.json').read_text())
         dataset = PairingDataset(manifest['database'], manifest['earningsRunId'], manifest['feesRunId'],
-                                 vault_names=manifest['vaultNames'])
+                                 vault_names=manifest['vaultNames'], strategy_ownership=manifest.get('strategyOwnership'))
         if dataset.id != dataset_id:
             raise ValueError('selected analysis outputs have changed since publication')
         return dataset

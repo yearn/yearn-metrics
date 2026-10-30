@@ -515,3 +515,47 @@ def test_grouped_history_cache_bounds_bytes_across_filters_and_datasets(monkeypa
     del first
     gc.collect()
     assert reference() is None
+
+
+def test_strategy_ownership_round_trips_selection_and_hosted_serving(postgres_database, tmp_path, monkeypatch):
+    from yearn_data.hosted_fees import prepare, PublishedFees
+    from yearn_data.strategy_earnings import POLICY as OWNERSHIP_POLICY, digest
+    import sys
+    annual_end = 1735689600  # 2024-01-01 to 2025-01-01 (leap year).
+    monkeypatch.setattr(sys.modules[__name__], 'CUTOFF', annual_end)
+    with connect('staging') as db:
+        init_db(db)
+        runs = snapshots(db, fee_cutoff=annual_end)
+        item = db.execute("SELECT rowid,row_json FROM analysis_outputs WHERE run_id=? AND name='fee_usd_events' ORDER BY rowid", (runs[1],)).fetchall()[1]
+        event = json.loads(item['row_json'])
+        event.update(gross_gain_usd='100', loss_usd='20')
+        with db:
+            db.execute('UPDATE analysis_outputs SET row_json=? WHERE rowid=?', (json.dumps(event), item['rowid']))
+        legacy = PairingDataset('staging', *runs)
+        ledger = {'policy': OWNERSHIP_POLICY, 'sourceFeeRowsSha256': digest(legacy.fees),
+                  'periods': [{'since': DAY, 'until': annual_end}], 'reports': [{
+                      'chainId': 1, 'vaultAddress': TOKENIZED, 'txHash': event['tx_hash'],
+                      'logIndex': 0, 'blockTimestamp': DAY, 'fractions': [
+                          {'classification': status, 'pathId': f'1:{VAULT}',
+                           'numerator': '1', 'denominator': '2'}
+                          for status in ('included', 'parent-overlap')]}]}
+        root = tmp_path / 'candidate'
+        manifest = select_pairing('staging', *runs, root, strategy_ownership=ledger)
+        selected = PairingStore(root).get()
+        assert selected.id == manifest['datasetId'] != legacy.id
+        prepare(db, selected)
+        hosted = PublishedFees('staging', selected.id)
+        for name in ('summary', 'history', 'vaults', 'vault-history'):
+            assert hosted.view(name) == selected.view(name)
+        result = hosted.view('summary')
+        assert result['totalFeesPaidUsd'] == legacy.view('summary')['totalFeesPaidUsd'] == '22'
+        assert result['netLifetimeEarningsUsd'] == '175'  # Existing 135 + external strategy 40.
+        assert result['strategyEarningsAccounting']['annualPathThresholdUsd'] == '1000'
+        assert PairingStore(root).get().view('summary') == result
+        # A rejected material omission must leave the prior selection intact.
+        ledger['reports'][0]['fractions'] = [{'classification': 'unresolved', 'pathId': f'1:{VAULT}',
+                                            'numerator': '1', 'denominator': '1'}]
+        ledger['sourceFeeRowsSha256'] = 'stale'
+        with pytest.raises(ValueError, match='source fee rows mismatch'):
+            select_pairing('staging', *runs, root, strategy_ownership=ledger)
+        assert PairingStore(root).get().id == selected.id
