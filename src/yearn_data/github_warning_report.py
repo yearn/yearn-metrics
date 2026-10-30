@@ -10,6 +10,7 @@ import re
 from string import Template
 import subprocess
 import sys
+import stat
 import tempfile
 
 from .storage import connect
@@ -183,6 +184,38 @@ def gh(method,endpoint,payload=None):
     return json.loads(response.stdout)
 
 
+def lock_directory():
+    # The shared temporary directory may contain foreign entries. Only this
+    # account may create files inside the verified private subdirectory.
+    path=Path(tempfile.gettempdir())/f'yearn-warning-reporter-{os.getuid()}'
+    path.mkdir(mode=0o700,exist_ok=True)
+    info=path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.getuid() or stat.S_IMODE(info.st_mode)!=0o700:
+        raise PermissionError('unsafe warning report lock directory')
+    return path
+
+
+def lock_file(path):
+    fd=os.open(path,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+    info=os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.getuid() or info.st_nlink!=1 or stat.S_IMODE(info.st_mode)!=0o600:
+        os.close(fd)
+        raise PermissionError('unsafe warning report lock file')
+    return os.fdopen(fd,'r+')
+
+
+def contention(path,job_id=None):
+    # A separate, short-lived lock serializes diagnostics only, never network
+    # work. Retrying one job does not masquerade as multiple completed runs.
+    with lock_file(path.with_suffix('.contention')) as note:
+        fcntl.flock(note,fcntl.LOCK_EX)
+        previous=json.loads(note.read() or '{}')
+        count=previous.get('consecutiveDeferredRuns',0)+int(previous.get('jobId')!=job_id) if job_id else 0
+        note.seek(0);note.truncate()
+        note.write(json.dumps(dict(jobId=job_id,consecutiveDeferredRuns=count)))
+        return count
+
+
 def update(receipt):
     """No search or create: one configured repository/issue is the durable target."""
     if os.environ.get('YEARN_REFRESH_GITHUB_REPORTING','on')=='off':return {'status':'disabled'}
@@ -195,10 +228,14 @@ def update(receipt):
     identity=hashlib.sha256(f'{repository}/{issue}'.encode()).hexdigest()
     # Coordinate staging/production reporters on this host as well as the
     # database's refresh writer lock. Never queue a notification indefinitely.
-    path=Path(tempfile.gettempdir())/('yearn-warning-issue-'+identity+'.lock')
-    with path.open('a') as lock:
+    path=lock_directory()/(identity+'.lock')
+    with lock_file(path) as lock:
         try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        except BlockingIOError:return {'status':'deferred','reason':'issue-update-in-progress'}
+        except BlockingIOError:
+            count=contention(path,receipt['jobId'])
+            return {'status':'deferred','reason':'issue-update-in-progress',
+                    'consecutiveDeferredRuns':count,'persistentContention':count>1}
+        contention(path)
         return update_target(receipt,repository,issue)
 
 

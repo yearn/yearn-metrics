@@ -262,21 +262,28 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
     def fetch_group(tasks):
         if not callable(batch_fetch):
             return [(task,fetch_range(task)) for task in tasks]
-        started=time.monotonic()
         first,last=tasks[0][-2:]
-        end_hash=_hex(client.block(last)['hash'])
-        members=[task[4] for task in tasks]
-        allowed={v['address'].lower() for v in members}
-        rows=batch_fetch(members,first,last,report_source)
-        by_address=defaultdict(list)
-        for row in rows:
-            values=row if isinstance(row,dict) else dict(zip(report_columns,row))
-            address=values['vault_address'].lower()
-            if address not in allowed or values['chain_id']!=chain_id or not first<=values['block_number']<=last:
-                raise ValueError('batched report scope mismatch')
-            by_address[address].append(row)
-        seconds=(time.monotonic()-started)/len(tasks)
-        return [(task,(by_address[task[4]['address'].lower()],end_hash,seconds)) for task in tasks]
+        for task in tasks:
+            notify('range-started',target=task[0].target,family=task[0].family,from_block=first,to_block=last)
+        started=time.monotonic()
+        try:
+            end_hash=_hex(client.block(last)['hash'])
+            members=[task[4] for task in tasks]
+            allowed={v['address'].lower() for v in members}
+            rows=batch_fetch(members,first,last,report_source)
+            by_address=defaultdict(list)
+            for row in rows:
+                values=row if isinstance(row,dict) else dict(zip(report_columns,row))
+                address=values['vault_address'].lower()
+                if address not in allowed or values['chain_id']!=chain_id or not first<=values['block_number']<=last:
+                    raise ValueError('batched report scope mismatch')
+                by_address[address].append(row)
+            seconds=(time.monotonic()-started)/len(tasks)
+            return [(task,(by_address[task[4]['address'].lower()],end_hash,seconds)) for task in tasks]
+        except Exception:
+            for task in tasks:
+                notify('range-failed',target=task[0].target,family=task[0].family,from_block=first,to_block=last)
+            raise
 
     def drain_reports():
         groups=[]

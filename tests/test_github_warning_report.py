@@ -116,12 +116,41 @@ def test_reporting_timeout_and_receipt_write_failure_do_not_change_selected_rele
     assert attempts==['selected','selected']
 
 
-def test_concurrent_issue_writer_defers_notification_without_creating_duplicate(receipt,monkeypatch):
+def test_concurrent_issue_writer_tracks_persistent_deferral_and_recovery(receipt,monkeypatch,tmp_path):
     monkeypatch.setenv('YEARN_REFRESH_GITHUB_TEMPLATE_SHA256',report.template_digest())
-    def busy(*args):raise BlockingIOError()
-    monkeypatch.setattr(report.fcntl,'flock',busy)
-    monkeypatch.setattr(report,'gh',lambda *a:pytest.fail('concurrent notification wrote to issue'))
-    assert report.update(receipt)==dict(status='deferred',reason='issue-update-in-progress')
+    monkeypatch.setattr(report.tempfile,'gettempdir',lambda:str(tmp_path))
+    identity=report.hashlib.sha256(b'yearn/yearn-metrics/92').hexdigest()
+    path=report.lock_directory()/(identity+'.lock')
+    monkeypatch.setattr(report,'update_target',lambda *a:dict(status='updated'))
+    with report.lock_file(path) as other:
+        report.fcntl.flock(other,report.fcntl.LOCK_EX|report.fcntl.LOCK_NB)
+        for job,count in [('abc123',1),('abc123',1),('next-run',2)]:
+            receipt['jobId']=job
+            outcome=report.update(receipt)
+            assert outcome==dict(status='deferred',reason='issue-update-in-progress',
+                consecutiveDeferredRuns=count,persistentContention=count>1)
+    assert report.update(receipt)==dict(status='updated')
+    with report.lock_file(path) as other:
+        report.fcntl.flock(other,report.fcntl.LOCK_EX|report.fcntl.LOCK_NB)
+        assert report.update(receipt)['consecutiveDeferredRuns']==1
+
+
+@pytest.mark.parametrize('unsafe',['directory-symlink','directory-mode','file-symlink','file-mode'])
+def test_warning_locks_reject_unsafe_paths(receipt,monkeypatch,tmp_path,unsafe):
+    monkeypatch.setenv('YEARN_REFRESH_GITHUB_TEMPLATE_SHA256',report.template_digest())
+    monkeypatch.setattr(report.tempfile,'gettempdir',lambda:str(tmp_path))
+    monkeypatch.setattr(report,'gh',lambda *a:pytest.fail('unsafe lock contacted GitHub'))
+    directory=tmp_path/f'yearn-warning-reporter-{report.os.getuid()}'
+    if unsafe=='directory-symlink':directory.symlink_to(tmp_path,target_is_directory=True)
+    else:
+        directory.mkdir(mode=0o700)
+        if unsafe=='directory-mode':directory.chmod(0o777)
+        else:
+            identity=report.hashlib.sha256(b'yearn/yearn-metrics/92').hexdigest()
+            path=directory/(identity+'.lock')
+            if unsafe=='file-symlink':path.symlink_to(tmp_path/'foreign')
+            else:path.touch(mode=0o666);path.chmod(0o666)
+    with pytest.raises(OSError):report.update(receipt)
 
 
 def test_catalog_report_explains_retained_metadata_and_uncertain_discovery_cause(receipt):

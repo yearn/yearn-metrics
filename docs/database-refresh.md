@@ -394,3 +394,10 @@ Installed wheels place the canonical GitHub template under
 `share/yearn-data/.github/` in the Python environment; checkout runs read it
 directly from the repository's `.github/` folder. The template is included in
 both wheel and source distribution builds.
+
+Warning-issue locks use a verified account-private directory with mode 0700 and
+reject symbolic links or files with unsafe ownership or permissions. Deferred
+notifications record `consecutiveDeferredRuns` and `persistentContention` so
+repeated contention across completed jobs is distinguishable from one concurrent
+reporter. Repeating the same job does not increase the run count; acquiring the
+lock resets it. Reporting failures remain isolated from publication.

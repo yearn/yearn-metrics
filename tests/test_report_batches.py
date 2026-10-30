@@ -1,3 +1,4 @@
+import json
 """Native batching preserves emitters, monetary fields and durable coverage."""
 from contextlib import closing
 from threading import Event, Lock, get_ident
@@ -62,8 +63,14 @@ def test_failed_or_invalid_batch_cannot_certify_any_member(postgres_database):
         adapter=Batch()
         for mode in ('failed','invalid','reorg'):
             adapter.mode=mode
+            progress=[]
             with pytest.raises((RuntimeError,ValueError)):
-                catchup.catch_up(conn,'op',20,29,client=adapter)
+                catchup.catch_up(conn,'op',20,29,client=adapter,progress=progress.append)
+            for event in ('range-started','range-failed'):
+                records=[json.loads(p) for p in progress if json.loads(p)['event']==event]
+                targets={p['target'] for p in records}
+                assert targets==({VAULT} if mode=='reorg' and event=='range-failed' else {VAULT,NEW})
+                assert all(p['from_block']==20 and p['to_block']==29 for p in records)
             assert conn.execute('SELECT count(*) FROM history_coverage').fetchone()[0]==0
             assert conn.execute('SELECT count(*) FROM strategy_reports').fetchone()[0]==0
 

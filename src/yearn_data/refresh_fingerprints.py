@@ -41,7 +41,11 @@ class Fingerprints:
                 conn.raw.execute(sql.SQL('LOCK TABLE {} IN SHARE ROW EXCLUSIVE MODE').format(sql.Identifier(table)))
                 row = conn.execute('''SELECT t.tgenabled FROM pg_trigger t
                     WHERE t.tgrelid=to_regclass(?) AND t.tgname=?''', (table, TRIGGER)).fetchone()
-                if row is None:
+                if row is None or row[0] != 'A':
+                    # A maintenance gap invalidates the old marker even if no
+                    # rows changed after the worker restarted.
+                    conn.raw.execute(sql.SQL('DROP TRIGGER IF EXISTS {} ON {}').format(
+                        sql.Identifier(TRIGGER), sql.Identifier(table)))
                     conn.execute('''INSERT INTO refresh_table_revisions VALUES(to_regclass(?),txid_current())
                         ON CONFLICT(table_oid) DO UPDATE SET revision=excluded.revision''', (table,))
                     conn.raw.execute(sql.SQL('''CREATE TRIGGER {} AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE
