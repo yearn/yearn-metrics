@@ -130,3 +130,20 @@ def test_weekly_preparation_hashes_tvl_once_per_scope_not_after_every_day(workfl
     # must not repeat those scans. Financial content identities stay unchanged.
     assert len(calls) == len(set(calls)) == 2
     assert all('SELECT s.*' in statement for statement in calls)
+
+
+@pytest.mark.parametrize('mode',['ENABLE','DISABLE'])
+def test_fresh_worker_repairs_maintenance_trigger_and_resets_marker(facts,mode):
+    before=facts.signature(QUERY,partial=True)
+    with closing(connect('staging')) as conn:
+        conn.raw.execute('ALTER TABLE fingerprint_facts DISABLE TRIGGER refresh_track_changes')
+        conn.execute("UPDATE fingerprint_facts SET amount='maintenance' WHERE id=1")
+        conn.raw.execute(f'ALTER TABLE fingerprint_facts {mode} TRIGGER refresh_track_changes')
+    with pytest.raises(ValueError,match='change tracking is unavailable'):
+        facts.signature(QUERY)
+    fresh=refresh.RefreshWorker(facts.options,SimpleNamespace(id='restarted'))
+    assert fresh.signature(QUERY,partial=True)!=before
+    with closing(connect('staging')) as conn:
+        assert conn.execute("SELECT tgenabled FROM pg_trigger WHERE tgrelid='fingerprint_facts'::regclass AND tgname='refresh_track_changes'").fetchone()[0]=='A'
+        expected=digest([sql_digest(conn,QUERY[0][1])])
+    assert fresh.signature(QUERY)==expected
