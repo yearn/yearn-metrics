@@ -7,8 +7,8 @@ Set the first and last block explicitly. Both blocks are included.
 
 | Chains | Default source |
 | --- | --- |
-| Ethereum, Polygon, Base, Arbitrum, Katana | Envio |
-| Optimism, Fantom | RPC |
+| Ethereum, Polygon, Base, Arbitrum, Optimism, Katana | Envio |
+| Fantom | RPC |
 
 Set the RPC endpoint for the selected chain.
 The command uses RPC to check block details, even when reports come from Envio.
@@ -17,6 +17,33 @@ For Envio requests, also set `YEARN_ENVIO_GRAPHQL_URL`.
 Use `--source rpc` to select RPC explicitly.
 Use `--source envio` only on a chain with configured Envio coverage.
 The command does not switch sources after a provider error.
+
+Optimism uses Envio for both reports and registry inventory discovery. Historical
+Optimism RPC log queries have returned inconsistent empty successes for known
+events; changing filters or reducing the range does not establish completeness.
+Use Envio for historical collection. Changing sources does not invalidate saved
+coverage. Add `--revalidate-rpc-coverage` to recheck Optimism RPC coverage through
+Envio within the explicit `--from-block` / `--to-block` window. Reports are checked
+for retained Yearn vaults; add `--discover` to include registry inventory and newly
+discovered vaults. This option rejects other chains and `--source rpc`.
+
+Revalidation reuses existing Envio coverage, but ignores RPC coverage when
+planning the selected scans. It preserves existing events and unrelated ranges.
+An identical RPC coverage row is replaced atomically only after the Envio read
+and event writes succeed. Wider overlapping RPC records remain as historical
+evidence. After a failure, repeat the same command with the flag; successful
+Envio ranges are reused and incomplete ranges remain pending. A count of zero
+inserted rows does not mean the read found no events.
+
+```bash
+yearn-data --db staging catch-up --chain op --source envio \
+  --from-block "$FROM_BLOCK" --to-block "$TO_BLOCK" \
+  --discover --revalidate-rpc-coverage
+```
+
+Do not delete existing event observations to force a rescan. Revalidation fetches
+reports and inventory only; it does not reprice, recompute financial outputs, or
+publish a dataset.
 
 ## Run the command
 
@@ -125,3 +152,31 @@ It leaves existing coordinator tables intact but does not use a coordinator run.
 Run fee accounting, pricing, analysis, and export separately.
 Use a separate command for Tokenized Strategy fees.
 `catch-up` does not fetch volume or debt flows, change financial outputs, or copy the database.
+
+## Grouped fetching and recovery
+
+Native report adapters group up to 50 compatible vault addresses with identical
+missing intervals. Each returned event is checked against the requested emitter
+set and normalized with that vault's asset metadata. Envio pagination continues
+through an empty terminal page, including when the server returns short pages.
+RPC decodes the requested event signatures and rejects logs outside the emitter
+set or block range.
+
+Reads use bounded source-specific windows that grow on fast sparse results and
+split on explicit provider limits or bounded timeouts. Provider address-count
+limits fall back to smaller address groups. Coverage remains per vault and
+interval, including verified empty results. Failed fetches certify no coverage.
+
+Registry inventory scans also fetch concurrently, with membership materialized
+after all required scans finish. Concurrent requests are processed in completion order. Already committed valid
+ranges remain reusable if another range fails, even when they are later in block
+order. Repeating the same command fetches only the remaining gaps. All database
+writes and canonical end-hash checks stay on the coordinating thread.
+
+Optimism Envio report and registry reads require the producer's
+`chain_metadata.start_block` attestation, including reads that return no events.
+A missing, invalid, or later start block rejects the range before observations
+or replacement coverage commit. The existing upper watermark and fresh canonical
+end-hash checks still apply. A chain start attestation does not by itself prove
+that every contract subscription or dynamic registration is complete; producer
+configuration and replay checks remain separate requirements.

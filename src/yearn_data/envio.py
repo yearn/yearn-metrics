@@ -132,6 +132,8 @@ def _gql(
     query: str,
     variables: dict[str, Any] | None = None,
     timeout: int = DEFAULT_REQUEST_TIMEOUT,
+    split_timeouts: bool = False,
+    max_attempts: int = 5,
 ) -> dict[str, Any]:
     """POST a GraphQL query to Envio with bounded retry on transient errors."""
     payload: dict[str, Any] = {"query": query}
@@ -139,7 +141,7 @@ def _gql(
         payload["variables"] = variables
 
     last_error: Exception | None = None
-    for attempt in range(5):
+    for attempt in range(max_attempts):
         try:
             response = requests.post(get_envio_graphql_url(), json=payload, timeout=timeout)
             if response.status_code == 429 or response.status_code >= 500:
@@ -152,9 +154,13 @@ def _gql(
                 return body["data"]
         except requests.HTTPError:
             raise
+        except requests.Timeout as exc:
+            if split_timeouts:
+                raise
+            last_error = exc
         except requests.RequestException as exc:
             last_error = exc
-        if attempt < 4:
+        if attempt < max_attempts-1:
             time.sleep(2**attempt)
     raise RuntimeError("envio GraphQL request failed after retries") from last_error
 

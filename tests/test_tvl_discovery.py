@@ -526,7 +526,7 @@ def test_turtle_predeposits_cannot_be_reclassified_as_curation(db,monkeypatch):
     from yearn_data.tvl_discovery import store_candidate,discover_curation,CURATION_REGISTRY
     from yearn_data.tvl_policy import VAULT_POLICIES
     turtles={p['address'].lower() for p in VAULT_POLICIES}
-    assert not turtles & {v['address'].lower() for v in CURATION_REGISTRY['extra_vaults']}
+    assert not turtles & {v['address'].lower() for key in ('extra_vaults','known_vaults') for v in CURATION_REGISTRY.get(key,[])}
     for p in VAULT_POLICIES:
         # Simulate the legacy import, then an omitted-vault discovery refresh.
         db.execute("INSERT INTO tvl_vaults(chain_id,address,version,tvl_category,updated_at) VALUES (1,?,'erc4626','curation',1)",(p['address'],))

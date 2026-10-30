@@ -54,7 +54,7 @@ def workflow(postgres_database,tmp_path,monkeypatch):
             conn.execute('''INSERT INTO tvl_vaults(chain_id,version,address,asset,asset_decimals,api_version,
                 name,active,updated_at) VALUES(1,'v3',?,?,6,'3.0.2','Offline fixture',0,0)''',(VAULT,ASSET))
     monkeypatch.setattr(refresh,'chain_source',Source)
-    monkeypatch.setattr(tvl_sources,'ArchiveReader',Reader)
+    monkeypatch.setattr(refresh.tvl_batch,'reader',lambda conn, chain, **kwargs:Reader(chain))
     response=SimpleNamespace(raise_for_status=lambda:None,json=lambda:{'data':{'vaults':[]}})
     monkeypatch.setattr(tvl_sources.requests,'post',lambda *a,**k:response)
     def empty(source):return dict(source=source,status='complete',discovered=0,enriched=0,failures=[])
@@ -139,7 +139,7 @@ def test_budget_resume_drains_all_canonical_report_and_fee_price_pages(workflow)
     assert refresh.selection('staging') is None
 
 
-def test_prepublication_source_failure_retains_previous_release_and_retained_input_age(workflow,monkeypatch):
+def test_source_failure_publishes_retained_evidence_with_visible_warnings(workflow,monkeypatch):
     import requests
     options,_=workflow
     first=refresh.run_refresh(options,mode='publish')
@@ -148,9 +148,15 @@ def test_prepublication_source_failure_retains_previous_release_and_retained_inp
     def unavailable(*a,**k):raise requests.ConnectionError('https://private-provider.invalid/secret-key')
     monkeypatch.setattr(refresh.analytics_collect,'collect',unavailable)
     failed=refresh.run_refresh(options,mode='publish')
-    assert failed['status']=='failed',failed
-    assert failed['result']['failedStage']=='publication'
-    assert failed['servingReleaseIdBefore']==refresh.selection('staging')==previous
+    assert failed['status']=='selected',failed
+    assert failed['result']['publishReady'] is True
+    assert failed['result']['publicationBlockers']==[]
+    assert failed['servingReleaseIdBefore']==previous
+    assert refresh.selection('staging')==failed['result']['releaseId']
+    assert any(w['stage']=='analytics-sources' for w in failed['result']['warnings'])
+    report=options.publication_root/'refresh'/failed['jobId']/'warnings.json'
+    assert json.loads(report.read_text())['warnings']==failed['result']['warnings']
+    assert report.with_suffix('.html').exists()
     source=next(s for s in failed['stages'] if s['name']=='analytics-sources')
     assert source['status']=='incomplete'
     assert source['result']['sources']['membership']['observedAt']==1
@@ -176,15 +182,20 @@ def test_selected_release_cleanup_failure_resumes_cleanup_without_republishing(w
     assert recovered['result']['releaseId']==selected and acquired==['analytics']
 
 
-def test_matching_dataset_gate_rejects_wrong_analytics_identity(workflow,monkeypatch):
+@pytest.mark.parametrize('field,value,code', [
+    ('feesDatasetId','f'*64,'prepared-dataset-mismatch'),
+    ('cutoffTimestamp',CUTOFF-86400,'prepared-cutoff-mismatch'),
+])
+def test_publication_integrity_gate_rejects_wrong_analytics_identity_or_cutoff(workflow,monkeypatch,field,value,code):
     options,_=workflow
     original=refresh.RefreshWorker.prepare_analytics
     def wrong(self,*args):
         result=original(self,*args)
-        return result|{'feesDatasetId':'f'*64}
+        return result|{field:value}
     monkeypatch.setattr(refresh.RefreshWorker,'prepare_analytics',wrong)
     result=refresh.run_refresh(options,mode='publish')
     assert result['status']=='failed' and result['result']['failedStage']=='publication'
+    assert result['result']['publicationBlockers']==[{'code':code}]
     assert refresh.selection('staging') is None
 
 
@@ -447,3 +458,51 @@ def test_changed_code_rejects_saved_manifest_resume_before_stage_reuse(workflow,
         assert fresh['status']=='prepared',fresh
         assert fresh['result']['tvlDatasetId']!=identity
         assert not [e for e in events if e['event'] in ('range-fetch-started','tvl-collection-started')]
+
+
+def test_incomplete_catalog_publishes_and_keeps_affected_vault_in_warning_report(workflow,monkeypatch):
+    options,_=workflow
+    native=refresh.tvl_discovery.discover_catalog
+    def incomplete(*args,**kwargs):
+        summary=native(*args,**kwargs)
+        source=next(s for s in summary['sources'] if s['source']=='kong')
+        source.update(status='incomplete',failures=[dict(chain_id=1,address=VAULT,
+            stage='metadata',reason='missing_asset_metadata')])
+        return summary|{'status':'incomplete'}
+    monkeypatch.setattr(refresh.tvl_discovery,'discover_catalog',incomplete)
+    events=[]
+    selected=refresh.run_refresh(options,mode='publish',progress=events.append)
+    assert selected['status']=='selected',selected
+    result=selected['result']
+    assert result['publishReady'] and result['publicationBlockers']==[]
+    assert result['incompleteStages']==['catalog:eth']
+    warning=next(w for w in result['warnings'] if w['stage']=='catalog:eth')
+    finding=warning['details']['sources'][0]['findings'][0]
+    assert finding['address']==VAULT and finding['reason']=='missing_asset_metadata'
+    assert finding['vault_name']=='Offline fixture'
+    assert finding['retained_asset']==ASSET and finding['retained_asset_decimals']==6
+    assert any(e['event']=='refresh-findings' and e['warningCount'] for e in events)
+    report=options.publication_root/'refresh'/selected['jobId']/'warnings.json'
+    assert json.loads(report.read_text())['warnings']==result['warnings']
+    assert VAULT in report.with_suffix('.html').read_text()
+    assert Registry('staging').selection()['releaseId']==result['releaseId']
+
+
+def test_aging_chain_head_is_visible_without_blocking_coherent_publication(workflow,monkeypatch):
+    options,_=workflow
+    class AgingSource(Source):
+        def pin(self,*,end=None,confirmations=None,use_envio=True):
+            return dict(number=100 if end is None else end,hash=HASH,
+                        timestamp=(100 if end is None else end)*1000,finality='finalized')
+    class AgingReader(Reader):
+        def block_at(self,timestamp):return min(100,timestamp//1000)
+    monkeypatch.setattr(refresh,'chain_source',AgingSource)
+    monkeypatch.setattr(refresh.tvl_batch,'reader',lambda *args,**kwargs:AgingReader(1))
+    selected=refresh.run_refresh(options,mode='publish')
+    assert selected['status']=='selected',selected
+    assert selected['bounds']['eth']['cutoffReached'] is False
+    assert selected['result']['publicationBlockers']==[]
+    warning=next(w for w in selected['result']['warnings'] if w['code']=='chain-freshness')
+    assert warning['details']==dict(finalizedTimestamp=100000,cutoff=CUTOFF)
+    assert selected['result']['cutoff']==CUTOFF
+    assert selected['result']['tvlAsOfTimestamp']==CUTOFF-1

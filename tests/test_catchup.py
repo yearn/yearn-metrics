@@ -39,7 +39,11 @@ class Source(HistoricalSource):
         w3 = SimpleNamespace(eth=SimpleNamespace(chain_id=10, block_number=100,
             get_block=lambda n: dict(number=90 if n == 'finalized' else n,
                                      hash=HexBytes(HASH), timestamp=1000)))
-        super().__init__('op', w3)
+        def gql(query, variables):
+            assert variables == {'chain': 10}
+            assert 'chain_metadata' in query
+            return {'chain_metadata': [{'latest_processed_block': 90}]}
+        super().__init__('op', w3, gql)
         self.calls = []
         self.fail = None
 
@@ -79,6 +83,7 @@ def test_discovery_unions_retained_inactive_vaults_and_resumes(db, monkeypatch):
     assert db.execute('SELECT COUNT(*) FROM strategy_reports').fetchone()[0] == 2
     assert db.execute('SELECT COUNT(*) FROM events_raw').fetchone()[0] == 2
     assert result['pin']['finality'] == 'finalized'
+    assert result['source'] == 'envio'
     assert db.execute('SELECT active FROM vaults WHERE address=?', (VAULT,)).fetchone()[0] == 0
     client.calls.clear()
     before = measured.coverage_reads
@@ -199,7 +204,7 @@ def test_cli_catchup_only_calls_acquisition(postgres_database, tmp_path, monkeyp
         '--from-block', '1', '--to-block', '2', '--confirmations', '1000', '--discover']) == 0
     assert callable(captured.pop('progress'))
     assert captured == dict(chain='kat', first=1, last=2, source='auto', confirmations=1000,
-                            chunk_size=50000, discover=True, experimental=False)
+                            chunk_size=50000, discover=True, experimental=False, revalidate_rpc_coverage=False)
     output = capsys.readouterr()
     assert json.loads(output.out)['pin']['finality'] == 'confirmations:1000'
     assert output.err.strip() == 'report-acquisition progress'

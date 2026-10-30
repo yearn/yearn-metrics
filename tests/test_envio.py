@@ -651,10 +651,10 @@ def test_inventory_distinguishes_creation_from_registration(postgres_database, t
     assert envio._inventory_facts(conn, 1, 'v3')[VAULT.lower()]['deployment_block'] == 40
 
 
-def test_rpc_only_historical_chains_are_explicitly_selectable_not_default():
+def test_optimism_joins_default_envio_chains_while_fantom_stays_explicit():
     from yearn_data.cli import _chains
     assert _chains(['optimism', 'fantom']) == ['op', 'ftm']
-    assert 'op' not in _chains(None) and 'ftm' not in _chains(None)
+    assert _chains(None) == ['eth', 'polygon', 'base', 'arb', 'op', 'kat']
     assert CHAINS['op'].rpc_env == 'OPTIMISM_RPC_URL'
     assert CHAINS['ftm'].rpc_env == 'FANTOM_RPC_URL'
 

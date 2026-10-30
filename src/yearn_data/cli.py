@@ -175,7 +175,11 @@ def build_parser() -> argparse.ArgumentParser:
     refresh_p.add_argument('--confirmations',action='append',default=[],metavar='CHAIN:COUNT')
     refresh_p.add_argument('--first-close',type=int,help='Initial inclusive UTC day end when retained TVL scope is absent')
     refresh_p.add_argument('--source',choices=['auto','rpc','envio'],default='auto')
-    refresh_p.add_argument('--chunk-size',type=int,default=50_000)
+    refresh_p.add_argument('--chunk-size',type=int,help='Override report chunk defaults (Envio: 1000000; RPC: 50000)')
+    refresh_p.add_argument('--chain-chunk-size',action='append',default=[],metavar='CHAIN:BLOCKS')
+    refresh_p.add_argument('--report-workers',type=int,default=4)
+    refresh_p.add_argument('--window-days',type=int,default=7,help='Recent acquisition window without explicit bounds')
+    refresh_p.add_argument('--since',help='Continue acquisition after a publish-ready prepared/selected refresh receipt')
     refresh_p.add_argument('--max-targets',type=int,default=10_000,help='Total fee/pricing/chunk targets per invocation')
     refresh_p.add_argument('--max-dates',type=int,default=30,help='Total TVL chain/date targets per invocation')
     refresh_p.add_argument('--repair-history',action='store_true',help='Reacquire every close in the retained/explicit TVL window')
@@ -191,6 +195,8 @@ def build_parser() -> argparse.ArgumentParser:
     catchup_p.add_argument("--confirmations", type=int, help="Explicit alternative to RPC finalized")
     catchup_p.add_argument("--discover", action="store_true", help="Also scan configured inventory sources in this window")
     catchup_p.add_argument("--include-experimental-v2", action="store_true")
+    catchup_p.add_argument("--revalidate-rpc-coverage", action="store_true",
+                          help="Recheck Optimism RPC coverage through Envio within the requested window")
 
     discover_p = sub.add_parser("discover")
     discover_p.add_argument("--chains", nargs="+", help="Chains to discover")
@@ -355,6 +361,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 options=RefreshOptions(args.db,tuple(args.chains),args.cutoff,args.publication_root,
                     from_blocks=mapping(args.from_block),confirmations=mapping(args.confirmations),
+                    chain_chunk_sizes=mapping(args.chain_chunk_size),report_workers=args.report_workers,
+                    window_days=args.window_days,baseline_job=args.since,
                     first_close=args.first_close,source=args.source,chunk_size=args.chunk_size,
                     max_targets=args.max_targets,max_dates=args.max_dates,repair_history=args.repair_history,
                     deferred_manifest=args.deferred_manifest)
@@ -477,6 +485,7 @@ def main(argv: list[str] | None = None) -> int:
                           source=args.source, confirmations=args.confirmations,
                           chunk_size=args.chunk_size, discover=args.discover,
                           experimental=args.include_experimental_v2,
+                          revalidate_rpc_coverage=args.revalidate_rpc_coverage,
                           progress=lambda message: print(message, file=sys.stderr, flush=True))
         print(json.dumps(result, sort_keys=True))
         return 0

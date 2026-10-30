@@ -92,14 +92,14 @@ def test_materialization_uses_latest_known_lifecycle(db, existing_active, later_
 def test_metadata_correction_replays_and_commits_coverage(db, version, column, new_value):
     seed(db, version=version)
     client, _ = source([report_log(version)])
-    catchup.catch_up(db, 'op', 10, 30, client=client)
+    catchup.catch_up(db, 'op', 10, 30, source='rpc', client=client)
     old_report = dict(db.execute('SELECT * FROM strategy_reports').fetchone())
     old_raw = dict(db.execute('SELECT * FROM events_raw').fetchone())
     old_policy = db.execute('SELECT policy FROM history_coverage').fetchone()[0]
     with db:
         db.execute(f'UPDATE vaults SET {column}=?', (new_value,))
     client, _ = source([report_log(version)])
-    result = catchup.catch_up(db, 'op', 10, 30, client=client)
+    result = catchup.catch_up(db, 'op', 10, 30, source='rpc', client=client)
     assert result['completed_ranges'] == 1 and result['inserted_rows'] == 0
     assert dict(db.execute('SELECT * FROM strategy_reports').fetchone()) == {**old_report, column: new_value}
     assert dict(db.execute('SELECT * FROM events_raw').fetchone()) == old_raw
@@ -107,13 +107,13 @@ def test_metadata_correction_replays_and_commits_coverage(db, version, column, n
     vault = dict(db.execute('SELECT * FROM vaults').fetchone())
     assert policies == {report_scope(vault).policy} and old_policy not in policies
     client, _ = source([report_log(version)])
-    repeated = catchup.catch_up(db, 'op', 10, 30, client=client)
+    repeated = catchup.catch_up(db, 'op', 10, 30, source='rpc', client=client)
     assert repeated['completed_ranges'] == repeated['inserted_rows'] == 0
     # Returning to a previously used value must replay, not reuse its old policy.
     with db:
         db.execute(f'UPDATE vaults SET {column}=?', (old_report[column],))
     client, _ = source([report_log(version)])
-    restored = catchup.catch_up(db, 'op', 10, 30, client=client)
+    restored = catchup.catch_up(db, 'op', 10, 30, source='rpc', client=client)
     assert restored['completed_ranges'] == 1 and restored['inserted_rows'] == 0
     assert dict(db.execute('SELECT * FROM strategy_reports').fetchone()) == old_report
     assert dict(db.execute('SELECT * FROM events_raw').fetchone()) == old_raw
@@ -129,7 +129,7 @@ def test_metadata_correction_replays_and_commits_coverage(db, version, column, n
 def test_metadata_correction_does_not_hide_raw_conflicts(db, table, column, value):
     seed(db)
     client, _ = source([report_log()])
-    catchup.catch_up(db, 'op', 10, 30, client=client)
+    catchup.catch_up(db, 'op', 10, 30, source='rpc', client=client)
     with db:
         db.execute('UPDATE vaults SET asset_decimals=18')
         db.execute(f'UPDATE {table} SET {column}=?', (value,))
@@ -137,7 +137,7 @@ def test_metadata_correction_does_not_hide_raw_conflicts(db, table, column, valu
               for name in ['strategy_reports', 'events_raw', 'history_coverage']}
     client, _ = source([report_log()])
     with pytest.raises(ValueError, match='conflicting observation'):
-        catchup.catch_up(db, 'op', 10, 30, client=client)
+        catchup.catch_up(db, 'op', 10, 30, source='rpc', client=client)
     for name, rows in before.items():
         assert [dict(row) for row in db.execute(f'SELECT * FROM {name}')] == rows
 
@@ -146,7 +146,7 @@ def test_metadata_correction_does_not_hide_raw_conflicts(db, table, column, valu
 def test_report_writer_rejects_unapproved_metadata_changes(db, selected_vault):
     seed(db)
     client, _ = source([report_log()])
-    catchup.catch_up(db, 'op', 10, 30, client=client)
+    catchup.catch_up(db, 'op', 10, 30, source='rpc', client=client)
     before = dict(db.execute('SELECT * FROM strategy_reports').fetchone())
     vault = dict(db.execute('SELECT * FROM vaults').fetchone())
     options = {'report_metadata': vault} if selected_vault else {}
@@ -161,10 +161,10 @@ def test_resume_verifies_shared_boundaries_once_per_run(db, vault_count):
     for i in range(vault_count):
         seed(db, '0x' + f'{65+i:02x}' * 20)
     client, _ = source()
-    catchup.catch_up(db, 'op', 10, 30, chunk_size=10, client=client)
+    catchup.catch_up(db, 'op', 10, 30, source='rpc', chunk_size=10, client=client)
     for _ in range(2):
         client, calls = source()
-        result = catchup.catch_up(db, 'op', 10, 30, chunk_size=7, client=client)
+        result = catchup.catch_up(db, 'op', 10, 30, source='rpc', chunk_size=7, client=client)
         assert result['completed_ranges'] == result['inserted_rows'] == 0
         # The end block also has its initial pin and final fresh verification.
         assert calls == {'finalized': 1, 19: 1, 29: 1, 30: 3}
@@ -175,24 +175,24 @@ def test_resume_rejects_conflicting_hash_after_another_vault_verified_it(db):
     other = '0x' + '42' * 20
     seed(db, other)
     client, _ = source()
-    catchup.catch_up(db, 'op', 10, 30, chunk_size=10, client=client)
+    catchup.catch_up(db, 'op', 10, 30, source='rpc', chunk_size=10, client=client)
     with db:
         db.execute("UPDATE history_coverage SET end_hash=? WHERE target=? AND to_block=19",
                    ('0x' + 'ef' * 32, other))
     client, calls = source()
     with pytest.raises(ValueError, match='hash'):
-        catchup.catch_up(db, 'op', 10, 30, client=client)
+        catchup.catch_up(db, 'op', 10, 30, source='rpc', client=client)
     assert calls[19] == 1
 
 
 def test_resume_still_checks_end_hash_fresh_at_completion(db):
     seed(db)
     client, _ = source()
-    catchup.catch_up(db, 'op', 10, 30, chunk_size=10, client=client)
+    catchup.catch_up(db, 'op', 10, 30, source='rpc', chunk_size=10, client=client)
     client, calls = source(block_hash=lambda number, count:
         '0x' + 'ef' * 32 if number == 30 and count == 3 else HASH)
     with pytest.raises(ValueError, match='hash changed'):
-        catchup.catch_up(db, 'op', 10, 30, client=client)
+        catchup.catch_up(db, 'op', 10, 30, source='rpc', client=client)
     assert calls[30] == 3
 
 

@@ -244,6 +244,8 @@ def _snapshot(vault,timestamp,reader,price_cache,price_source):
         key = (vault['chain_id'],vault['asset'].lower(),timestamp)
         if key not in price_cache:
             fn = fetch_yearn_price if price_source=='yearn-prices' else fetch_defillama_price
+            if price_source == 'yearn-prices' and callable(getattr(type(reader), 'price', None)):
+                fn = reader.price
             price_cache[key] = fn(*key)
         price, status, evidence = price_cache[key]
         classification = quote_classification(evidence)

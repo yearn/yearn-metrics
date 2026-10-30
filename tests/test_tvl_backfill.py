@@ -1,3 +1,4 @@
+from yearn_data import tvl_batch
 from yearn_data.storage import connect
 import importlib.util
 import json
@@ -22,7 +23,7 @@ def test_direct_batch_matches_ids_even_when_out_of_order(monkeypatch):
     reader=object.__new__(b.BatchedReader)
     reader.w3=Mock();reader.w3.provider.endpoint_uri='https://rpc.test'
     response=Mock();response.json.return_value=[{'id':1,'result':'0x'+'00'*31+'02'},{'id':0,'result':'0x'+'00'*31+'01'}]
-    post=Mock(return_value=response);monkeypatch.setattr(b.requests,'post',post)
+    post=Mock(return_value=response);monkeypatch.setattr(tvl_batch.requests,'post',post)
     calls=[('0x'+'11'*20,'0x18160ddd'),('0x'+'22'*20,'0x18160ddd')]
     result=reader.transport(calls,123,False)
     assert int.from_bytes(result[calls[0]],'big')==1
@@ -33,7 +34,7 @@ def test_direct_batch_matches_ids_even_when_out_of_order(monkeypatch):
 def test_invalid_ids_cannot_become_success(monkeypatch):
     reader=object.__new__(b.BatchedReader);reader.w3=Mock()
     response=Mock();response.json.return_value=[{'id':9,'result':'0x1234'}]
-    monkeypatch.setattr(b.requests,'post',Mock(return_value=response));monkeypatch.setattr(b.time,'sleep',lambda _:None)
+    monkeypatch.setattr(tvl_batch.requests,'post',Mock(return_value=response));monkeypatch.setattr(b.time,'sleep',lambda _:None)
     calls=[('0x'+'11'*20,'0x18160ddd')]
     assert isinstance(reader.transport(calls,123,False)[calls[0]],Exception)
 
@@ -99,6 +100,7 @@ def test_restart_restores_saved_batch_exports_without_recollection(postgres_data
         def block_at(self,timestamp):return 100
         def exists(self,*args):return True
         def uint(self,*args):return 100*10**18
+        def price(self,*args):return 1,'ok',{}
     class Prices:
         def __init__(self,*args):self.cache={}
         def get(self,*args):return 1,'ok',{}
@@ -106,8 +108,6 @@ def test_restart_restores_saved_batch_exports_without_recollection(postgres_data
     monkeypatch.setattr(b,'BatchedReader',Reader)
     monkeypatch.setattr(b,'Prices',Prices)
     monkeypatch.setattr(b,'deployment',lambda *a:(1,ts('2020-01-01')-86399))
-    # main temporarily installs its persisted price reader in the source module.
-    monkeypatch.setattr(b.sources,'fetch_yearn_price',b.sources.fetch_yearn_price)
     collect=Mock(wraps=b.sources.collect_tvl);monkeypatch.setattr(b.sources,'collect_tvl',collect)
     real_export=b.export_tvl;attempts=[]
     def fail_once(conn,path,run):
@@ -199,7 +199,7 @@ def test_batched_collection_and_export_preserve_historical_accounting(tmp_path,m
     def get_block(number):
         return {'number':number,'timestamp':number*43200,'hash':bytes.fromhex('01'*32)}
     def get_code(vault,block_identifier):
-        if vault.lower()==b.MULTICALL3.lower():return b'code' if multicall else b''
+        if vault.lower()==tvl_batch.MULTICALL3.lower():return b'code' if multicall else b''
         return b'code' if vault.lower() in births and block_identifier>=births[vault.lower()] else b''
     def eth_call(request,block_identifier):return raw_call(request['to'],request['data'],block_identifier)
     def aggregate(payload):
@@ -227,7 +227,7 @@ def test_batched_collection_and_export_preserve_historical_accounting(tmp_path,m
             try:rows.append({'id':item['id'],'result':'0x'+eth_call(request,block).hex()})
             except ValueError:rows.append({'id':item['id'],'error':{'code':-32000}})
         return SimpleNamespace(raise_for_status=lambda:None,json=lambda:list(reversed(rows)))
-    monkeypatch.setattr(b.requests,'post',post)
+    monkeypatch.setattr(tvl_batch.requests,'post',post)
     class Prices:
         def prime(self,keys):pass
         def get(self,chain,token,timestamp):return (999 if token==address(3) else 1),'ok',{'fixture':True}

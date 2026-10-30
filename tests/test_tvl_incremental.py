@@ -49,6 +49,8 @@ def test_refresh_and_targeted_backfill_match_full_rows_totals_and_analytics(post
     assert result['reusedDates'] == [DAY,DAY+86400]
     assert result['recomputedDates'] == [DAY+2*86400]
     assert result['copiedRows'] == 4 and result['recomputedRowsWritten'] == 2
+    assert result['inputDatesSkipped'] == [DAY, DAY+86400]
+    assert result['selectedInputRowsRead'] == 2
     assert result['totalsRowsRead'] == 2
     assert result['totalsRowsCopied'] > 0
     assert captured(old) == original
@@ -92,7 +94,8 @@ def test_global_policy_change_rebuilds_and_catalog_touch_does_not(postgres_datab
     with closing(connect('staging')) as conn:
         conn.execute('UPDATE tvl_vaults SET updated_at=2');conn.commit()
     touched = TvlStore('staging',tmp_path/'pub').get()
-    assert prepare(touched)['reusedDates'] == [DAY]
+    assert touched.id == old.id
+    assert prepare(touched)['status'] == 'already-prepared'
     manifest = deepcopy(touched.manifest)
     manifest['datasetId'] = 'd'*64
     manifest['newAccountingPolicy'] = 'new-global-rule'
@@ -153,14 +156,18 @@ def test_interruption_rolls_back_reuse_index_and_reports_daily_gaps(postgres_dat
     assert repaired.history(interval='daily')['chart'][1]['Ethereum']==0
 
 
-def test_global_identity_keeps_future_catalog_and_accounting_fields():
-    manifest = dict(runs=[],catalog=[dict(updated_at=1,name='a')],database='staging',allocatorKeys=[])
+def test_catalog_identity_is_scoped_but_future_accounting_fields_remain_global():
+    from yearn_data.tvl_incremental import catalog_state
+    meta = dict(chain_id=1,address=PARENT,updated_at=1,name='a')
+    manifest = dict(runs=[],catalog=[meta],database='staging',allocatorKeys=[])
     original = context_identity(SimpleNamespace(manifest=manifest))
     def identity(**changes):
         return context_identity(SimpleNamespace(manifest=manifest|changes))
-    assert identity(catalog=[dict(updated_at=2,name='a')]) == original
-    assert identity(catalog=[dict(updated_at=1,name='b')]) != original
-    assert identity(catalog=[dict(updated_at=1,name='a',futureField='new')]) != original
+    state = catalog_state(SimpleNamespace(manifest=manifest))
+    for change in (dict(updated_at=2), dict(name='b'), dict(futureField='new')):
+        changed = manifest | {'catalog':[meta | change]}
+        assert context_identity(SimpleNamespace(manifest=changed)) == original
+        assert (catalog_state(SimpleNamespace(manifest=changed)) == state) == ('updated_at' in change)
     assert identity(futurePolicy='new') != original
     assert identity(reportingCutoff=DAY+1) == identity(reportingCutoff=DAY+86401)
     # Refresh uses this whole-input identity for immutable manifests; daily
@@ -171,6 +178,72 @@ def test_global_identity_keeps_future_catalog_and_accounting_fields():
         build(SimpleNamespace(manifest=manifest|{'accountingRevision':'old-code'}))
     with pytest.raises(ValueError,match='ordered inclusive'):
         build(SimpleNamespace(manifest=manifest),backfill=(2,1))
+
+
+def test_catalog_add_edit_remove_only_rebuilds_referenced_days(postgres_database,tmp_path):
+    with closing(connect('staging')) as conn:
+        init_db(conn)
+        run(conn,1,DAY,[(PARENT,'100')])
+        run(conn,2,DAY+86400,[(PARENT,'100'),(CHILD,'100')],[(CHILD,'50')])
+    old=TvlStore('staging',tmp_path/'pub').get();prepare(old)
+    manifest=deepcopy(old.manifest)
+    child=dict(chain_id=1,address=CHILD,active=1,updated_at=1)
+    for index,catalog in enumerate(([child],[child|{'futureField':'changed'}],[])):
+        manifest['datasetId']=str(index+1)*64;manifest['catalog']=catalog
+        changed=TvlDataset(deepcopy(manifest));result=prepare(changed)
+        assert result['fullRebuildReason'] is None
+        assert result['catalogAffectedDates']==result['recomputedDates']==[DAY+86400]
+        assert result['reusedDates']==result['inputDatesSkipped']==[DAY]
+        assert changed.history(interval='daily')['chart']==[
+            {'timestamp':DAY,'Ethereum':100.0},{'timestamp':DAY+86400,'Ethereum':150.0}]
+        full_copy(changed,'abcdef'[index])
+    manifest['datasetId']='9'*64
+    manifest['catalog']=[dict(chain_id=1,address=BRIDGE,updated_at=1)]
+    unused=TvlDataset(manifest);result=prepare(unused)
+    assert result['reusedDates']==[DAY,DAY+86400]
+    assert result['inputDatesRead']==result['catalogAffectedDates']==[]
+    full_copy(unused,'f')
+
+
+@pytest.mark.parametrize('endpoint', ['parent','cross-chain-child'])
+def test_catalog_changes_follow_position_endpoints_without_snapshots(postgres_database,tmp_path,endpoint):
+    with closing(connect('staging')) as conn:
+        init_db(conn);run(conn,1,DAY,[(BRIDGE,'100')])
+        run(conn,2,DAY+86400,[(BRIDGE,'100')],[(CHILD,'50')])
+        conn.execute("UPDATE tvl_positions SET data_json=jsonb_set(data_json::jsonb,'{child_chain_id}','10')::text")
+        conn.commit()
+    old=TvlStore('staging',tmp_path/'pub').get();prepare(old)
+    manifest=deepcopy(old.manifest);manifest['datasetId']='c'*64
+    chain,address=(1,PARENT) if endpoint=='parent' else (10,CHILD)
+    manifest['catalog']=[dict(chain_id=chain,address=address,active=1)]
+    changed=TvlDataset(manifest);result=prepare(changed)
+    assert result['catalogAffectedDates']==result['recomputedDates']==[DAY+86400]
+    assert result['reusedDates']==[DAY]
+    full_copy(changed,'d')
+
+
+def test_new_catalog_chain_recalculates_retired_bridge_without_target_observations(postgres_database,tmp_path):
+    with closing(connect('staging')) as conn:
+        init_db(conn)
+        conn.execute("INSERT INTO tvl_vaults(chain_id,version,address,active,updated_at) VALUES(1,'v3',?,0,1)",(BRIDGE,))
+        conn.commit()
+        run(conn,1,DAY,[(BRIDGE,'100')]);run(conn,2,DAY+86400,[(PARENT,'50')])
+        run(conn,3,DAY+2*86400,[(BRIDGE,'100')])
+    old=TvlStore('staging',tmp_path/'pub',current_bridge_policy='retired-registry').get();prepare(old)
+    assert captured(old)[0][-1][-1]=='100'
+    manifest=deepcopy(old.manifest);manifest['datasetId']='c'*64
+    manifest['catalog'].append(dict(chain_id=10,address=CHILD,active=1))
+    changed=TvlDataset(manifest);result=prepare(changed)
+    assert result['reusedDates']==[DAY,DAY+86400]
+    assert result['catalogAffectedDates']==result['recomputedDates']==[DAY+2*86400]
+    assert captured(changed)[0][-1][-1]=='0'
+    full_copy(changed,'d')
+    manifest['datasetId']='e'*64;manifest['catalog'].pop()
+    removed=TvlDataset(manifest);result=prepare(removed)
+    assert result['catalogAffectedDates']==result['recomputedDates']==[DAY+2*86400]
+    assert result['reusedDates']==[DAY,DAY+86400]
+    assert captured(removed)[0][-1][-1]=='100'
+    full_copy(removed,'f')
 
 
 def test_competing_builder_cannot_write_partial_rows(postgres_database,tmp_path):
@@ -362,3 +435,124 @@ def test_serving_edits_preserve_identity_but_accounting_edits_rebuild(postgres_d
         assert changed.id!=old.id
         assert prepare(changed)['fullRebuildReason']=='accounting-or-catalog-context-changed'
         assert changed.history(interval='daily')['chart']==[{'timestamp':DAY,'Ethereum':100.0}]
+
+
+def test_tracking_catches_in_place_corrections_and_membership_changes(postgres_database, tmp_path):
+    """Old prices/ownership and run status changes cannot hide behind stable counts."""
+    from yearn_data.tvl_api import publish_tvl
+    def candidate(revision):
+        return TvlDataset(publish_tvl('staging', tmp_path/'pub', observation_revision=revision))
+    with closing(connect('staging')) as conn:
+        init_db(conn)
+        run(conn, 1, DAY, [(PARENT,'100'), (CHILD,'100')], [(CHILD,'50')])
+        run(conn, 2, DAY+86400, [(PARENT,'200')])
+    original = candidate('before'); prepare(original)
+    with closing(connect('staging')) as conn:
+        conn.execute('''UPDATE tvl_snapshots SET data_json=CAST(
+            CAST(data_json AS jsonb) || '{"tvl_usd":"120","price_usd":"12"}' AS text)
+            WHERE run_id=1 AND vault=?''', (CHILD,))
+        conn.execute('''UPDATE tvl_positions SET data_json=CAST(
+            CAST(data_json AS jsonb) || '{"debt_usd":"60","owned_usd":"60"}' AS text)
+            WHERE run_id=1''')
+        conn.commit()
+    repaired = candidate('corrected'); result = prepare(repaired)
+    assert result['inputDatesRead'] == [DAY]
+    assert result['inputDatesSkipped'] == [DAY+86400]
+    assert repaired.history(interval='daily')['chart'][0]['Ethereum'] == 160
+    full_copy(repaired, '8')
+    with closing(connect('staging')) as conn:
+        # A new run is already present in storage but becomes eligible later.
+        # Its rows were tracked before the previous preparation, so membership
+        # must invalidate the date independently of the date marker.
+        run(conn, 3, DAY, [(CHILD,'200')], status='running')
+    waiting = candidate('waiting'); prepare(waiting)
+    with closing(connect('staging')) as conn:
+        conn.execute("UPDATE tvl_runs SET status='complete' WHERE id=3"); conn.commit()
+    finished = candidate('finished'); result = prepare(finished)
+    assert result['inputDatesRead'] == [DAY]
+    assert finished.history(interval='daily')['chart'][0]['Ethereum'] == 240
+    full_copy(finished, '9')
+
+
+def test_tracking_handles_rollback_date_moves_deletes_and_missing_triggers(postgres_database, tmp_path):
+    from yearn_data.tvl_api import publish_tvl
+    def candidate(revision):
+        return TvlDataset(publish_tvl('staging', tmp_path/'pub', observation_revision=revision))
+    with closing(connect('staging')) as conn:
+        init_db(conn)
+        run(conn, 1, DAY, [(PARENT,'100')])
+        run(conn, 2, DAY+86400, [(PARENT,'200')])
+        run(conn, 3, DAY+2*86400, [(PARENT,'300')])
+    old = candidate('original'); prepare(old)
+    with closing(connect('staging')) as conn:
+        conn.execute('DELETE FROM tvl_snapshots WHERE run_id=1'); conn.rollback()
+    unchanged = candidate('rolled-back'); result = prepare(unchanged)
+    assert result['selectedInputRowsRead'] == 0
+    assert result['inputDatesSkipped'] == [DAY, DAY+86400, DAY+2*86400]
+    with closing(connect('staging')) as conn:
+        conn.execute('''UPDATE tvl_snapshots SET timestamp=?,data_json=CAST(
+            CAST(data_json AS jsonb) || jsonb_build_object('timestamp',CAST(? AS bigint)) AS text)
+            WHERE run_id=2''', (DAY,DAY))
+        conn.execute('DELETE FROM tvl_snapshots WHERE run_id=1'); conn.commit()
+    moved = candidate('moved'); result = prepare(moved)
+    assert result['inputDatesRead'] == [DAY]
+    assert result['inputDatesSkipped'] == [DAY+2*86400]
+    assert result['pendingChainDates'] == [{'timestamp':DAY+86400,'chainIds':[1]}]
+    assert moved.history(interval='daily')['chart'][0]['Ethereum'] == 200
+    full_copy(moved, '7')
+    with closing(connect('staging')) as conn:
+        conn.execute('DROP TRIGGER tvl_track_days_update ON tvl_snapshots')
+        conn.execute('''UPDATE tvl_snapshots SET data_json=CAST(
+            CAST(data_json AS jsonb) || '{"tvl_usd":"250"}' AS text) WHERE run_id=2''')
+        conn.commit()
+    repaired = candidate('untracked-write'); result = prepare(repaired)
+    assert result['inputDatesSkipped'] == []
+    assert repaired.history(interval='daily')['chart'][0]['Ethereum'] == 250
+    full_copy(repaired, '6')
+
+
+def test_tracking_baseline_and_truncate_force_safe_input_scan(postgres_database, tmp_path):
+    from yearn_data.tvl_api import publish_tvl
+    def candidate(revision):
+        return TvlDataset(publish_tvl('staging', tmp_path/'pub', observation_revision=revision))
+    with closing(connect('staging')) as conn:
+        init_db(conn)
+        run(conn, 1, DAY, [(PARENT,'100'), (CHILD,'100')], [(CHILD,'50')])
+    legacy = candidate('legacy'); prepare(legacy)
+    with closing(connect('staging')) as conn:
+        # Simulate the pre-tracking preparation index: readable but no hints.
+        conn.execute('UPDATE tvl_chart_inputs SET tracking_revision=NULL,known_chains=NULL')
+        conn.execute("UPDATE tvl_chart_preparations SET receipt_json=CAST(CAST(receipt_json AS jsonb)-'dayTracking' AS text)")
+        conn.commit()
+    baseline = candidate('baseline'); result = prepare(baseline)
+    assert result['inputDatesRead'] == [DAY] and result['reusedDates'] == [DAY]
+    with closing(connect('staging')) as conn:
+        conn.execute('TRUNCATE tvl_positions'); conn.commit()
+    cleared = candidate('positions-cleared'); result = prepare(cleared)
+    assert result['inputDatesRead'] == [DAY]
+    assert cleared.history(interval='daily')['chart'][0]['Ethereum'] == 200
+    full_copy(cleared, '5')
+
+
+def test_tracking_and_inputs_share_one_snapshot_during_concurrent_correction(postgres_database, tmp_path):
+    from yearn_data.tvl_api import publish_tvl
+    def candidate(revision):
+        return TvlDataset(publish_tvl('staging', tmp_path/'pub', observation_revision=revision))
+    with closing(connect('staging')) as conn:
+        init_db(conn); run(conn, 1, DAY, [(PARENT,'100')])
+    old = candidate('before'); prepare(old)
+    current = candidate('during')
+    def correction(message):
+        if not message.startswith('History change tracking:'):
+            return
+        with closing(connect('staging')) as writer:
+            writer.execute('''UPDATE tvl_snapshots SET data_json=CAST(
+                CAST(data_json AS jsonb) || '{"tvl_usd":"120"}' AS text)''')
+            writer.commit()
+    result = prepare(current, progress=correction)
+    assert result['selectedInputRowsRead'] == 0
+    assert current.history(interval='daily')['chart'][0]['Ethereum'] == 100
+    following = candidate('after'); result = prepare(following)
+    assert result['inputDatesRead'] == [DAY]
+    assert following.history(interval='daily')['chart'][0]['Ethereum'] == 120
+    full_copy(following, '4')

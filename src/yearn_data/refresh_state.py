@@ -4,6 +4,7 @@ import hashlib
 import json
 import time
 import uuid
+from threading import Lock
 
 from .storage import connect
 
@@ -53,6 +54,7 @@ class RefreshState:
         self.resume=resume
         self.id=resume or uuid.uuid4().hex
         self.progress=progress or (lambda event:None)
+        self.event_lock=Lock()
         self.conn=None
         self.ordinal=0
         self.current=None
@@ -95,7 +97,8 @@ class RefreshState:
                 self.conn.close()
 
     def emit(self,event,**details):
-        self.progress({'jobId':self.id,'event':event,**details})
+        with self.event_lock:
+            self.progress({'jobId':self.id,'event':event,**details})
 
     def set_bounds(self,bounds):
         if self.bounds and self.bounds!=bounds:
@@ -129,7 +132,7 @@ class RefreshState:
         read_inputs=inputs if callable(inputs) else lambda:inputs
         incoming=digest(read_inputs())
         row=self.conn.execute('SELECT * FROM refresh_stages WHERE job_id=? AND name=?',(self.id,name)).fetchone()
-        state={};result={}
+        state={};result={};initial_output=None
         self.current={'name':name,'ordinal':self.ordinal,'input':incoming,'output':output}
         if row:
             state=json.loads(row['state_json']);result=json.loads(row['result_json'])
@@ -138,10 +141,15 @@ class RefreshState:
                 self.checks.append((name,read_inputs,incoming,output,result,row['output_digest']))
                 self.emit('stage-reused',stage=name)
                 return result
+            if valid:
+                initial_output=row['output_digest']
             if not valid:
                 self.emit('stage-invalidated',stage=name)
                 state={};result={}
-        self._save('running',state,result,output(result))
+        # A fresh action has no resumable cursor yet. If it fails before its
+        # first committed checkpoint, replay it rather than hashing old history
+        # merely to save an empty starting state.
+        self._save('running',state,result,initial_output)
         self.emit('stage-started',stage=name)
         started=time.monotonic()
         try:
@@ -188,7 +196,7 @@ class RefreshState:
         stages=[dict(name=r['name'],status=r['status'],result=json.loads(r['result_json']),
                      progress=json.loads(r['state_json'])) for r in self.conn.execute(
                      'SELECT * FROM refresh_stages WHERE job_id=? ORDER BY ordinal',(self.id,))]
-        return dict(jobId=self.id,status=row['status'],context=self.context,bounds=self.bounds,
+        return dict(jobId=self.id,status=row['status'],createdAt=row['created_at'],context=self.context,bounds=self.bounds,
                     servingReleaseIdBefore=row['initial_release_id'],result=json.loads(row['result_json']),stages=stages)
 
 
