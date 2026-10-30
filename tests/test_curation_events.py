@@ -176,3 +176,41 @@ def test_indexed_events_and_rpc_recovery_preserve_atomic_factory_coverage(postgr
         assert scan_factory(c,factory,r,from_block=START,to_block=END,chunk_size=END-START+1)
         assert tuple(c.execute('SELECT row_count,source FROM tvl_history_coverage').fetchone())==(1,'rpc')
     finally:c.close()
+
+
+@pytest.mark.parametrize('mode',['rpc','RPC','rpc '])
+def test_rpc_override_normalizes_case_and_whitespace(monkeypatch,mode):
+    monkeypatch.setenv('YEARN_CURATION_EVENT_SOURCE',mode)
+    r=reader(Graphql([AssertionError('indexer must not be queried')]))
+    assert r.event_chunk_size(FACTORY,ABI,START,END,100)==100
+    assert r.logs(FACTORY,ABI,START,END)==[]
+    assert r.last_event_source=='rpc'
+
+
+def test_invalid_source_override_fails_before_query(monkeypatch):
+    monkeypatch.setenv('YEARN_CURATION_EVENT_SOURCE','rpcc')
+    r=reader(Graphql([AssertionError('indexer must not be queried')]))
+    with pytest.raises(ValueError,match='must be auto or rpc'):
+        r.event_chunk_size(FACTORY,ABI,START,END,100)
+    with pytest.raises(ValueError,match='must be auto or rpc'):
+        r.logs(FACTORY,ABI,START,END)
+
+
+def test_complete_busy_indexed_factory_window_is_not_a_truncated_rpc_result(postgres_database):
+    from contextlib import closing
+    pages=[]
+    for start in range(0,10000,500):
+        page=[]
+        for i in range(start,start+500):
+            row=event(f'{i:05d}',i)
+            args=json.loads(row['argsJson']);args['initialOwner']='0x'+'99'*20
+            row['argsJson']=json.dumps(args);page.append(row)
+        pages.append(page)
+    pages.append([])
+    gql=Graphql(pages);r=reader(gql)
+    factory=dict(chain_id=CHAIN,address=FACTORY,family='morpho-v1',from_block=START)
+    with closing(connect('staging')) as conn:
+        init_db(conn)
+        assert scan_factory(conn,factory,r,from_block=START,to_block=END)==[]
+        assert tuple(conn.execute('SELECT source,row_count FROM tvl_history_coverage').fetchone())==('envio',0)
+    assert sum('CurationFactoryEvent(' in q for q,v in gql.calls)==21

@@ -143,6 +143,19 @@ class HistoricalSource:
         return {"number": number, "hash": _hex(block["hash"]), "timestamp": int(block["timestamp"]), "finality": policy}
 
     def envio_nodes(self, entity, fields, address_field, address, lo, hi, *, bounded=False):
+        if self.chain_id == 10:
+            # A head watermark proves only the upper bound. In particular an
+            # empty repair must not certify history the producer never scanned.
+            data = self.gql("query($chain: Int!) { chain_metadata(where: {chain_id: {_eq: $chain}}) { chain_id start_block } }",
+                            {"chain": self.chain_id})
+            rows = data.get("chain_metadata") or []
+            if len(rows) != 1 or rows[0].get('chain_id') != self.chain_id:
+                raise HistorySourceError("Optimism Envio start-block attestation missing or ambiguous")
+            start = rows[0].get('start_block')
+            if isinstance(start, bool) or not isinstance(start, (int, str)) or not re.fullmatch(r"[0-9]+", str(start)):
+                raise HistorySourceError("Optimism Envio start-block attestation invalid")
+            if lo < int(start):
+                raise HistorySourceError("requested start precedes Optimism Envio start block")
         query = envio._page_query(entity, fields + " blockHash", self.chain_id, lo, hi, address_field)
         addresses = [address] if isinstance(address, str) else list(address)
         allowed = {a.lower() for a in addresses}

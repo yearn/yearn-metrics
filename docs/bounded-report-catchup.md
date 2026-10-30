@@ -172,3 +172,11 @@ after all required scans finish. Concurrent requests are processed in completion
 ranges remain reusable if another range fails, even when they are later in block
 order. Repeating the same command fetches only the remaining gaps. All database
 writes and canonical end-hash checks stay on the coordinating thread.
+
+Optimism Envio report and registry reads require the producer's
+`chain_metadata.start_block` attestation, including reads that return no events.
+A missing, invalid, or later start block rejects the range before observations
+or replacement coverage commit. The existing upper watermark and fresh canonical
+end-hash checks still apply. A chain start attestation does not by itself prove
+that every contract subscription or dynamic registration is complete; producer
+configuration and replay checks remain separate requirements.

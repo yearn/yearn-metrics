@@ -63,3 +63,8 @@ production database reset is not implicit in installing these changes: prepare a
 separate deployment/backfill or review the specific migration/reset operation
 before replacing a serving indexer. Verify all seven curation chains before
 claiming that indexed acquisition is active.
+
+`YEARN_CURATION_EVENT_SOURCE` accepts `auto` or `rpc`, ignoring case and
+surrounding whitespace; other values fail explicitly. Fully paginated Envio
+windows may contain 10,000 or more events. Only potentially capped RPC/custom
+reader responses retain the result-cap rejection.

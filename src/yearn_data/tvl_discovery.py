@@ -16,6 +16,14 @@ INVENTORIES = Path(__file__).parent / 'inventories'
 V1_REGISTRY = json.loads((INVENTORIES / 'tvl-v1.json').read_text())
 
 
+def curation_event_source():
+    import os
+    source=os.environ.get('YEARN_CURATION_EVENT_SOURCE','auto').strip().lower()
+    if source not in ('auto','rpc'):
+        raise ValueError('YEARN_CURATION_EVENT_SOURCE must be auto or rpc')
+    return source
+
+
 class DiscoveryReader(ArchiveReader):
     """Read metadata at one finalized block with the existing TVL RPC configuration."""
 
@@ -58,8 +66,7 @@ class DiscoveryReader(ArchiveReader):
             raise ValueError('discovery range changed before commit')
 
     def event_chunk_size(self, address, abi, start, end, chunk_size):
-        import os
-        if os.environ.get('YEARN_CURATION_EVENT_SOURCE','auto')=='rpc':return chunk_size
+        if curation_event_source()=='rpc':return chunk_size
         try:
             self.curation_events.eligible(address,abi['name'],start,end)
             return max(chunk_size,1_000_000)
@@ -69,10 +76,10 @@ class DiscoveryReader(ArchiveReader):
     def logs(self, address, abi, start, end):
         from eth_utils import event_abi_to_log_topic
         from web3._utils.events import get_event_data
-        import os
+        source=curation_event_source()
         self.block(end)  # Pin before fetching; verify again immediately before commit.
         indexed = getattr(self,'curation_events',None)
-        if indexed is not None and os.environ.get('YEARN_CURATION_EVENT_SOURCE','auto') != 'rpc':
+        if indexed is not None and source != 'rpc':
             try:
                 result=indexed.logs(address,abi,start,end)
                 self.last_event_source='envio'
@@ -332,7 +339,7 @@ def scan_factory(conn, factory, reader, *, from_block=None, to_block=None, chunk
     for lo,hi in missing_ranges(conn,scope,start,end,chunk_size,table='tvl_history_coverage'):
         logs = reader.logs(factory['address'],abi,lo,hi)
         # Reject a possible capped response instead of certifying a truncated scan.
-        if len(logs)>=10_000:
+        if len(logs)>=10_000 and getattr(reader,'last_event_source',None)!='envio':
             raise ValueError('factory result cap; use smaller chunks')
         accepted = []
         for log in logs:
@@ -448,7 +455,7 @@ def historical_adapters(conn, parent, reader, *, from_block=None, to_block=None,
             chunk_size=reader.event_chunk_size(address,ADD_ADAPTER_EVENT,start,end,chunk_size)
         for lo,hi in missing_ranges(conn,scope,start,end,chunk_size,table='tvl_history_coverage'):
             logs = reader.logs(address,ADD_ADAPTER_EVENT,lo,hi)
-            if len(logs)>=10_000:
+            if len(logs)>=10_000 and getattr(reader,'last_event_source',None)!='envio':
                 raise ValueError('adapter result cap; use smaller chunks')
             def write(db):
                 for log in logs:

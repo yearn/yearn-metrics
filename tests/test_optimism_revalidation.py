@@ -88,3 +88,49 @@ def test_cli_exposes_bounded_revalidation_flag():
     args = cli.build_parser().parse_args(['catch-up', '--chain', 'op', '--from-block', '10',
                                          '--to-block', '30', '--source', 'envio', '--revalidate-rpc-coverage'])
     assert args.revalidate_rpc_coverage and args.from_block == 10 and args.to_block == 30
+
+
+@pytest.mark.parametrize('discover',[False,True])
+def test_producer_start_bound_cannot_replace_rpc_coverage_with_empty_history(db,discover):
+    from yearn_data.history_sources import HistoricalSource
+    from test_history_sources import client as rpc
+    vault=dict(db.execute('SELECT * FROM vaults').fetchone())
+    scope=report_scope(vault)
+    cover(db,scope,10,30)
+    for target in inventory_targets('op'):cover(db,target.scope,10,30)
+    before=[tuple(row) for row in db.execute('SELECT * FROM history_coverage ORDER BY target,family')]
+    reads=[]
+    def gql(query,variables):
+        if 'chain_metadata' in query:
+            return {'chain_metadata':[dict(chain_id=10,start_block='20',latest_processed_block=90)]}
+        reads.append(query)
+        raise AssertionError('No event query may precede start-bound verification')
+    source=HistoricalSource('op',rpc(),gql)
+    with pytest.raises(ValueError,match='precedes Optimism Envio start'):
+        catchup.catch_up(db,'op',10,30,discover=discover,source='envio',
+            revalidate_rpc_coverage=True,client=source)
+    assert not reads
+    assert [tuple(row) for row in db.execute('SELECT * FROM history_coverage ORDER BY target,family')]==before
+
+
+@pytest.mark.parametrize('metadata',[[],[{'chain_id':10}],[{'chain_id':10,'start_block':None}],
+    [{'chain_id':10,'start_block':True}],[{'chain_id':1,'start_block':0}]])
+def test_missing_or_invalid_start_attestation_is_not_empty_success(metadata):
+    from yearn_data.history_sources import HistoricalSource
+    from test_history_sources import client as rpc
+    source=HistoricalSource('op',rpc(),lambda *args:{'chain_metadata':metadata})
+    with pytest.raises(ValueError,match='attestation'):
+        list(source.envio_nodes('V2StrategyReported','chainId','vaultAddress',VAULT,10,30))
+
+
+def test_attested_start_accepts_complete_empty_read():
+    from yearn_data.history_sources import HistoricalSource
+    from test_history_sources import client as rpc
+    calls=[]
+    def gql(query,variables):
+        calls.append(query)
+        if 'chain_metadata' in query:return {'chain_metadata':[dict(chain_id=10,start_block='10')]}
+        return {'V2StrategyReported':[]}
+    source=HistoricalSource('op',rpc(),gql)
+    assert list(source.envio_nodes('V2StrategyReported','chainId','vaultAddress',VAULT,10,30))==[]
+    assert len(calls)==2
