@@ -209,3 +209,19 @@ def test_github_template_is_canonical_and_changes_refresh_identity(tmp_path,monk
     # A missing optional notification asset must not prevent financial work.
     template.unlink()
     assert refresh_scope.code_identity()!=before
+
+
+def test_unavailable_balance_pairs_render_with_price_gaps_and_other_findings(receipt):
+    receipt['result']['warnings'].extend([
+        dict(code='availability-gaps',stage='unresolvedTvlChainDates',message='Unavailable',
+            details=[[1,1792799999],(1,1792886399),[250,1792799999]]),
+        dict(code='availability-gaps',stage='deferredTvlRepairs',message='Deferred',
+            details=[dict(chainId=10,timestamp=1792799999,reason='price-or-ownership-unavailable')])])
+    # Exercise both the in-process receipt and its persisted JSON form.
+    for candidate in (receipt,json.loads(json.dumps(receipt))):
+        body=report.render(candidate)
+        assert '3 chain/day findings: Ethereum (2 days), Fantom (1 days)' in body
+        assert '1 chain/day findings: Optimism (1 days)' in body
+        assert 'Some expected daily asset-unit observations are unavailable' in body
+        assert 'Asset units are known' in body
+        assert '7,240 missing' in body and 'affected vaults' in body

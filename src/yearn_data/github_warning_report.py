@@ -120,8 +120,11 @@ def render(receipt):
                      'feePrices':'These retained daily fee-price targets have no accepted price evidence; they are separate from report-price targets.'}.get(stage,'Some retained evidence remains unresolved.')
         elif code=='availability-gaps':
             if isinstance(d,list):
-                chains=sorted({x.get('chainId',x.get('chain')) for x in d if x.get('chainId',x.get('chain')) is not None})
-                by_chain={chain:sum(x.get('chainId',x.get('chain'))==chain for x in d) for chain in chains}
+                # Balance gaps are (chain, timestamp) pairs; price/ownership
+                # gaps carry dictionaries. Both shapes survive receipt JSON.
+                entries=[dict(chainId=x[0],timestamp=x[1]) if isinstance(x,(list,tuple)) else x for x in d]
+                chains=sorted({x.get('chainId',x.get('chain')) for x in entries if x.get('chainId',x.get('chain')) is not None})
+                by_chain={chain:sum(x.get('chainId',x.get('chain'))==chain for x in entries) for chain in chains}
                 description=f'{len(d):,} chain/day findings: '+', '.join(f'{names.get(c,str(c))} ({n} days)' for c,n in by_chain.items())+'.'
                 meaning=('Asset units are known, but some price or ownership evidence remains unavailable. Each chain/day finding can cover multiple vaults.'
                          if stage=='deferredTvlRepairs' else 'Some expected daily asset-unit observations are unavailable.')
