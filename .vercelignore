@@ -20,7 +20,8 @@ scripts
 .agents
 .aws
 .codex
-.github
+.github/*
+!.github/weekly-sync-warning-report.md
 cache
 
 build
