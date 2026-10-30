@@ -93,7 +93,7 @@ def test_repairing_metadata_preserves_legacy_referenced_hash(db):
             chain_id INTEGER,tx_hash TEXT,log_index INTEGER,
             FOREIGN KEY(chain_id,tx_hash,log_index) REFERENCES strategy_reports(chain_id,tx_hash,log_index))''')
         db.execute('INSERT INTO hash_reference VALUES(10,?,0)', (MIXED,))
-    result = catchup.catch_up(db, 'op', 10, 30, client=client)
+    result = catchup.catch_up(db, 'op', 10, 30, source='rpc', client=client)
     assert result['inserted_rows'] == 0 and result['completed_ranges'] == 1
     row = db.execute('SELECT tx_hash,asset_decimals FROM strategy_reports').fetchone()
     assert tuple(row) == (MIXED, 6)

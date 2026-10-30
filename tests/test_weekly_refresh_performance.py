@@ -209,5 +209,6 @@ def test_cli_exposes_weekly_window_and_provider_tuning_without_starting_a_run(mo
     options=captured[0]
     assert options.baseline_job=='baseline' and options.window_days==14 and options.report_workers==2
     assert options.report_chunk_size('op')==250000 and options.report_chunk_size('eth')==1000000
-    assert replace(options,chain_chunk_sizes={}).report_chunk_size('op')==50000
+    assert replace(options,chain_chunk_sizes={}).report_chunk_size('op')==1000000
+    assert replace(options,source='rpc',chain_chunk_sizes={}).report_chunk_size('op')==50000
     assert replace(options,chunk_size=100,chain_chunk_sizes={}).report_chunk_size('op')==100

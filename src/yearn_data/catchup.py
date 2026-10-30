@@ -113,7 +113,8 @@ def check_release(vault):
 
 
 def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=None,
-             chunk_size=50_000, discover=False, experimental=False, client=None, progress=None, workers=1):
+             chunk_size=50_000, discover=False, experimental=False, client=None, progress=None, workers=1,
+             revalidate_rpc_coverage=False):
     """Acquire an explicit window and reuse successfully committed ranges.
 
     The caller chooses historical bounds; existing observations are not treated
@@ -131,6 +132,12 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
         raise ValueError("confirmations must be positive")
     chain_id = CHAINS[chain].chain_id
     report_source = route(chain_id, "reports", source)
+    if revalidate_rpc_coverage and (chain_id != 10 or report_source != 'envio'):
+        raise ValueError('RPC coverage revalidation requires Optimism with Envio')
+    # The repair is bounded by the same chain, targets, families and window as
+    # acquisition. Keep old RPC evidence until replacement reads commit, and
+    # reuse successful Envio ranges when resuming a partially completed repair.
+    coverage_source_filter = " AND source='envio'" if revalidate_rpc_coverage else ""
     client = client or HistoricalSource(chain, web3_for(chain))
     pin = client.pin(end=to_block, confirmations=confirmations, use_envio=report_source == "envio")
     summary = dict(chain=chain, from_block=from_block, pin=pin, source=report_source,
@@ -140,6 +147,7 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
                        vaults=0, reused_blocks=0, reused_ranges=0, scanned_blocks=0, completed_ranges=0, seconds=0)
                        for activity in ('active', 'inactive')})
     summary['report_fetch_workers'] = workers
+    summary['revalidate_rpc_coverage'] = revalidate_rpc_coverage
     summary['work_seconds_policy'] = 'summed-planning-and-fetch-time; concurrent ranges may overlap'
     started = time.monotonic()
     event_lock = Lock()
@@ -161,9 +169,9 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
         # scans. New range rows and their coverage commit in one transaction.
         if retained is None:
             retained = list(conn.execute(
-                """SELECT from_block,to_block,end_hash FROM history_coverage
+                f"""SELECT from_block,to_block,end_hash FROM history_coverage
                    WHERE chain_id=? AND target=? AND family=? AND policy=?
-                   AND to_block>=? AND from_block<=? ORDER BY from_block,to_block""",
+                   AND to_block>=? AND from_block<=?{coverage_source_filter} ORDER BY from_block,to_block""",
                 (*scope.key, from_block, to_block),
             ))
             summary['coverage_read_queries'] += 1
@@ -226,6 +234,13 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
             raise
         def persist(db):
             count = write_rows(db, table, rows, report_metadata=report_metadata)
+            if revalidate_rpc_coverage:
+                # An identical range has the same primary key irrespective of
+                # source. Replace it atomically with observations and new coverage.
+                # Wider overlapping RPC records remain as historical evidence.
+                db.execute("""DELETE FROM history_coverage WHERE chain_id=? AND target=?
+                    AND family=? AND policy=? AND from_block=? AND to_block=? AND source='rpc'""",
+                    (*scope.key, lo, hi))
             if report_metadata is not None:
                 db.execute("""DELETE FROM history_coverage WHERE chain_id=? AND target=?
                     AND family=? AND policy<>?""", scope.key)
@@ -338,7 +353,7 @@ def catch_up(conn, chain, from_block, to_block, *, source="auto", confirmations=
             for target, policy, lo, hi, block_hash in conn.execute(
                 f"""SELECT target,policy,from_block,to_block,end_hash FROM history_coverage
                     WHERE chain_id=? AND family='reports' AND target IN ({marks})
-                    AND to_block>=? AND from_block<=? ORDER BY target,policy,from_block,to_block""",
+                    AND to_block>=? AND from_block<=?{coverage_source_filter} ORDER BY target,policy,from_block,to_block""",
                 (chain_id, *targets, from_block, to_block),
             ):
                 retained_reports.setdefault((target, policy), []).append((lo, hi, block_hash))

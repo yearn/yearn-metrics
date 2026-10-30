@@ -24,9 +24,10 @@ current. Switching report imports to Envio does not refresh those rows.
 `discover --find-deployment` and `run lifetime-yield --find-deployment` require RPC.
 `discover --to-block` requires Envio; unsupported flag/source combinations fail.
 
-The default chains are Ethereum, Polygon, Base, Arbitrum, and Katana.
-Optimism and Fantom are configured for explicit historical RPC work.
-They do not have a configured Envio source.
+The default chains are Ethereum, Polygon, Base, Arbitrum, Optimism, and Katana.
+Optimism uses the same Envio report and registry inventory collection as the
+other default chains. Fantom remains configured for explicit historical RPC
+work and has no configured Envio source.
 Polygon and Katana have no configured V2 discovery source. Discovery leaves
 existing V2 membership flags unchanged on those chains; it does not establish
 whether historical V2 deployments exist there.
