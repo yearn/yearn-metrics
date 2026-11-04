@@ -79,12 +79,11 @@ def test_cross_chain_unverified_remote_state_remains_unknown(failure, require_co
     assert by[(1,address(1))]['external_tvl_usd']=='100'
     child=by[(747474,address(2))]
     assert child['tvl_usd']=='100'  # Gross valuation is still observed.
-    assert child['external_tvl_usd']==(None if require_complete_ownership else '100')
-    assert child['overlap_usd']==(None if require_complete_ownership else '0')
+    assert child['external_tvl_usd']=='100'
+    assert child['overlap_usd']=='0'
+    assert child['ownership_incomplete'] is True
     assert totals['status']=='incomplete' and totals['external_tvl_usd'] is None
-    # Current publications omit unknown child ownership from the known subtotal;
-    # legacy publications retain their original row and subtotal semantics.
-    assert totals['known_external_tvl_usd']==('100' if require_complete_ownership else '200')
+    assert totals['known_external_tvl_usd']=='200'
 
 
 def test_cross_chain_registry_replaces_unresolved_allocation_candidate(db,monkeypatch):

@@ -16,10 +16,13 @@ summary fields and fee rates retain their meanings.
 Every historical frame uses its own dated positions and valuations. Same-chain
 holdings must match both selected endpoint blocks; cross-chain positions must
 match the dated source and destination blocks. No current ownership ratio is
-projected backward. Missing prices, incomplete ownership or mismatched blocks
-leave the affected child's `overlap_usd` and `external_tvl_usd` null. Observed
-zero debt remains zero even without a child valuation. Unknown positions stay in
-diagnostics. Coverage remains limited to known candidates.
+projected backward. Missing prices leave USD valuations unavailable. Failed
+ownership reads or mismatched blocks do not erase a known child's TVL: retain
+its gross value less verified deductions, mark `ownership_incomplete`, and leave
+the failed position's deduction unavailable. This contribution is provisional
+and may include unresolved double counting. Observed zero debt remains zero even
+without a child valuation. Unknown positions stay in diagnostics. Coverage remains
+limited to known candidates.
 
 Aggregate endpoints retain available-subtotal semantics. They do not certify
 complete TVL when some vaults are unavailable. Historical series omit unavailable
@@ -27,18 +30,17 @@ vault values rather than inserting zero. Prepared history and constant-price
 history preserve those distinctions. Graph deductions sum available accounting
 evidence, rather than treating a missing adjusted value as a deduction. Graph
 `diagnostics.unavailableNodes` also identifies nodes with incomplete ownership;
-their observed `rawTvlUsd` remains available while adjusted fields remain null.
+their observed gross and provisional adjusted values remain available.
 
 Diagnostic `known_gross_tvl_usd` sums observed gross values, including vaults whose
 ownership is incomplete. `known_overlap_usd` sums verified position deductions,
 including partial evidence for such vaults. `known_external_tvl_usd` sums only
-available vault-level external values. These are independently known subtotals,
-not a reconciled equation when ownership is incomplete. For example, two $100
+available vault-level provisional external values. For example, two $100
 parents and a $200 child with one verified $30 holding and one unknown holding
-produce known gross $400, known overlap $30 and known external $200. The child's
-full external value and overlap remain null; its missing value is not a $200
-deduction. Public `overlapExcluded` sums only available vault-level overlap values
-($0 in this example), while the position evidence retains the verified $30.
+produce known gross $400, known overlap $30 and provisional known external $370.
+The child retains $170 after the verified deduction, with incomplete ownership
+flagged. Public `overlapExcluded` and the position evidence both retain the $30.
+The complete external total remains unavailable while diagnostics are incomplete.
 
 `tvl export` uses unified curation deductions by default. `--include-curation`
 keeps that default; `--no-include-curation` explicitly selects the separate-product
@@ -64,8 +66,9 @@ combined value unavailable.
 ## Publication rollout
 
 The manifest adds `ownershipAccounting: all-yearn-v1`, changing the dataset hash
-even when the raw runs are unchanged. Old manifests retain their previous
-accounting and remain reproducible while retained. Analytics methodology advances
+even when the raw runs are unchanged. Accounting changes also advance the
+financial source fingerprint; prepare a new dataset instead of mutating retained
+prepared rows. Analytics methodology advances
 to `powerglove-analytics-25`, which keeps unresolved corrected ownership partial
 in the fee view. Reprepare analytics even when the selected source IDs are
 unchanged; an older prepared fee stack can otherwise retain a known rate for

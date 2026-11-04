@@ -78,9 +78,11 @@ def test_superseded_registry_position_needs_dated_replacement(replacement, requi
         assert total['external_tvl_usd'] is None
         assert 'superseded_registry_target' in total['issues']
         if require_complete_ownership:
-            assert rows[2]['overlap_usd'] is None
-            assert rows[2]['external_tvl_usd'] is None
-            assert total['known_external_tvl_usd'] == '200'
+            assert rows[2]['ownership_incomplete'] is True
+            known = replacement in ('wrong-block','wrong-date','no-getter')
+            assert rows[2]['overlap_usd'] == ('50' if known else '0')
+            assert rows[2]['external_tvl_usd'] == ('50' if known else '100')
+            assert total['known_external_tvl_usd'] == ('250' if known else '300')
     # No rewriting or relabelling of raw historical ownership.
     assert stale['owned_usd'] == '80' and stale['child'] == address(2)
 
@@ -161,6 +163,20 @@ def test_missing_values_are_not_zero_or_complete_totals():
     assert total['status']=='incomplete'
     zero=account([snapshot(1,'0')],[])[2]
     assert zero['external_tvl_usd']=='0' and zero['status']=='complete'
+
+
+def test_failed_overlap_preserves_capital_and_independent_verified_deduction():
+    points = [snapshot(1,'50'), snapshot(2,'30'), snapshot(3,'100')]
+    failed = dict(edge(1,9,3,'50',None), status='unavailable', reason='ownership_read_failed')
+    rows, positions, total = account(points, [failed, edge(2,10,3,'30','30')])
+    assert rows[2]['external_tvl_usd'] == '70'
+    assert rows[2]['overlap_usd'] == '30'
+    assert rows[2]['ownership_incomplete'] is True
+    assert positions[0]['overlap_usd'] is None
+    assert total['known_external_tvl_usd'] == '150'
+    assert total['status'] == 'incomplete'
+    assert total['external_tvl_usd'] is None
+    assert total['issues'] == ['ownership_read_failed']
 
 
 def test_cross_chain_same_address_is_not_an_overlap():

@@ -328,13 +328,13 @@ def _account(snapshots, positions, *, include_curation, deduct_internal_curation
 
     rows = []
     for key, s in by_key.items():
-        row = dict(s, accounting_unresolved=bool(s.get('bridge_target_chain') in chains and decimal(s.get('tvl_usd'))))
+        row = dict(s, ownership_incomplete=key in unavailable_children,
+                   accounting_unresolved=bool(s.get('bridge_target_chain') in chains and decimal(s.get('tvl_usd'))))
         value = decimal(s.get('tvl_usd'))
         row['overlap_usd'] = str(adjustments[key]) if value is not None else None
         row['external_tvl_usd'] = str(max(Decimal(0), value - adjustments[key])) if value is not None else None
-        if require_complete_ownership and key in unavailable_children:
-            row['overlap_usd'] = None
-            row['external_tvl_usd'] = None
+        # Failed deductions do not erase known capital or successful deductions.
+        # The row flag and incomplete diagnostics keep this contribution provisional.
         rows.append(row)
     valued = [r for r in rows if r['tvl_usd'] is not None]
     complete = len(valued) == len(rows) and not issues

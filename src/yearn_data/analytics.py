@@ -369,12 +369,13 @@ def owned_comparison(tvl, rows, snapshots):
     available=all(v is not None for v in totals)
     retained=any(r.get('retainedAfterUnavailableRetry') for r in refs.values())
     total=sum(totals) if available else None
-    unavailable=[{'chainId':r['chain_id'],'vaultAddress':r['vault'],'reason':'counted TVL unavailable'}
-                 for r in rows if r.get('external_tvl_usd') is None]
+    unavailable=[{'chainId':r['chain_id'],'vaultAddress':r['vault'],
+                  'reason':'ownership incomplete' if r.get('ownership_incomplete') else 'counted TVL unavailable'}
+                 for r in rows if r.get('external_tvl_usd') is None or r.get('ownership_incomplete')]
 
     def complete_total(scope):
         # A known subtotal cannot be reconciled against a complete external total.
-        return None if any(r.get('external_tvl_usd') is None for r in scope) else money(scope,'external_tvl_usd')
+        return None if any(r.get('external_tvl_usd') is None or r.get('ownership_incomplete') for r in scope) else money(scope,'external_tvl_usd')
 
     ours=complete_total(rows)
     difference=ours-total if ours is not None and total is not None else None

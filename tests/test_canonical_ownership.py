@@ -90,13 +90,15 @@ def test_missing_dated_ownership_is_not_zero_or_filled_from_latest(source):
     _, rows, positions, diagnostics = dataset.frames((DAY,))[0]
     child = next(r for r in rows if r['vault'] == CHILD)
     assert child['tvl_usd'] == '200'
-    assert child['external_tvl_usd'] is child['overlap_usd'] is None
+    assert child['external_tvl_usd'] == '200'
+    assert child['overlap_usd'] == '0'
+    assert child['ownership_incomplete'] is True
     assert positions[0]['overlap_usd'] is None
     assert diagnostics['status'] == 'incomplete'
-    assert next(e for e in fee_stack(rows, positions, {})['entries'] if e['vault']['address'] == CHILD)['adjustedTvlUsd'] is None
+    assert next(e for e in fee_stack(rows, positions, {})['entries'] if e['vault']['address'] == CHILD)['adjustedTvlUsd'] == 200
     before = dataset.history(interval='daily', group='category', constant=True)
-    assert 'curation' not in before['actualChart'][0]
-    assert 'curation' not in before['constantPriceChart'][0]
+    assert before['actualChart'][0]['curation'] == 200
+    assert before['constantPriceChart'][0]['curation'] == 200
     prepare(dataset)
     assert TvlDataset(dataset.manifest).history(interval='daily', group='category', constant=True) == before
     # An observed zero is complete, even when no share valuation was available.
@@ -121,16 +123,17 @@ def test_same_chain_child_valuation_must_match_holdings_block(source, chain_id, 
     dataset = TvlStore(path, root).get()
     _, rows, positions, _ = dataset.frames((DAY,))[0]
     assert positions[0]['reason'] == 'selected_child_block_mismatch'
-    assert next(r for r in rows if r['vault'] == CHILD)['external_tvl_usd'] is None
+    assert next(r for r in rows if r['vault'] == CHILD)['external_tvl_usd'] == '200'
     graph = dataset.graph(chain_id=chain_id, category=category)
-    # A scope containing only unknown ownership has no available subtotal.
-    assert graph['totalOverlapTvlUsd'] == (None if category == 'curation' else 0)
+    # No unverified overlap is deducted from the known capital.
+    assert graph['totalOverlapTvlUsd'] == 0
     assert graph['diagnostics']['unavailableNodes'] == (
         [{'nodeId': f'1:{CHILD}', 'reason': 'incomplete_ownership'}] if expected else [])
     if expected:
         node = next(node for node in graph['nodes'] if node['address'] == CHILD)
         assert node['rawTvlUsd'] == 200
-        assert node['externalTvlUsd'] is node['upstreamOwnedTvlUsd'] is None
+        assert node['externalTvlUsd'] == 200
+        assert node['upstreamOwnedTvlUsd'] == 0
 
 
 def test_incomplete_ownership_keeps_gross_and_partial_evidence_distinct(source):
@@ -147,18 +150,20 @@ def test_incomplete_ownership_keeps_gross_and_partial_evidence_distinct(source):
     _, rows, positions, diagnostics = dataset.frames((DAY,))[0]
     child = next(row for row in rows if row['vault'] == CHILD)
     assert child['tvl_usd'] == '200'
-    assert child['overlap_usd'] is child['external_tvl_usd'] is None
+    assert child['overlap_usd'] == '30'
+    assert child['external_tvl_usd'] == '170'
+    assert child['ownership_incomplete'] is True
     assert diagnostics['known_gross_tvl_usd'] == '400'
     assert Decimal(diagnostics['known_overlap_usd']) == 30
-    assert diagnostics['known_external_tvl_usd'] == '200'
+    assert diagnostics['known_external_tvl_usd'] == '370'
     assert diagnostics['external_tvl_usd'] is None
     assert sum(Decimal(p['overlap_usd']) for p in positions if p['overlap_usd'] is not None) == 30
     summary = dataset.summary()
     assert summary['tvlByChain']['Ethereum'] == 400
-    assert summary['totalTvl'] == 200
+    assert summary['totalTvl'] == 370
     assert summary['completeness']['status'] == 'incomplete'
     assert summary['completeness']['unresolvedPositions'] > 0
-    assert summary['overlapExcluded'] == 0  # No complete child-level deduction is available.
+    assert summary['overlapExcluded'] == 30  # Preserve the independent verified deduction.
 
 
 @pytest.mark.parametrize('include_curation', [True, False])
@@ -172,9 +177,9 @@ def test_export_records_current_and_legacy_ownership_policy(source, tmp_path, in
     assert exported['run']['require_complete_ownership'] is include_curation
     child = next(row for row in exported['vaults'] if row['vault'] == CHILD)
     assert child['tvl_usd'] == '200'
-    assert child['external_tvl_usd'] == (None if include_curation else '200')
-    assert child['overlap_usd'] == (None if include_curation else '0')
-    assert exported['history'][0]['known_external_tvl_usd'] == ('100' if include_curation else '300')
+    assert child['external_tvl_usd'] == '200'
+    assert child['overlap_usd'] == '0'
+    assert exported['history'][0]['known_external_tvl_usd'] == '300'
     assert exported['history'][0]['external_tvl_usd'] is None
 
 
@@ -196,13 +201,14 @@ def test_curation_preserves_unknown_corrected_destination_ownership(source, monk
     _, accounted, positions, _ = dataset.frames((DAY,))[0]
     assert positions[0]['accounting_excluded'] is True
     assert positions[0]['reason'] == 'superseded_registry_target'
-    assert next(row for row in accounted if row['vault'] == CHILD)['external_tvl_usd'] is None
+    assert next(row for row in accounted if row['vault'] == CHILD)['external_tvl_usd'] == '200'
     products = dataset.curation()
     child = next(row for row in products['vaults'] if row['address'] == CHILD)
     assert child['grossTvlUsd'] == 200
-    assert child['knownInternalOverlapTvlUsd'] is child['netTvlUsd'] is None
+    assert child['knownInternalOverlapTvlUsd'] == 0
+    assert child['netTvlUsd'] == 200
     assert products['grossTvlUsd'] == 300
-    assert products['totalTvlUsd'] == dataset.summary()['totalTvl'] == 100
+    assert products['totalTvlUsd'] == dataset.summary()['totalTvl'] == 300
     assert products['completeness']['status']=='incomplete'
     assert products['completeness']['scope']=='network-products'
     assert products['completeness']['totals']=='known-subtotals'

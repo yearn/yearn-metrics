@@ -373,6 +373,22 @@ def test_comparison_withholds_incomplete_local_scopes(counted, gross, reference_
         assert scope['difference']==expected
 
 
+def test_provisional_known_capital_is_not_a_complete_external_comparison():
+    from yearn_data.analytics import owned_comparison
+    tvl = SimpleNamespace(id='test', catalog={}, summary=lambda: {
+        'retiredVaultTvl':0, 'overlapExcluded':0, 'vaultBridgeExcluded':0,
+        'tvlByChain':{'Ethereum':200}})
+    rows = [{'chain_id':1, 'vault':A, 'category':'v3', 'tvl_usd':'200',
+             'external_tvl_usd':'200', 'ownership_incomplete':True}]
+    references = [{'protocol':p, 'total':100, 'byChain':{'Ethereum':100}}
+                  for p in ('yearn-finance','yearn-curating')]
+    result = owned_comparison(tvl, rows, references)
+    assert result['grossTvl'] == 200
+    assert result['ourTotal'] is result['difference'] is None
+    assert result['availability']['state'] == 'partial'
+    assert result['availability']['unavailableTvlVaults'][0]['reason'] == 'ownership incomplete'
+
+
 @pytest.mark.parametrize('reason,status,expected_state', [
     ('bridge_parent_excluded', 'unavailable', 'available'),
     ('superseded_registry_target', 'unavailable', 'partial'),
