@@ -26,6 +26,10 @@ separate supervised baseline run; do not fabricate a receipt or reset history bo
 file exists, `state.json:lastJob` is authoritative. Editing the bootstrap setting
 does not replace an existing baseline. Use explicit adoption below after a manual
 publication, and never delete pending state to make a different baseline fit.
+For a fresh installation whose configured candidate has been superseded, either
+set the bootstrap job to a reviewed current selected native receipt or initialize
+state with `--adopt-baseline REVIEWED_JOB_ID`. The shipped historical candidate is
+not an instruction to trust a stale release; both paths enforce the live match.
 
 Use a dedicated environment to avoid the existing `.venv` editable installation
 pointing at a different checkout. From the repository root:
@@ -126,13 +130,18 @@ PYTHONPATH="$PWD/src" .scratch/nightly-venv/bin/python -m yearn_data.nightly \
   --config ops/nightly-refresh.json --env .env --adopt-baseline REVIEWED_JOB_ID
 ```
 
-Adoption takes the local wrapper lock and refuses missing, changed-scope or pending
-state. It requires a selected, consolidated, publish-ready receipt covering the
+Adoption takes the local wrapper lock, initializes missing state or updates idle
+state, and refuses changed-scope or pending state. It requires a selected,
+consolidated, publish-ready receipt covering the
 configured chains, matches it to the live database selection, and verifies the
 hosted API. Only then does it atomically update local `lastJob` and `lastVerified`.
 It does not acquire data, change the database selection or publish a release.
 Coordinate other writers while adopting. If work is pending, recover that work
 first; adoption is not an escape hatch for an interrupted job.
+
+Native `refresh --since` rejections retain trusted baseline-validation reasons in
+CLI output and receipts through the `RefreshNotStarted` signal. Provider/database
+errors expose their class rather than raw messages or endpoints.
 
 The service allows ten hours per invocation, then requests graceful shutdown;
 systemd may terminate it after another 90 seconds. It retries failed invocations

@@ -135,8 +135,6 @@ def adopt_baseline(settings, identity):
     """Explicitly accept an externally selected release; never discard pending work."""
     with local_lock(settings.state_dir):
         path, state = local_state(settings)
-        if not path.exists():
-            raise NightlyStop('missing-state', 'baseline adoption requires existing state.json; configure bootstrap for a new installation')
         if state['pending'] is not None:
             raise NightlyStop('pending-work', 'finish or recover pending state.json work before adopting a baseline')
         receipt = accepted_baseline(settings, identity)
@@ -389,6 +387,8 @@ def main(argv=None):
             failure['reason'] = exc.code
         elif isinstance(exc, RefreshNotStarted):
             failure.update(reason='refresh-not-started', sourceFailureClass=exc.failure_class)
+            if exc.reason is not None:
+                failure['preflightReason'] = exc.reason
         elif isinstance(exc, RefreshBusy):
             failure['reason'] = 'writer-busy'
         elif isinstance(exc, CheckpointRejected):

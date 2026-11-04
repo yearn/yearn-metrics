@@ -18,7 +18,7 @@ from .refresh_fingerprints import Fingerprints
 from .refresh_warnings import findings,write_report
 from .github_warning_report import completed as report_completed
 from .refresh_scope import context,resolve_bounds,verify_bounds,tvl_plan,DAY,since_receipt
-from .refresh_state import RefreshState,RefreshNotStarted,WorkBudget,WorkDeferred,digest,drain_pages,read_receipt
+from .refresh_state import CheckpointRejected,RefreshState,RefreshNotStarted,WorkBudget,WorkDeferred,digest,drain_pages,read_receipt
 from .storage import connect,init_db,table_exists
 
 
@@ -506,7 +506,8 @@ def run_refresh(options,*,mode='prepare',resume=None,progress=None):
         options=since_receipt(options)
         job_context=context(options)
     except Exception as exc:
-        raise RefreshNotStarted(type(exc).__name__) from exc
+        reason=str(exc) if isinstance(exc,CheckpointRejected) else None
+        raise RefreshNotStarted(type(exc).__name__,reason) from exc
     with RefreshState(options.database,job_context,None if resume else {},resume=resume,progress=progress,
                       initial_release=lambda:selection(options.database)) as job:
         job.emit('refresh-job-ready')

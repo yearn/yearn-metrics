@@ -192,7 +192,20 @@ def test_adoption_command_never_falls_through_to_production_refresh(setup, monke
     assert adopted == [identity]
 
 
-@pytest.mark.parametrize('failure', ['pending', 'unready', 'selection-drift', 'hosted-failure', 'scope-change', 'missing-state'])
+def test_reviewed_adoption_bootstraps_a_fresh_installation_without_trusting_stale_config(setup):
+    settings, receipts, calls, receipt = setup
+    settings = replace(settings, initial_baseline_job='superseded-bootstrap')
+    receipts['manual'] = receipt('manual', 86400)
+    assert not (settings.state_dir / 'state.json').exists()
+    assert nightly.adopt_baseline(settings, 'manual') == 0
+    assert calls == []  # Adoption never acquires or publishes.
+    state = json.loads((settings.state_dir / 'state.json').read_text())
+    assert state['lastJob'] == 'manual' and state['lastVerified']['status'] == 'verified'
+    assert nightly.cycle(settings, now=172801) == 0
+    assert calls[-1] == ('worker', 172800, 'manual', None, 'publish')
+
+
+@pytest.mark.parametrize('failure', ['pending', 'unready', 'selection-drift', 'hosted-failure', 'scope-change', 'fresh-hosted-failure'])
 def test_baseline_adoption_rejects_unsafe_changes_without_overwriting_state(setup, monkeypatch, failure):
     settings, receipts, _, _ = setup
     with nightly.local_lock(settings.state_dir):
@@ -201,14 +214,14 @@ def test_baseline_adoption_rejects_unsafe_changes_without_overwriting_state(setu
             state['pending'] = dict(phase='verify', jobId='unfinished')
         if failure == 'scope-change':
             state['scope']['chains'] = ['op']
-        if failure != 'missing-state':
+        if failure != 'fresh-hosted-failure':
             nightly.save(path, state)
     before = path.read_bytes() if path.exists() else None
     if failure == 'unready':
         receipts['baseline']['status'] = 'prepared'
     if failure == 'selection-drift':
         monkeypatch.setattr(nightly, 'Registry', lambda db: SimpleNamespace(selection=lambda: dict(releaseId='other')))
-    if failure == 'hosted-failure':
+    if failure in ('hosted-failure', 'fresh-hosted-failure'):
         monkeypatch.setattr(nightly, 'verify_api', lambda *args: (_ for _ in ()).throw(nightly.requests.ConnectionError('secret')))
     with pytest.raises((nightly.NightlyStop, nightly.requests.ConnectionError)):
         nightly.adopt_baseline(settings, 'baseline')

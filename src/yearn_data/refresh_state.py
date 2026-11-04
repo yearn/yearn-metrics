@@ -45,8 +45,9 @@ class RefreshBusy(ValueError):
 class RefreshNotStarted(ValueError):
     """Read-only preflight failed before any refresh job allocation was attempted."""
 
-    def __init__(self, failure_class):
+    def __init__(self, failure_class, reason=None):
         self.failure_class = failure_class
+        self.reason = reason
         super().__init__('refresh preflight failed before job allocation')
 
 
