@@ -117,16 +117,125 @@ def test_interrupted_worker_recovers_saved_job_and_scope_changes_stop(setup, mon
     assert calls[-1][3] == 'interrupted'
 
 
-def test_missing_job_id_never_starts_a_replacement_job(setup, monkeypatch):
+@pytest.mark.parametrize('error', [KeyboardInterrupt(), nightly.requests.ConnectionError('ambiguous commit outcome')])
+def test_missing_job_id_never_starts_a_replacement_job(setup, monkeypatch, error):
     settings, _, calls, _ = setup
     def interrupted(*args, **kwargs):
-        raise KeyboardInterrupt
+        raise error
     monkeypatch.setattr(nightly, 'run_refresh', interrupted)
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(type(error)):
         nightly.cycle(settings, now=172801)
     with pytest.raises(ValueError, match='before job ID'):
         nightly.cycle(settings, now=172801)
     assert calls == [('extra', 86400, 172800)]
+
+
+@pytest.mark.parametrize('error', [nightly.RefreshBusy('busy'), nightly.RefreshNotStarted('ConnectionError')])
+def test_proven_pre_job_failure_can_retry_without_changing_cutoff(setup, monkeypatch, error):
+    settings, _, calls, _ = setup
+    original = nightly.run_refresh
+    monkeypatch.setattr(nightly, 'run_refresh', lambda *args, **kwargs: (_ for _ in ()).throw(error))
+    with pytest.raises(type(error)):
+        nightly.cycle(settings, now=172801)
+    pending = json.loads((settings.state_dir / 'state.json').read_text())['pending']
+    assert pending['jobId'] is None and pending['started'] is False
+    monkeypatch.setattr(nightly, 'run_refresh', original)
+    assert nightly.cycle(settings, now=172801) == 0
+    assert calls[-1] == ('worker', 172800, 'baseline', None, 'publish')
+
+
+def test_native_read_only_preflight_failure_signals_no_allocation(setup, monkeypatch):
+    from yearn_data import refresh
+    settings, _, _, _ = setup
+    def fail(options):
+        raise nightly.requests.ConnectionError('secret')
+    monkeypatch.setattr(refresh, 'since_receipt', fail)
+    monkeypatch.setattr(refresh, 'RefreshState', lambda *args, **kwargs: pytest.fail('job allocation attempted'))
+    with pytest.raises(nightly.RefreshNotStarted) as error:
+        refresh.run_refresh(settings.options(172800, 'baseline'))
+    assert error.value.failure_class == 'ConnectionError'
+    assert 'secret' not in str(error.value)
+
+
+def test_explicit_baseline_adoption_verifies_manual_selection_and_keeps_scope(setup, monkeypatch):
+    settings, receipts, _, receipt = setup
+    with nightly.local_lock(settings.state_dir):
+        path, state = nightly.local_state(settings)
+        nightly.save(path, state)
+    receipts['manual'] = receipt('manual', 172800)
+    # Editing bootstrap configuration alone does not change existing state.
+    changed = replace(settings, initial_baseline_job='manual')
+    assert nightly.local_state(changed)[1]['lastJob'] == 'baseline'
+    checked = []
+    def verify(config, candidate):
+        checked.append(candidate['jobId'])
+        return dict(status='verified', releaseId=candidate['result']['releaseId'])
+    monkeypatch.setattr(nightly, 'verify_api', verify)
+    assert nightly.adopt_baseline(changed, 'manual') == 0
+    adopted = json.loads(path.read_text())
+    assert checked == ['manual']
+    assert adopted['lastJob'] == 'manual' and adopted['pending'] is None
+    assert adopted['scope'] == state['scope']
+    assert adopted['lastVerified']['releaseId'] == 'release-manual'
+
+
+@pytest.mark.parametrize('identity', ['manual', ''])
+def test_adoption_command_never_falls_through_to_production_refresh(setup, monkeypatch, tmp_path, identity):
+    settings, _, _, _ = setup
+    monkeypatch.setattr(nightly.Settings, 'read', lambda path: settings)
+    monkeypatch.setattr(nightly, 'load_environment', lambda paths: None)
+    monkeypatch.setattr(nightly, 'cycle', lambda *args: pytest.fail('adoption triggered acquisition'))
+    adopted = []
+    monkeypatch.setattr(nightly, 'adopt_baseline', lambda config, job: adopted.append(job) or 0)
+    env = tmp_path / 'env'; env.write_text('')
+    assert nightly.main(['--config', 'unused.json', '--env', str(env), '--adopt-baseline', identity]) == 0
+    assert adopted == [identity]
+
+
+@pytest.mark.parametrize('failure', ['pending', 'unready', 'selection-drift', 'hosted-failure', 'scope-change', 'missing-state'])
+def test_baseline_adoption_rejects_unsafe_changes_without_overwriting_state(setup, monkeypatch, failure):
+    settings, receipts, _, _ = setup
+    with nightly.local_lock(settings.state_dir):
+        path, state = nightly.local_state(settings)
+        if failure == 'pending':
+            state['pending'] = dict(phase='verify', jobId='unfinished')
+        if failure == 'scope-change':
+            state['scope']['chains'] = ['op']
+        if failure != 'missing-state':
+            nightly.save(path, state)
+    before = path.read_bytes() if path.exists() else None
+    if failure == 'unready':
+        receipts['baseline']['status'] = 'prepared'
+    if failure == 'selection-drift':
+        monkeypatch.setattr(nightly, 'Registry', lambda db: SimpleNamespace(selection=lambda: dict(releaseId='other')))
+    if failure == 'hosted-failure':
+        monkeypatch.setattr(nightly, 'verify_api', lambda *args: (_ for _ in ()).throw(nightly.requests.ConnectionError('secret')))
+    with pytest.raises((nightly.NightlyStop, nightly.requests.ConnectionError)):
+        nightly.adopt_baseline(settings, 'baseline')
+    assert (path.read_bytes() if path.exists() else None) == before
+
+
+@pytest.mark.parametrize('error,reason', [
+    (nightly.NightlyStop('unknown-job-id', 'safe owned message'), 'unknown-job-id'),
+    (nightly.NightlyStop('baseline-selection-drift', 'safe owned message'), 'baseline-selection-drift'),
+    (nightly.RefreshBusy('secret'), 'writer-busy'),
+    (nightly.RefreshNotStarted('ConnectionError'), 'refresh-not-started'),
+    (nightly.CheckpointRejected('secret'), 'checkpoint-rejected'),
+    (nightly.requests.ConnectionError('secret'), None),
+])
+def test_owned_stop_diagnostics_are_identifiable_without_provider_text(setup, monkeypatch, tmp_path, capsys, error, reason):
+    settings, _, _, _ = setup
+    monkeypatch.setattr(nightly.Settings, 'read', lambda path: settings)
+    monkeypatch.setattr(nightly, 'load_environment', lambda paths: None)
+    monkeypatch.setattr(nightly, 'cycle', lambda *args: (_ for _ in ()).throw(error))
+    env = tmp_path / 'env'; env.write_text('')
+    assert nightly.main(['--config', 'unused.json', '--env', str(env), '--run']) == 2
+    output = capsys.readouterr().err
+    diagnostic = json.loads(output)
+    assert 'secret' not in output
+    assert diagnostic.get('reason') == reason
+    if reason == 'baseline-selection-drift':
+        assert diagnostic['liveBaseline'] == 'state.json:lastJob'
 
 
 def test_changed_native_checkpoint_keeps_job_id_for_operator_recovery(setup, monkeypatch):

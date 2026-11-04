@@ -18,7 +18,7 @@ from .refresh_fingerprints import Fingerprints
 from .refresh_warnings import findings,write_report
 from .github_warning_report import completed as report_completed
 from .refresh_scope import context,resolve_bounds,verify_bounds,tvl_plan,DAY,since_receipt
-from .refresh_state import RefreshState,WorkBudget,WorkDeferred,digest,drain_pages,read_receipt
+from .refresh_state import RefreshState,RefreshNotStarted,WorkBudget,WorkDeferred,digest,drain_pages,read_receipt
 from .storage import connect,init_db,table_exists
 
 
@@ -502,9 +502,14 @@ class RefreshWorker:
 
 def run_refresh(options,*,mode='prepare',resume=None,progress=None):
     if mode not in ('acquire','prepare','publish'):raise ValueError('select acquire, prepare or publish')
-    options=since_receipt(options)
-    with RefreshState(options.database,context(options),None if resume else {},resume=resume,progress=progress,
+    try:
+        options=since_receipt(options)
+        job_context=context(options)
+    except Exception as exc:
+        raise RefreshNotStarted(type(exc).__name__) from exc
+    with RefreshState(options.database,job_context,None if resume else {},resume=resume,progress=progress,
                       initial_release=lambda:selection(options.database)) as job:
+        job.emit('refresh-job-ready')
         worker=None
         result={}
         try:

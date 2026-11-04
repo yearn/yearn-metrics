@@ -42,6 +42,14 @@ class RefreshBusy(ValueError):
     """Another refresh owns the database writer lock."""
 
 
+class RefreshNotStarted(ValueError):
+    """Read-only preflight failed before any refresh job allocation was attempted."""
+
+    def __init__(self, failure_class):
+        self.failure_class = failure_class
+        super().__init__('refresh preflight failed before job allocation')
+
+
 class WorkDeferred(Exception):
     """The invocation's explicit work budget is exhausted; resume the same job."""
 

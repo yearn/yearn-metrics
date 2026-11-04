@@ -22,6 +22,11 @@ therefore stops bootstrap until the configuration is deliberately updated to its
 reviewed selected refresh job. A publication without such a receipt requires a
 separate supervised baseline run; do not fabricate a receipt or reset history bounds.
 
+`initial_baseline_job` only seeds an installation with no `state.json`. Once that
+file exists, `state.json:lastJob` is authoritative. Editing the bootstrap setting
+does not replace an existing baseline. Use explicit adoption below after a manual
+publication, and never delete pending state to make a different baseline fit.
+
 Use a dedicated environment to avoid the existing `.venv` editable installation
 pointing at a different checkout. From the repository root:
 
@@ -74,6 +79,12 @@ job ID. Budget pauses and unfinished cleanup resume the same job and original
 cutoff. It permits twelve passes per service invocation, returning exit 3 if work
 or HTTP verification is still pending. Other failures return exit 2.
 
+The worker emits `refresh-job-ready` immediately after obtaining its durable
+job. Proven read-only preflight failures (`RefreshNotStarted`) and writer-lock
+contention (`RefreshBusy`) permit a later retry without a new cutoff. An unknown
+connection/commit outcome during job allocation remains ambiguous and requires
+inspection; it must not be treated as proof that no job exists.
+
 Successful selection is persisted before HTTP verification. The wrapper verifies
 the hosted release, fee/TVL/analytics IDs, analytics cutoff and latest TVL close,
 including pinned fee and TVL consumer responses. The selection is checked again
@@ -102,8 +113,26 @@ Code/configuration changes can invalidate native checkpoints. Stop and inspect
 instead of dropping the saved job ID. If interruption occurs before any job ID
 could be saved, the adapter stops rather than creating a potentially duplicate
 job: inspect `refresh_jobs`, identify the matching context and recover the state
-deliberately. A superseding manual publication also requires baseline review.
-Ordinary transient failures can be resumed without replacing state.
+deliberately. Transient failures after a saved job ID, and proven pre-job failures,
+can resume without replacing state. The journal gives owned stop conditions stable
+codes such as `unknown-job-id`, `baseline-selection-drift`, `scope-changed`,
+`writer-busy` and `checkpoint-rejected`; arbitrary provider/DB messages stay hidden.
+
+After a separately reviewed manual publication, use this explicit operation to
+adopt its selected native refresh receipt as the existing installation's baseline:
+
+```bash
+PYTHONPATH="$PWD/src" .scratch/nightly-venv/bin/python -m yearn_data.nightly \
+  --config ops/nightly-refresh.json --env .env --adopt-baseline REVIEWED_JOB_ID
+```
+
+Adoption takes the local wrapper lock and refuses missing, changed-scope or pending
+state. It requires a selected, consolidated, publish-ready receipt covering the
+configured chains, matches it to the live database selection, and verifies the
+hosted API. Only then does it atomically update local `lastJob` and `lastVerified`.
+It does not acquire data, change the database selection or publish a release.
+Coordinate other writers while adopting. If work is pending, recover that work
+first; adoption is not an escape hatch for an interrupted job.
 
 The service allows ten hours per invocation, then requests graceful shutdown;
 systemd may terminate it after another 90 seconds. It retries failed invocations

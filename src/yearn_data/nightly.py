@@ -21,7 +21,7 @@ from web3.exceptions import ProviderConnectionError, TimeExhausted
 from .config import load_environment
 from .refresh import run_refresh
 from .refresh_scope import DAY, RefreshOptions, tvl_plan
-from .refresh_state import LOCK, RefreshBusy, read_receipt
+from .refresh_state import LOCK, CheckpointRejected, RefreshBusy, RefreshNotStarted, read_receipt
 from .storage import connect
 from .hosted_publications import Registry
 from . import tvl_batch, tvl_discovery, tvl_sources
@@ -73,6 +73,14 @@ class Settings:
                     publicationRoot=str(self.publication_root), apiOrigin=self.api_origin)
 
 
+class NightlyStop(ValueError):
+    """Owned operator diagnostic, without database or provider exception text."""
+
+    def __init__(self, code, message):
+        self.code = code
+        super().__init__(message)
+
+
 def save(path, body):
     """Durable replacement: SIGTERM cannot leave a partially written checkpoint."""
     temporary = path.with_suffix('.tmp')
@@ -101,6 +109,15 @@ def local_lock(directory):
         yield
 
 
+def local_state(settings):
+    path = settings.state_dir / 'state.json'
+    state = json.loads(path.read_text()) if path.exists() else dict(
+        version=1, scope=settings.identity(), lastJob=settings.initial_baseline_job, pending=None)
+    if state['version'] != 1 or state['scope'] != settings.identity():
+        raise NightlyStop('scope-changed', 'nightly scope changed; review state before starting a new scope')
+    return path, state
+
+
 def accepted_baseline(settings, identity):
     receipt = read_receipt(settings.database, identity)
     result = receipt['result']
@@ -108,10 +125,25 @@ def accepted_baseline(settings, identity):
             or result.get('consolidation') != 'complete'
             or not set(settings.chains) <= set(receipt['context']['chains'])
             or receipt['context']['database'] != settings.database):
-        raise ValueError('baseline must be a completed selected refresh covering this scope')
+        raise NightlyStop('incomplete-baseline', 'baseline must be a completed selected refresh covering this scope')
     if Registry(settings.database).selection()['releaseId'] != result['releaseId']:
-        raise ValueError('baseline differs from current selection; review manual publication before continuing')
+        raise NightlyStop('baseline-selection-drift', 'baseline differs from current selection; state.json:lastJob is the live baseline once state exists; use reviewed baseline adoption')
     return receipt
+
+
+def adopt_baseline(settings, identity):
+    """Explicitly accept an externally selected release; never discard pending work."""
+    with local_lock(settings.state_dir):
+        path, state = local_state(settings)
+        if not path.exists():
+            raise NightlyStop('missing-state', 'baseline adoption requires existing state.json; configure bootstrap for a new installation')
+        if state['pending'] is not None:
+            raise NightlyStop('pending-work', 'finish or recover pending state.json work before adopting a baseline')
+        receipt = accepted_baseline(settings, identity)
+        verified = verify_api(settings, receipt)
+        state.update(lastJob=identity, lastVerified=verified)
+        save(path, state)
+        return 0
 
 
 def source_gap(exc):
@@ -260,11 +292,7 @@ def verify_api(settings, receipt):
 def cycle(settings, *, now=None, sleep=time.sleep):
     cutoff = int(time.time() if now is None else now) // DAY * DAY
     with local_lock(settings.state_dir):
-        path = settings.state_dir / 'state.json'
-        state = json.loads(path.read_text()) if path.exists() else dict(
-            version=1, scope=settings.identity(), lastJob=settings.initial_baseline_job, pending=None)
-        if state['version'] != 1 or state['scope'] != settings.identity():
-            raise ValueError('nightly scope changed; review state before starting a new scope')
+        path, state = local_state(settings)
         persist = lambda: save(path, state)
         # An older interrupted cycle is completed before advancing to today's cutoff.
         for _ in range(settings.max_invocations):
@@ -273,7 +301,7 @@ def cycle(settings, *, now=None, sleep=time.sleep):
                 baseline = accepted_baseline(settings, state['lastJob'])
                 start = baseline['context']['cutoff']
                 if start > cutoff:
-                    raise ValueError('baseline is newer than the closed cutoff')
+                    raise NightlyStop('baseline-newer-than-cutoff', 'baseline is newer than the closed cutoff')
                 if start == cutoff:
                     return 0
                 pending = state['pending'] = dict(cutoff=cutoff, start=start, baseline=state['lastJob'],
@@ -284,7 +312,7 @@ def cycle(settings, *, now=None, sleep=time.sleep):
                     continue
             if pending['phase'] == 'refresh':
                 if pending.get('started') and not pending['jobId']:
-                    raise ValueError('interrupted before job ID was saved; inspect database jobs before recovery')
+                    raise NightlyStop('unknown-job-id', 'interrupted before job ID was saved; inspect database jobs before recovery')
                 options = settings.options(pending['cutoff'], pending['baseline'])
                 pending['started'] = True
                 persist()
@@ -293,7 +321,15 @@ def cycle(settings, *, now=None, sleep=time.sleep):
                         pending['jobId'] = event['jobId']
                         persist()
                     print(json.dumps(event, sort_keys=True), file=sys.stderr, flush=True)
-                receipt = run_refresh(options, mode='publish', resume=pending['jobId'], progress=progress)
+                try:
+                    receipt = run_refresh(options, mode='publish', resume=pending['jobId'], progress=progress)
+                except (RefreshBusy, RefreshNotStarted):
+                    # Both signals prove no new job was allocated. Preserve the
+                    # cutoff and any existing ID while permitting a safe retry.
+                    if pending['jobId'] is None:
+                        pending['started'] = False
+                        persist()
+                    raise
                 pending['jobId'] = receipt['jobId']
                 save(settings.state_dir / (receipt['jobId'] + '.json'), receipt)
                 pending['receiptStatus'] = receipt['status']
@@ -301,7 +337,7 @@ def cycle(settings, *, now=None, sleep=time.sleep):
                     pending['phase'] = 'verify'
                 persist()
                 if receipt['status'] not in ('selected', 'selected-cleanup-failed', 'work-deferred'):
-                    raise ValueError('refresh failed; resume only after investigating its saved receipt')
+                    raise NightlyStop('refresh-failed', 'refresh failed; resume only after investigating its saved receipt')
                 if pending['phase'] != 'verify':
                     sleep(settings.retry_seconds)
                     continue
@@ -334,6 +370,7 @@ def main(argv=None):
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument('--check', action='store_true', help='Validate local configuration only; no database/network/writes')
     action.add_argument('--run', action='store_true', help='Acquire and publish to the explicitly configured database')
+    action.add_argument('--adopt-baseline', metavar='JOB_ID', help='Verify an already selected release and update an idle local baseline only')
     args = parser.parse_args(argv)
     settings = Settings.read(args.config)
     if not args.env.is_file():
@@ -344,10 +381,21 @@ def main(argv=None):
         return 0
     load_environment([args.env])
     try:
-        return cycle(settings)
+        return adopt_baseline(settings, args.adopt_baseline) if args.adopt_baseline is not None else cycle(settings)
     except Exception as exc:
         # Provider/DB exceptions can contain credentials; keep journal diagnostics bounded.
-        print(json.dumps(dict(status='failed', failureClass=type(exc).__name__)), file=sys.stderr)
+        failure = dict(status='failed', failureClass=type(exc).__name__)
+        if isinstance(exc, (NightlyStop, VerificationError)):
+            failure['reason'] = exc.code
+        elif isinstance(exc, RefreshNotStarted):
+            failure.update(reason='refresh-not-started', sourceFailureClass=exc.failure_class)
+        elif isinstance(exc, RefreshBusy):
+            failure['reason'] = 'writer-busy'
+        elif isinstance(exc, CheckpointRejected):
+            failure['reason'] = 'checkpoint-rejected'
+        if isinstance(exc, NightlyStop) and exc.code == 'baseline-selection-drift':
+            failure['liveBaseline'] = 'state.json:lastJob'
+        print(json.dumps(failure, sort_keys=True), file=sys.stderr)
         return 2
 
 
