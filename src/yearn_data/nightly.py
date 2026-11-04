@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import requests
+from web3.exceptions import ProviderConnectionError, TimeExhausted
 
 from .config import load_environment
 from .refresh import run_refresh
@@ -49,11 +50,12 @@ class Settings:
         body['extra_tvl_chains'] = tuple(body['extra_tvl_chains'])
         settings = cls(**body)
         settings.options(DAY, None)  # Validate native scope before any writes.
-        if (not settings.initial_baseline_job or settings.max_invocations < 1
+        if (not settings.initial_baseline_job or type(settings.max_invocations) is not int
+                or settings.max_invocations < 1 or type(settings.retry_seconds) is not int
                 or settings.retry_seconds < 0):
             raise ValueError('baseline and positive invocation budget are required')
         url = urlsplit(settings.api_origin)
-        if url.scheme != 'https' or not url.netloc or url.path not in ('', '/') or url.query or url.fragment or url.username:
+        if url.scheme != 'https' or not url.netloc or url.path not in ('', '/') or url.query or url.fragment or url.username is not None or url.password is not None:
             raise ValueError('api_origin must be an HTTPS origin')
         if (len(set(settings.extra_tvl_chains)) != len(settings.extra_tvl_chains)
                 or any(type(c) is not int or c <= 0 for c in settings.extra_tvl_chains)
@@ -112,6 +114,21 @@ def accepted_baseline(settings, identity):
     return receipt
 
 
+def source_gap(exc):
+    """Recognize availability failures; integrity/configuration errors stay fatal."""
+    if isinstance(exc, requests.exceptions.SSLError):
+        return None
+    if isinstance(exc, (requests.ConnectionError, requests.Timeout, ProviderConnectionError, TimeExhausted)):
+        return 'rpc-transport-unavailable'
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        status = exc.response.status_code
+        if status >= 500 or status in (408, 429):
+            return 'rpc-http-unavailable'
+    if isinstance(exc, ValueError) and str(exc) == 'requested timestamp is newer than finalized chain state':
+        return 'finalized-head-behind-cutoff'
+    return None
+
+
 def extra_tvl(settings, pending, persist):
     """Retain the production TVL-only acquisition phase under the worker lock.
 
@@ -123,35 +140,64 @@ Completed catalog stages and bounded daily work survive process interruption.
             raise RefreshBusy('another database refresh is running')
         try:
             catalogs = pending.setdefault('extraCatalogs', {})
+            unavailable = pending.setdefault('extraTvl', {}).setdefault('unavailableChains', {})
             for chain in settings.extra_tvl_chains:
                 if catalogs.get(str(chain), {}).get('status') == 'complete':
                     continue
-                reader = tvl_discovery.DiscoveryReader(chain)
-                first = reader.block_at(pending['start'] - 1) + 1
-                last = reader.block_at(pending['cutoff'] - 1)
-                summary = tvl_discovery.discover_catalog(
-                    conn, chain_ids=[chain], from_block=first, to_block=last,
-                    reader_factory=lambda _, reader=reader: reader)
+                try:
+                    reader = tvl_discovery.DiscoveryReader(chain)
+                    first = reader.block_at(pending['start'] - 1) + 1
+                    last = reader.block_at(pending['cutoff'] - 1)
+                    summary = tvl_discovery.discover_catalog(
+                        conn, chain_ids=[chain], from_block=first, to_block=last,
+                        reader_factory=lambda _, reader=reader: reader)
+                except Exception as exc:
+                    reason = source_gap(exc)
+                    if reason is None:
+                        raise
+                    gap = dict(status='unavailable', reason=reason, failureClass=type(exc).__name__)
+                    catalogs[str(chain)] = gap
+                    unavailable[str(chain)] = gap
+                    persist()
+                    continue
                 catalogs[str(chain)] = dict(status=summary['status'], runId=summary['run_id'])
+                unavailable.pop(str(chain), None)
                 persist()
-            options = SimpleNamespace(chain_ids=settings.extra_tvl_chains,
+            available = tuple(chain for chain in settings.extra_tvl_chains if str(chain) not in unavailable)
+            options = SimpleNamespace(chain_ids=available,
                                       cutoff=pending['cutoff'], first_close=pending['start'] + DAY - 1,
                                       repair_history=False)
-            plan = tvl_plan(conn, options)
+            def plan():
+                return (tvl_plan(conn, options) if available else
+                        dict(targets=[], unresolvedTargets=[], deferredRepairs=[]))
+            work = plan()
             attempted = {tuple(item) for item in pending.setdefault('extraAttempted', [])}
-            targets = [item for item in plan['targets'] if tuple(item) not in attempted]
+            targets = [item for item in work['targets'] if tuple(item) not in attempted]
             readers = {}
             def factory(chain):
                 if chain not in readers:
                     readers[chain] = tvl_batch.reader(conn, chain)
                 return readers[chain]
             for chain, day in targets[:30]:
-                tvl_sources.collect_tvl(conn, day, day, chain_ids=[chain], reader_factory=factory)
+                if str(chain) in unavailable:
+                    continue
+                try:
+                    # Validate setup here: the native collector deliberately turns
+                    # reader-factory exceptions into per-vault availability gaps.
+                    factory(chain)
+                    tvl_sources.collect_tvl(conn, day, day, chain_ids=[chain], reader_factory=factory)
+                except Exception as exc:
+                    reason = source_gap(exc)
+                    if reason is None:
+                        raise
+                    conn.rollback()
+                    unavailable[str(chain)] = dict(status='unavailable', reason=reason,
+                                                   failureClass=type(exc).__name__)
                 pending['extraAttempted'].append([chain, day])
                 persist()
-            remaining = tvl_plan(conn, options)
+            remaining = plan()
             pending['extraTvl'] = dict(unresolved=remaining['unresolvedTargets'],
-                                       deferredRepairs=remaining['deferredRepairs'])
+                                       deferredRepairs=remaining['deferredRepairs'], unavailableChains=unavailable)
             # A completed attempt can still have unavailable source evidence.
             # Preserve that warning instead of retrying it forever or inventing zero.
             complete = len(targets) <= 30
@@ -163,30 +209,51 @@ Completed catalog stages and bounded daily work survive process interruption.
             conn.execute('SELECT pg_advisory_unlock(?)', (LOCK,))
 
 
+class VerificationError(ValueError):
+    """Owned diagnostic code, safe to persist without an upstream exception body."""
+
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code)
+
+
+def verification_failure(exc):
+    reason = (exc.code if isinstance(exc, VerificationError) else
+              'invalid-response' if isinstance(exc, requests.exceptions.JSONDecodeError) else
+              'http-request-failed' if isinstance(exc, requests.RequestException) else 'invalid-response')
+    result = dict(status='failed', checkedAt=int(time.time()), reason=reason, failureClass=type(exc).__name__)
+    if isinstance(exc, requests.RequestException) and exc.response is not None:
+        result['httpStatus'] = exc.response.status_code
+    return result
+
+
 def verify_api(settings, receipt):
     """Verify identity and cutoff, including actual financial consumer responses."""
     result = receipt['result']
     def get(path):
         response = requests.get(settings.api_origin.rstrip('/') + path, timeout=60)
         response.raise_for_status()
-        return response.json()
+        body = response.json()
+        if not isinstance(body, dict):
+            raise VerificationError('invalid-response')
+        return body
     expected = dict(releaseId=result['releaseId'], feesDatasetId=result['feeDatasetId'],
                     tvlDatasetId=result['tvlDatasetId'], analyticsPublicationId=result['analyticsPublicationId'])
     if get('/api/publication') != expected:
-        raise ValueError('hosted selection does not match published release')
+        raise VerificationError('selection-mismatch')
     analytics = get('/api/analytics/publication?publicationId=' + expected['analyticsPublicationId'])
     if (any(analytics.get(k) != expected[k] for k in ('feesDatasetId', 'tvlDatasetId'))
             or analytics.get('publicationId') != expected['analyticsPublicationId']
             or analytics.get('cutoffTimestamp') != receipt['context']['cutoff']):
-        raise ValueError('hosted analytics identity or cutoff mismatch')
+        raise VerificationError('analytics-identity-or-cutoff-mismatch')
     tvl = get('/api/tvl?datasetId=' + expected['tvlDatasetId'])
     fees = get('/api/fees?datasetId=' + expected['feesDatasetId'])
     if (tvl.get('datasetId') != expected['tvlDatasetId']
             or tvl.get('asOfTimestamp') != receipt['context']['cutoff'] - 1
             or fees.get('datasetId') != expected['feesDatasetId']):
-        raise ValueError('hosted financial identity or TVL close mismatch')
+        raise VerificationError('financial-identity-or-close-mismatch')
     if get('/api/publication') != expected:
-        raise ValueError('hosted selection changed during verification')
+        raise VerificationError('selection-changed-during-verification')
     return dict(status='verified', checkedAt=int(time.time()), **expected)
 
 
@@ -242,9 +309,11 @@ def cycle(settings, *, now=None, sleep=time.sleep):
             receipt = read_receipt(settings.database, pending['jobId'])
             try:
                 verified = verify_api(settings, receipt)
-            except (requests.RequestException, ValueError):
-                pending['verification'] = dict(status='failed', checkedAt=int(time.time()))
+            except (requests.RequestException, ValueError) as exc:
+                pending['verification'] = verification_failure(exc)
                 persist()
+                print(json.dumps(dict(event='hosted-verification-failed', jobId=pending['jobId'],
+                                      **pending['verification']), sort_keys=True), file=sys.stderr, flush=True)
                 sleep(settings.retry_seconds)
                 continue
             pending['verification'] = verified

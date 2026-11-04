@@ -60,6 +60,12 @@ source evidence and unavailable prices remain recorded as warnings. A completed
 attempt with unavailable units does not retry forever. Historical repair stays
 separate, just as in the native refresh worker.
 
+Transient RPC transport/HTTP failures and lagging finalized heads on TVL-only
+chains record sanitized `extraTvl.unavailableChains` warnings and allow the report
+chains to proceed. A missing catalog on such an unavailable chain is not treated
+as an empty vault inventory. Wrong-chain endpoints, authentication/configuration
+failures, TLS failures and unclassified errors still stop the run.
+
 Next it calls `run_refresh(..., mode='publish')` with `--since` semantics. Native
 budgets, report acquisition, accounting, preparation, pin verification, atomic
 selection and consolidation remain owned by that worker. The wrapper never calls
@@ -74,6 +80,12 @@ including pinned fee and TVL consumer responses. The selection is checked again
 after those reads. Failures retry verification without republishing. After recovery
 of an older cycle, it starts a new cycle through today's cutoff if the invocation
 budget allows. A verified baseline advances only after HTTP checks succeed.
+
+Failed verification records a stable reason code, exception class and any HTTP
+status in pending state and a `hosted-verification-failed` journal event. Integrity
+mismatches, HTTP failures and invalid responses remain distinguishable without
+storing provider exception text, URLs, credentials or response bodies. API origins
+with any userinfo are rejected by local configuration checks.
 
 State and per-job receipts live under ignored `artifacts/nightly/`, with private
 permissions and atomic, flushed writes. `state.json` distinguishes pending work
