@@ -139,6 +139,67 @@ It does not acquire data, change the database selection or publish a release.
 Coordinate other writers while adopting. If work is pending, recover that work
 first; adoption is not an escape hatch for an interrupted job.
 
+### Required handoff after a manual publication
+
+A manual publication is not operationally complete until the nightly baseline
+has been reconciled. A selected API release and `state.json:lastJob` must refer
+to the same completed native refresh. Otherwise the next activation deliberately
+stops with `baseline-selection-drift` before acquisition.
+
+Use the deployed checkout and its dedicated interpreter for this procedure:
+
+1. Stop `yearn-data-nightly.timer` before starting another acquisition or
+   publication writer. Stopping the timer does not stop an already running
+   service: inspect `yearn-data-nightly.service` and finish or recover active
+   work first. Coordinate every independent writer, including direct publication
+   tools, which do not necessarily take the native advisory lock.
+2. Finish the supervised native publication and consolidation. Record its job
+   ID, cutoff and selected release ID. Preserve any pending wrapper job. Do not
+   substitute a release ID for a job ID, edit an old receipt, or delete state.
+3. If the publication was made outside the native worker and has no matching
+   selected receipt, run a supervised native refresh first. A reviewed previous
+   receipt can supply acquisition bounds with `--since`; the worker rechecks
+   its chain pins and prepares all retained financial history. This is a new
+   job, not a resume of a superseded selected publication. Include the configured
+   extra TVL chains in the supervised acquisition. Inspect warnings and readiness
+   before accepting the result; never fabricate a receipt for the external release.
+4. Run `--adopt-baseline REVIEWED_JOB_ID` as shown above. Adoption must succeed
+   against the live database and hosted API. Changing `initial_baseline_job`
+   does not update an existing installation. Retain the verification evidence.
+5. Test the installed service, rather than only running `--check`:
+
+   ```bash
+   systemctl --user reset-failed yearn-data-nightly.service
+   systemctl --user start yearn-data-nightly.service
+   systemctl --user show yearn-data-nightly.service -p Result -p ExecMainStatus
+   journalctl --user -u yearn-data-nightly.service --since today
+   ```
+
+   Confirm `Result=success`, `ExecMainStatus=0`, no pending state, and the saved
+   baseline matches the current selected release. A same-day run can correctly
+   do no acquisition when its verified cutoff is already current. If another
+   writer changes selection during this handoff, inspect and reconcile again.
+6. Restore scheduling only after those checks pass:
+
+   ```bash
+   systemctl --user enable --now yearn-data-nightly.timer
+   systemctl --user list-timers yearn-data-nightly.timer
+   systemctl --user is-enabled yearn-data-nightly.timer
+   systemctl --user is-active yearn-data-nightly.timer
+   ```
+
+   Verify the next activation is 02:00 UTC. Record deployed source revision,
+   native receipt, hosted verification, service result and next activation in
+   the operational handoff. Check the next morning's journal and verified cutoff;
+   an enabled timer alone is not proof of successful publication.
+
+The November 5, 2026 activation demonstrated this failure: an independent
+publication superseded the saved November 4 baseline without a matching native
+receipt or adoption. The service stopped before acquisition, retried twice and
+hit its start limit. The baseline guard worked; the missing operational step was
+the manual-publication handoff above. Deployment must also update the actual
+service checkout: merging a wrapper fix does not change the VM's files.
+
 Native `refresh --since` rejections retain trusted baseline-validation reasons in
 CLI output and receipts through the `RefreshNotStarted` signal. Provider/database
 errors expose their class rather than raw messages or endpoints.
