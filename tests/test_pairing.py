@@ -536,12 +536,17 @@ def test_strategy_ownership_round_trips_selection_and_hosted_serving(postgres_da
                   'periods': [{'since': DAY, 'until': annual_end}], 'reports': [{
                       'chainId': 1, 'vaultAddress': TOKENIZED, 'txHash': event['tx_hash'],
                       'logIndex': 0, 'blockTimestamp': DAY, 'fractions': [
-                          {'classification': status, 'pathId': f'1:{VAULT}',
+                          {'classification': status, 'pathId': f"1:{VAULT if status == 'parent-overlap' else ASSET}",
                            'numerator': '1', 'denominator': '2'}
                           for status in ('included', 'parent-overlap')]}]}
         root = tmp_path / 'candidate'
-        manifest = select_pairing('staging', *runs, root, strategy_ownership=ledger)
+        ledger_path = tmp_path / 'ownership.json'
+        ledger_path.write_text(json.dumps(ledger))
+        assert main(['--db', 'staging', 'select-pairing', '--earnings-run-id', str(runs[0]),
+                     '--fees-run-id', str(runs[1]), '--strategy-ownership', str(ledger_path),
+                     '--out', str(root)]) == 0
         selected = PairingStore(root).get()
+        manifest = json.loads((root/'datasets'/f'{selected.id}.json').read_text())
         assert selected.id == manifest['datasetId'] != legacy.id
         prepare(db, selected)
         hosted = PublishedFees('staging', selected.id)
@@ -552,6 +557,22 @@ def test_strategy_ownership_round_trips_selection_and_hosted_serving(postgres_da
         assert result['netLifetimeEarningsUsd'] == '175'  # Existing 135 + external strategy 40.
         assert result['strategyEarningsAccounting']['annualPathThresholdUsd'] == '1000'
         assert PairingStore(root).get().view('summary') == result
+        # An omitted policy option cannot replace an already selected policy.
+        with pytest.raises(ValueError, match='strategy ownership'):
+            select_pairing('staging', *runs, root)
+        assert PairingStore(root).get().id == selected.id
+        # The native refresh uses a fresh job directory. Hosted policy also guards it.
+        from types import SimpleNamespace
+        from yearn_data.hosted_publications import save_release, Registry
+        from yearn_data.refresh import RefreshWorker
+        release = save_release(db, manifest, {'datasetId': 'a'*64}, 'b'*64)
+        worker = RefreshWorker.__new__(RefreshWorker)
+        worker.options = SimpleNamespace(database='staging')
+        worker.root = tmp_path / 'next-refresh-job'
+        with pytest.raises(ValueError, match='strategy ownership'):
+            worker.make_pairing({'runId': runs[0]}, {'runId': runs[1]})
+        assert not (worker.root/'fees'/'current.json').exists()
+        assert Registry('staging').selection()['releaseId'] == release
         # A rejected material omission must leave the prior selection intact.
         ledger['reports'][0]['fractions'] = [{'classification': 'unresolved', 'pathId': f'1:{VAULT}',
                                             'numerator': '1', 'denominator': '1'}]

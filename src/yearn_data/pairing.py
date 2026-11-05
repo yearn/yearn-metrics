@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from .analysis import closed_cutoff
 from .fee_valuation import POLICY
-from .storage import connect, database_reference, DATABASE_ERRORS
+from .storage import connect, database_reference, DATABASE_ERRORS, table_exists
 
 # Shared across datasets: large grouped responses cannot multiply per publication.
 VAULT_HISTORY_CACHE_BYTES = 8 * 1024 * 1024
@@ -390,10 +390,31 @@ class PairingDataset:
         return result | {'datasetId': self.id, 'aggregationScope': scope}
 
 
+def _strategy_ownership_selected(database, root):
+    current = root / 'current.json'
+    if current.exists():
+        identity = json.loads(current.read_text())['datasetId']
+        manifest = json.loads((root/'datasets'/f'{identity}.json').read_text())
+        if manifest.get('strategyEarningsAccounting') is not None:
+            return True
+    # Native refreshes create a fresh directory for each job. The live hosted
+    # selection is the policy boundary across those directories.
+    with closing(connect(database, readonly=True)) as conn:
+        if all(table_exists(conn, table) for table in ('api_selection', 'api_releases', 'api_manifests')):
+            row = conn.execute("""SELECT m.body_json FROM api_selection s
+                JOIN api_releases r ON r.id=s.release_id
+                JOIN api_manifests m ON m.kind='fees' AND m.id=(r.body_json::jsonb->>'feesDatasetId')
+                WHERE s.name='powerglove'""").fetchone()
+            return row is not None and json.loads(row[0]).get('strategyEarningsAccounting') is not None
+    return False
+
+
 def select_pairing(database, earnings_run_id, fees_run_id, publication, *, strategy_ownership=None):
     """Validate first, then atomically select; prior selections remain available."""
-    dataset = PairingDataset(database, earnings_run_id, fees_run_id, strategy_ownership=strategy_ownership)
     root = Path(publication).resolve()
+    if strategy_ownership is None and _strategy_ownership_selected(database, root):
+        raise ValueError('selected publication uses strategy ownership; supply a reviewed ownership ledger')
+    dataset = PairingDataset(database, earnings_run_id, fees_run_id, strategy_ownership=strategy_ownership)
     snapshots = root / 'datasets'
     snapshots.mkdir(parents=True, exist_ok=True)
     manifest = dataset.context | {'datasetId': dataset.id, 'database': str(dataset.database),

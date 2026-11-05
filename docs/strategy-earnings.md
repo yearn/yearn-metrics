@@ -54,12 +54,30 @@ Ledger fields:
   `blockTimestamp`, and `fractions`.
 - Each fraction has `classification` (`included`, `parent-overlap`, `unresolved`),
   a stable `pathId`, and positive integer-string `numerator` / `denominator`.
-  Fractions must sum exactly to one. Fractions must describe pre-report ownership,
+  Each `pathId` appears once per report, with one classification. Fractions must
+  sum exactly to one. Fractions must describe pre-report ownership,
   before that report's fee-share mints and profit locking.
 
 Queries make no RPC calls. Evidence acquisition and classification remain a
 separate, reviewed preparation step; contract names or current balances are not
 substitutes for historical ownership evidence.
+
+Derived rows carry a separate `methodVersion` in the accounting metadata. A
+calculation or pricing-provenance correction advances that version, giving the
+financial dataset and matching analytics a new immutable identity. The ledger's
+`policy` identifies its evidence format.
+
+## Subsequent selection and refresh
+
+Selecting into an ownership-enabled directory requires an explicit reviewed
+ledger. The currently selected hosted release also preserves this requirement
+across fresh job directories. The native refresh stops at pairing preparation
+when the active release uses strategy ownership and a reviewed ledger is absent.
+The existing local and hosted selections remain selected.
+
+Prepare a new ledger against the new source fee rows for each changed analysis,
+review its annual coverage and omissions, and select it explicitly. This draft
+keeps ledger acquisition and activation as reviewed manual operations.
 
 ## Coverage and timing
 

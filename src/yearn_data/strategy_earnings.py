@@ -14,6 +14,7 @@ import re
 from .fee_products import product_for
 
 POLICY = 'report-time-strategy-ownership-v1'
+METHOD_VERSION = 'strategy-earnings-2'
 ANNUAL_THRESHOLD_USD = Decimal('1000')
 FAMILY = 'yearn-v3-tokenized-strategy'
 HASH = re.compile(r'0x[0-9a-f]{64}')
@@ -104,9 +105,9 @@ def apply_ownership(fees, ledger):
             # One stable chain/address key combines all routes to that beneficiary.
             if not isinstance(path, str) or not re.fullmatch(r'[1-9]\d*:0x[0-9a-f]{40}', path):
                 raise ValueError('invalid ownership path identity')
-            if (status, path) in seen_paths:
+            if path in seen_paths:
                 raise ValueError('duplicate ownership path')
-            seen_paths.add((status, path))
+            seen_paths.add(path)
             numerator, denominator = part['numerator'], part['denominator']
             if not all(isinstance(v, str) and re.fullmatch(r'0|[1-9]\d*', v)
                        and len(v) <= 160 for v in (numerator, denominator)):
@@ -171,6 +172,7 @@ def apply_ownership(fees, ledger):
                 'raw_gross_gain_usd': None if gain is None else format(gain, 'f'),
                 'raw_loss_usd': None if loss is None else format(loss, 'f'),
                 'raw_net_yield_usd': raw_net,
+                'price_usd': row.get('price_usd'),
                 'strategy_earnings_policy': POLICY,
             })
         disclosures = []
@@ -181,7 +183,7 @@ def apply_ownership(fees, ledger):
                      for (period, path), values in sorted(annual.items()) if period == i]
             disclosures.append({'since': start, 'until': end, 'omittedPaths': paths,
                 'omittedGrossActivityUsd': format(sum((Decimal(p['grossActivityUsd']) for p in paths), Decimal(0)), 'f')})
-    return rows, {'policy': POLICY, 'annualPathThresholdUsd': '1000',
+    return rows, {'policy': POLICY, 'methodVersion': METHOD_VERSION, 'annualPathThresholdUsd': '1000',
         'ownershipSha256': digest(ledger), 'coveragePeriods': disclosures,
         'includedReportCount': len(rows), 'outsideCoverageReportCount': outside,
         'redistributedReportCount': redistributed_count,

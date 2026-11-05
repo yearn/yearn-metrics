@@ -12,6 +12,22 @@ Earnings do not require accepted fee accounting. A report's gain/loss can be kno
 
 The lifetime-yield export is currently an incident-adjusted sum of stored report P&L. It is not yet a consolidation of earnings across nested contracts. Including retired reports fixes historical membership; it does not fix layered recognition.
 
+## Optional strategy ownership attribution
+
+The default pairing retains the reported-P&L scope above. Selecting the
+[report-time strategy-ownership policy](strategy-earnings.md) adds the supported
+external share of Tokenized Strategy gains/losses to those allocator reports.
+The enabled financial series therefore contains reported allocator earnings plus
+attributed strategy earnings. `strategyEarningsAccounting` declares that policy,
+its reviewed annual periods and omission disclosures. `lifetimeEarnings.raw*`
+preserves the full strategy report amounts alongside the counted amounts.
+
+Fees retain their existing charge scope. Product redistribution exclusions retain
+the designated earnings leg. The policy attributes ownership at strategy report
+time; full underlying-yield consolidation additionally requires recognition and
+profit-unlocking timing evidence across reporting layers. Full-history activation
+requires reviewed evidence for every annual period in scope.
+
 ## Different aggregation rules
 
 | Metric | Aggregation rule | Required boundary |

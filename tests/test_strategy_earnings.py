@@ -15,7 +15,7 @@ def fee(n=1, gain='100', loss='20', **overrides):
     return dict(chain_id=1, tx_hash=f'0x{n:064x}', log_index=0, block_timestamp=START,
                 vault_address=VAULT, asset='0x' + '33' * 20,
                 contract_family='yearn-v3-tokenized-strategy', gross_gain_usd=gain,
-                loss_usd=loss, total_fees_paid_usd='7') | overrides
+                loss_usd=loss, price_usd='1', total_fees_paid_usd='7') | overrides
 
 
 def ledger(rows, weights=(('included', '1', '2'), ('parent-overlap', '1', '2'))):
@@ -23,7 +23,7 @@ def ledger(rows, weights=(('included', '1', '2'), ('parent-overlap', '1', '2')))
             'periods': [{'since': START, 'until': END}], 'reports': [
                 {'chainId': r['chain_id'], 'txHash': r['tx_hash'], 'logIndex': r['log_index'],
                  'vaultAddress': r['vault_address'], 'blockTimestamp': r['block_timestamp'],
-                 'fractions': [{'classification': s, 'pathId': f'1:{OWNER}',
+                 'fractions': [{'classification': s, 'pathId': f"1:{'0x' + '44' * 20 if s == 'parent-overlap' else OWNER}",
                                 'numerator': n, 'denominator': d} for s, n, d in weights]}
                 for r in rows]}
 
@@ -34,6 +34,7 @@ def test_counts_only_external_fraction_and_preserves_raw_earnings_and_fees():
     rows, meta = apply_ownership(fees, ledger(fees))
     assert (rows[0]['gross_gain_usd'], rows[0]['loss_usd'], rows[0]['net_yield_usd']) == ('50', '10', '40')
     assert rows[0]['raw_net_yield_usd'] == '80'
+    assert rows[0]['price_usd'] == fees[0]['price_usd']
     assert fees == original
     # The API's summary, catalog and time series consume the same counted rows.
     dataset = PairingDataset.__new__(PairingDataset)
@@ -46,6 +47,9 @@ def test_counts_only_external_fraction_and_preserves_raw_earnings_and_fees():
     assert dataset.view('vaults')['vaults'][0]['netLifetimeEarningsUsd'] == '40'
     assert dataset.view('vault-history')['buckets'][0]['vaults'][0]['lifetimeEarnings']['netYieldUsd'] == '40'
     assert dataset.view('summary')['totalFeesPaidUsd'] == '7'
+    from yearn_data.analytics import profitability
+    quality = profitability(dataset, [], {}, {'vaults': []}, END)['dataQuality']
+    assert quality['reportsWithPricingSource'] == quality['totalReports'] == 1
 
 
 def test_annual_threshold_combines_reports_and_gains_with_losses_not_net():
@@ -133,3 +137,12 @@ def test_coverage_is_explicit_and_does_not_relabel_unaudited_history_as_zero():
     assert len(rows) == 1
     assert meta['outsideCoverageReportCount'] == 1
     assert meta['coveragePeriods'][0]['since'] == START
+
+
+@pytest.mark.parametrize('other_classification', ['parent-overlap', 'unresolved'])
+def test_rejects_conflicting_classifications_for_the_same_beneficiary(other_classification):
+    fees = [fee()]
+    evidence = ledger(fees, (('included', '1', '2'), (other_classification, '1', '2')))
+    evidence['reports'][0]['fractions'][1]['pathId'] = evidence['reports'][0]['fractions'][0]['pathId']
+    with pytest.raises(ValueError, match='duplicate ownership path'):
+        apply_ownership(fees, evidence)
