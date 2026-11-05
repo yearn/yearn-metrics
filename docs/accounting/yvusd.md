@@ -2,9 +2,10 @@
 
 The Ethereum base USD yVault (`0x696d02Db93291651ED510704c9b286841d506987`)
 reports locker yield redistribution inside `StrategyReported.total_fees`.
-That redistribution is not fee revenue.
+That redistribution is classified as locker yield.
 
-The current `fees.METHOD_VERSION` (`canonical-fees-9`) binds each report to the preceding `FeesReported` event
+The current `fees.METHOD_VERSION` (`canonical-fees-9`) binds each report to the preceding
+`FeesReported` event
 from its historical accountant, using the complete transaction receipt and a
 block-hash-pinned `accountant()` call. A split cannot be reused across reports.
 This rule was introduced in `canonical-fees-7`.
@@ -16,8 +17,10 @@ The two allowed accountants serve **only this yvUSD vault**. Their verified
 `address(asset)`; `asset` is immutable in `BaseStrategy`, and both constructor
 arguments bind it to `0x696d02Db93291651ED510704c9b286841d506987`:
 
-- [Accountant 0xaaafea48 verified source and constructor](https://eth.blockscout.com/address/0xaaafea48472f77563961cdb53291dedfb46f9040?tab=contract).
-- [Accountant 0xab9018a6 verified source and constructor](https://eth.blockscout.com/address/0xab9018a699003a777d690c156045dfc4a7ef3a96?tab=contract).
+- [Accountant 0xaaafea48 verified source and
+constructor](https://eth.blockscout.com/address/0xaaafea48472f77563961cdb53291dedfb46f9040?tab=contract).
+- [Accountant 0xab9018a6 verified source and
+constructor](https://eth.blockscout.com/address/0xab9018a699003a777d690c156045dfc4a7ef3a96?tab=contract).
 
 Each has one `FeesReported` emission, inside that guarded report function.
 Consequently, a permitted accountant cannot emit a fee split for another vault;
@@ -32,14 +35,15 @@ For an accepted split:
 - `reported_total_fees_raw` / `reportedTotalFeesUsd` retain the original deduction.
 
 The additional fields are populated for this verified yvUSD classification;
-absence on other contracts does not establish a known zero. API aggregates use
+other contracts retain their own component applicability and availability states. API
+aggregates use
 the same known-amount summation policy as existing component fields.
 
 Acceptance requires the split sum to equal the final vault deduction exactly,
 with zero protocol fees. Capped, rounded, protocol-charged, missing, or ambiguous
-splits remain unresolved instead of receiving a guessed proportional allocation.
+splits remain unresolved until exact reconciliation is supported.
 The [historical classification reconciliation](../archive/rollouts/yvusd-fee-accounting.md)
-records the observed raw totals and receipt cohort; it is not a current publication summary.
+records raw totals and the receipt cohort for its captured publication.
 
 ## Refresh and publication
 
@@ -49,10 +53,10 @@ Neon. `recompute-fees formulas --version v3` replays retained evidence
 without RPC access. A fee USD analysis must then be regenerated using the same
 cutoff and deferred-event manifest as the paired earnings analysis, selected
 with `select-pairing`, and followed by `prepare-analytics` for profitability.
-Never rewrite completed analysis outputs or reuse an old dataset identity.
+Preserve completed analyses and generate a new dataset identity for each changed result.
 
-The change does not modify strategy gains/losses, incident adjustments, prices,
-or the separate Tokenized Strategy accounting layer. The frontend consumes the
+Strategy gains/losses, incident adjustments, prices and Tokenized Strategy accounting retain
+their existing policies. The frontend consumes the
 corrected canonical metric without an address exclusion.
 
 Public receipt fixtures in `tests/fixtures/fees/yvusd.json` retain the relevant
@@ -67,19 +71,20 @@ A known zero fee remains zero even when its positive locker distribution cannot
 be valued. Such a row reports `zero_fee_unpriced_distribution` (or
 `metadata_unavailable` for missing asset metadata). Grouped output counts
 `unpriced_distribution_events` and leaves pricing/fee-USD completeness false
-until those distributions are valued. Optional component fields absent from
-unrelated contracts do not imply missing positive distributions.
+until those distributions are valued. Optional component fields follow each contract’s
+supported classification; evaluate distribution coverage within that scope.
 
 Canonical CSV exports include `locker_bonus_raw` and `reported_total_fees_raw`
-regardless of row order, with blank values for contracts where they do not apply.
+regardless of row order, with blank values for contracts outside their scope.
 Malformed report payloads remain unresolved in both indexing and offline replay.
 Receipt acquisition failures retain `receipt_unavailable_or_invalid`; normal V3
 reports in the same transaction can still use their own report inputs. An explicit
 `--refresh-evidence` also reacquires the historical accountant at the receipt block
 hash, while ordinary retries can reuse retained evidence.
 
-The run IDs, dataset ID and USD reconciliation above are historical operator
-receipts, not a claim about today's selected publication. The review replays the
+The run IDs, dataset ID and USD reconciliation above are operator receipts for the
+historical publication. Inspect the current selection for today’s publication. The review
+replays the
 438 retained report/receipt pairs offline for raw reconciliation; the committed
 public fixtures and regression tests cover classification, valuation, export,
 query scoping and pairing without needing the operator database.
@@ -88,14 +93,14 @@ Offline replay distinguishes `cached_distribution_evidence_missing_or_invalid`
 (missing or unreconciled accountant evidence) from
 `cached_allocator_inputs_missing_or_changed` (changed source report inputs).
 The former requires acquiring valid receipt/accountant evidence through indexing;
-offline replay itself never fetches it.
+indexing supplies that evidence for subsequent offline replay.
 
 A retained accountant outside the verified allowlist records
 `rejected_yvusd_accountant`. Ordinary `--retry-unresolved` retains that pinned
 evidence. Use `index-fees --canonical --version v3 --retry-unresolved
 --refresh-evidence` with a reliable historical provider to reacquire it. If the
 same address remains, verify the new implementation before expanding the
-allowlist; refreshing alone does not establish its safety.
+allowlist; acceptance requires implementation verification after acquisition.
 
 ## Product membership and earnings
 
@@ -110,7 +115,7 @@ unlocked vault: they already include returns on locked holders' capital. The loc
 contracts hold yvUSD shares, and their additional reported gains include locker-bonus
 redistributions. Summing their gains again would double count product earnings.
 The locker bonus remains separate from actual fees. Contract-scope records and names
-are preserved; product charts use the API's `yvUSD` name instead of `USD yVault`.
+are preserved; product charts use the API’s `yvUSD` name.
 
 Both locked contracts are retained in the maintained Tokenized Strategy inventory,
 so bounded updater runs collect their fee reports, including any future actual fees.
@@ -118,12 +123,12 @@ The earlier contract's verified deployment is block 24271898; the current contra
 is block 24329199. Both expose API version 3.0.4 and use yvUSD as their asset.
 Sources are Sourcify exact-match `src/LockedyvUSD.sol:LockedyvUSD` at each address.
 
-The user selected full onchain history rather than a public-launch cutoff. Preserve
+The selected reporting scope covers full onchain history. Preserve
 the four underlying reports with real fees on January 26–28, 2026 (UTC):
 $0.533052320825365730302 management and $0.9690390576925535207695 performance fees.
 Configured downstream rates use the separate [effective-rate policy](effective-fee-products.md).
 Historical reconciliation totals and old selected IDs are retained in the
-[product rollout record](../archive/rollouts/yvusd-product.md); they do not
-establish today's selection or rollback availability.
+[product rollout record](../archive/rollouts/yvusd-product.md); inspect the live selection
+and retained data to establish current publication and recovery options.
 
 [Documentation index](../README.md).

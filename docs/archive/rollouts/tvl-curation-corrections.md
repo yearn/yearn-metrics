@@ -1,15 +1,15 @@
 > Historical reference captured from `docs/tvl-curation-corrections.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/reference/tvl-accounting.md](../../reference/tvl-accounting.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/tvl-curation-corrections.md).
 
 # Curation scope and nested TVL corrections
 
 Four Turtle Club Katana predeposit contracts were classified as curation by the
-old explicit extra-product list. They are Yearn V3.0.4 contracts. Their inclusion
-was a reporting mistake, and the approved policy excludes them from **all
-historical TVL**, not merely from dates after migration.
+old explicit extra-product list. They are Yearn V3.0.4 contracts. The approved reporting
+policy excludes these vaults from **all historical TVL** and corrects their earlier
+inclusion.
 
 `inventories/tvl-vault-policy.json` records their V3 classification and exclusion.
 Discovery corrects retained catalogue records even when the upstream omits these
@@ -17,7 +17,8 @@ retired vaults; generic enrichment cannot restore the old category. Publication
 normalizes the catalogue without writing to the source database. Accounting
 removes these vaults and their incoming/outgoing edges before computing totals,
 so an excluded parent cannot also deduct a child. Stored balances are preserved.
-This is an explicit reporting exclusion, not a claim about a migration date.
+This exclusion defines reporting scope across the full history. Migration timing requires
+separate evidence.
 
 Curation V2 → V1 holdings reduce curation TVL. At the time of this rollout,
 Vaults → Curation holdings retained the separate-product-layer headline policy.
@@ -45,10 +46,10 @@ more positive-debt holdings were omitted because `delegatedAssets()` returns zer
 
 At Ethereum block 26151122, `vault()`, `yVault()`, matching underlying tokens,
 positive recorded debt and share ownership were verified through archive RPC.
-Collection rechecks `yVault()` at each requested historical block. The deduction
-remains capped by debt, ownership and parent/child TVL; it does not deduct the
-entire strategy wallet. The destination DAI and USDC vaults themselves invest in
-V3; both hops remain represented rather than replacing one with the other.
+Collection rechecks `yVault()` at each requested historical block. The deduction uses
+verified attributable ownership, capped by debt and parent/child TVL. The destination DAI
+and USDC vaults themselves invest in
+V3; the accounting represents both hops.
 
 ## Review results and remaining dependencies
 
@@ -62,10 +63,10 @@ Using the stored close `1791503999`, the local replay gives known external value
 | V1 | $2,381,105.91 | $2,381,105.91 |
 
 The curation reduction is $18,519,273.12 of excluded predeposits plus
-$5,073,928.20 of internal holdings. Missing prices still make these known
-subtotals, not certified complete totals. The existing DUSD router remains
-mapped but unpriced. These figures are a single-close review, not a full
-historical data rollout or deployment.
+$5,073,928.20 of internal holdings. Missing prices leave these amounts as known subtotals
+with incomplete coverage. The existing DUSD router remains
+mapped but unpriced. These figures describe a single-close review. Historical rollout and
+deployment require separate operational steps.
 
 The curation factory inventory now includes Katana V2 and HyperEVM V1/V2.
 HyperEVM OUSD V2 `0xe90959cbe7e56b5ebff9ad12de611a4976f2d2b1` was absent from our
@@ -75,14 +76,15 @@ is still required. Factory-wide HyperEVM V1 coverage was not certified because
 archive RPC log-range limits interrupted the independent scan.
 
 [yearn-prices #63](https://github.com/yearn/yearn-prices/issues/63) tracks chain 999
-namespace support and historical USDC/USD₮0 coverage. The OUSD vault's underlying
-asset is USDC (`0xb88339cb7199b77e23db6e890353e22632ba630f`), not the OUSD token.
-Do not guess a namespace or insert an assumed $1 quote. After the producer defines
+namespace support and historical USDC/USD₮0 coverage. The OUSD vault’s underlying asset is
+USDC (`0xb88339cb7199b77e23db6e890353e22632ba630f`).
+Resolve the asset namespace and price from supported dated evidence. After the producer defines
 and serves its canonical namespace, update `pricing.yearn_prices_token_key`,
 recollect historical prices/positions, and regenerate publications.
 
 The $6,167,004.96 Yearn USDC vault remains in our scope. Its initial owner misses
-DefiLlama's discovery allowlist. [The prepared upstream patch](../upstream/defillama-yearn-usdc.patch)
+DefiLlama's discovery allowlist. [The prepared upstream
+patch](../upstream/defillama-yearn-usdc.patch)
 adds this address explicitly via the existing `morpho` list, without adding the
 original owner's unrelated vaults. It has not been submitted or merged upstream.
 
@@ -97,8 +99,9 @@ PYTHONPATH=src .venv/bin/python scripts/review_curation_corrections.py \
 ```
 
 The script checks dates/blocks, captures a separate JSON review frame, and writes
-input hashes, before/after totals, graph and summary responses. It refuses to
-replace an existing review output directory and never changes the active publication.
+input hashes, before/after totals, graph and summary responses. It requires a fresh review
+output directory and writes isolated review artifacts; publication requires a separate
+explicit operation.
 The saved manifest retains the input frame's source database reference. Older
 frames without a reference use `captured-json`, which denotes captured evidence
 and cannot select a live database.

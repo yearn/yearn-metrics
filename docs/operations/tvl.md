@@ -35,8 +35,8 @@ filter when setting block bounds, because block numbers differ across chains.
 The final JSON summary reports each selected source, metadata failures, mapping
 failures, and scan scope. Complete discovery exits 0; incomplete discovery exits
 2 and retains candidates so the same command can be retried. Discovery summaries
-are also stored in `tvl_discovery_runs`. A failed source does not prevent the
-other selected sources from completing. Discovery does not call a price provider.
+are also stored in `tvl_discovery_runs`. Other selected sources can complete independently
+when one fails. Pricing follows discovery as a separate acquisition step.
 
 `YEARN_MORPHO_GRAPHQL_URL` optionally overrides the public Morpho API endpoint.
 RPCs must provide the selected historical logs; enriching old adapter contracts
@@ -71,7 +71,7 @@ Vaults whose underlying asset is another vault's share token are detected automa
 
 To find additional intermediaries, scan their child share balances at an explicit
 date. This scans all known strategy and vault holders against the chain's vaults,
-so run it deliberately rather than on every daily collection:
+so schedule it as a deliberate historical investigation:
 
 ```bash
 yearn-data --db staging --env .env tvl map-holders \
@@ -80,12 +80,13 @@ yearn-data --db staging --env .env tvl map-holders \
 
 Repeat at older dates to find historical routes that no longer hold shares today.
 Locally indexed strategy reports, debt flows, and strategy-change events also add
-historical candidates. Rerun `tvl discover` to refresh V1/curated inventory and discover adapter paths.
+historical candidates. Rerun `tvl discover` to refresh V1/curated inventory and discover
+adapter paths.
 Specific Morpho families are retained separately from product category. All
 registered adapters are checked, and previously added adapters remain candidates
 through their `AddAdapter` events. Unknown child mappings are retained with
 unresolved diagnostics. Positive debt in an unresolved adapter makes a collected
-aggregate incomplete; a verified zero debt does not require an overlap deduction.
+aggregate incomplete; a verified zero debt has a zero overlap deduction.
 Children outside the configured Yearn catalog remain visible as relations, without
 adding their full TVL to Yearn's inventory.
 
@@ -94,9 +95,9 @@ adding their full TVL to Yearn's inventory.
 [tvl-accounting](../reference/tvl-accounting.md) owns the dated deduction ledger.
 The default export includes curation in unified ownership accounting;
 `--include-curation` retains that default and `--no-include-curation` explicitly
-selects the separate-product export convention. Export switches do not change a
-publication's captured policy. Gross, overlap and external TVL remain distinct;
-missing evidence must not become a zero deduction or a complete total.
+selects the separate-product export convention. Each publication retains its captured policy
+across export choices. Gross, overlap and external TVL remain distinct;
+missing evidence retains unavailable deductions and incomplete totals.
 
 ## Stored data and outputs
 
@@ -116,8 +117,8 @@ runs. A genuine zero is stored as zero; an unavailable value is null. Incomplete
 aggregates have null headline totals and separately named `known_*` subtotals.
 
 Positions describe capital allocated at a point in time. Deposits, withdrawals,
-and debt movements remain in the existing `vault-volume` workflow; TVL changes
-also include yield, losses, and price changes and are not pure deposit flows.
+and debt movements remain in the existing `vault-volume` workflow; TVL changes reflect
+yield, losses and price changes alongside deposit flows.
 Raw quantities are retained for later price-neutral analysis.
 
 ## Deliberate historical backfill
@@ -133,26 +134,28 @@ PYTHONPATH=src python scripts/backfill_tvl.py \
   --out artifacts/tvl-backfill --from-date 2026-01-01 --to-date 2026-01-31
 ```
 
-This writes source observations and exports, not a selected hosted release.
-Coordinate all writers; do not assume its local process lock fences every native
-or independent publisher. Interrupted collections create a new run; interrupted
+This writes source observations and exports. Hosted release selection requires a separate
+publication.
+Coordinate all writers; verify lock coordination across native and independent publishers.
+Interrupted collections create a new run; interrupted
 exports reuse their saved collection. A repeated command reuses completed monthly
 checkpoints, including completed attempts with explicitly incomplete source data.
 Inspect those gaps separately. Current exports use the exporter's unified-curation
-default; per-chain exports do not establish a combined cross-chain headline.
+default; use a unified cross-chain export for the combined headline.
 Old collection runs remain inspectable only while retained by canonical history.
 
 Archive settings serve ordinary reads too. `ARCHIVE_RPC_URI_FOR_<id>`,
 `ARCHIVE_RPC_URL_<id>`, and `RPC_URI_FOR_<id>` precede named chain endpoints.
 Missing prices/ownership, unavailable RPCs and unverified historical discovery
 remain explicit. Sonic and Berachain are outside the configured TVL scope;
-stored source records are not deleted merely because they are excluded.
+stored source records remain retained under their original evidence identities.
 Historical receiver/router evidence must be read at the collected block.
 
 Prepare matching history and analytics before [hosted publication](hosted-api.md).
 See [history preparation](../reference/tvl-history-preparation.md),
 [curation indexing](../reference/curation-indexing.md) and
 [comparison review](tvl-comparison.md). The original backfill's fixed dates,
-SQLite path and measured coverage are in a [dated record](../archive/rollouts/2026-10-tvl-backfill.md).
+SQLite path and measured coverage are in a [dated
+record](../archive/rollouts/2026-10-tvl-backfill.md).
 
 [Documentation index](../README.md).

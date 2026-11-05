@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/powerglove-analytics.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/reference/analytics.md](../../reference/analytics.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/powerglove-analytics.md).
 
@@ -10,7 +10,8 @@ The selected publication `574c64f1944806a262e1f69fa454fb3a1574fa870b8c1f266792d1
 contains 45 nested stacks (33 with supported effective rates), 1,023 profitability
 records (547 eligible for fee-yield calculations), and 510 confirmed included / 15
 confirmed missing / four unknown currently counted vault membership records.
-Source gaps remain developer work; they do not require either legacy service.
+Repair source gaps through the owned acquisition workflows; migrated views use the prepared
+Yearn Data inputs.
 
 The four unknown membership records are Ethereum vaults
 `0x71955515adf20cbdc699b8bc556fc7fd726b31b0`,
@@ -18,13 +19,14 @@ The four unknown membership records are Ethereum vaults
 `0xcb550a6d4c8e3517a939bc79d0c7093eb7cf56b5`, and
 `0xe11ba472f74869176652c35d30db89854b5ae84d`. Their queue/debt reads are unavailable
 under the supported finance-adapter ABI. The other unavailable stack rates are
-identified in stored configuration and allocation coverage. Do not replace them
-with zero or infer DefiLlama inclusion from their absence in the missing list.
+identified in stored configuration and allocation coverage. Retain null amounts and assign
+DefiLlama inclusion only from verified membership evidence.
 
 Validation passed: 508 backend tests, 15 Postgres transport/integration tests using
 disposable Neon schemas, eight affected frontend tests, TypeScript checks,
 production build and browser checks of the three new sections and comparison.
-The new API was started with `--analytics` and no `--comparison-db` argument. A separate browser check also passed with both legacy proxy targets deliberately
+The new API was started with `--analytics` and no `--comparison-db` argument. A separate
+browser check also passed with both legacy proxy targets deliberately
 set to an unreachable port. The preview proxy uses this API for all actively
 consumed TVL/fees stats routes.
 Browser receipts and screenshots are retained locally under

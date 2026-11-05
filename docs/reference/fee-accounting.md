@@ -1,7 +1,8 @@
 # Calculate fees in asset units
 
 Use canonical fee accounting to calculate fees from stored allocator reports.
-The results use the vault asset's units. They do not include USD prices.
+The results use the vault asset's units. The separate fee-USD analysis supplies dollar
+valuations.
 Reports from retired vaults remain in scope.
 
 ## Calculate allocator fees
@@ -30,7 +31,7 @@ yearn-data --db neon export canonical-fees --out /path/to/exports
 
 The outputs contain fee events, accounting coverage, and subtotals by asset.
 Accounting coverage describes the stored reports that could be processed.
-It does not prove that all historical events were collected.
+Historical collection coverage is tracked separately.
 
 Keep these states separate:
 
@@ -38,9 +39,9 @@ Keep these states separate:
 | --- | --- |
 | Known zero | Evidence supports an amount of zero. |
 | Unavailable | Evidence is insufficient to calculate an amount. |
-| Not applicable | This fee component does not apply. |
+| Not applicable | The contract or event is outside this component’s scope. |
 
-A reported gain of zero does not always prove that fees are zero.
+Zero fees require evidence supporting that amount, including for reports with zero gains.
 V2 releases without a supported zero-gain rule still require fee evidence.
 
 ## Collect Tokenized Strategy fees
@@ -61,11 +62,12 @@ Replace `START`, `END`, `CUTOFF`, and `COUNT` with your selected limits.
 `CUTOFF` is an exclusive Unix timestamp: events at or after it are excluded.
 
 Omit `--inventory` to use the maintained list included with the package.
-This list keeps retired contracts, but it is not proof that every contract has been found.
-The command rejects unsupported chains instead of selecting another chain.
+This list retains discovered retired contracts; its discovery coverage defines the inventory
+boundary.
+The command rejects unsupported chains explicitly.
 
 The command saves each complete block chunk in one database transaction.
-It does not count the same event twice.
+Event identities ensure each event is counted once.
 When overlapping results agree, it keeps the original evidence.
 
 ## Select the finality policy
@@ -74,18 +76,23 @@ By default, the command uses the RPC `finalized` block as its upper limit.
 Use `--confirmations 1000` to use the latest block minus 1,000 blocks instead.
 
 The command records this choice in its output and saved range evidence.
-A confirmation buffer does not prove protocol finality.
+The receipt identifies confirmation-buffer results separately from protocol-finalized results.
 
 ## Keep fee families separate
 
 Allocator and Tokenized Strategy fees can occur at different layers of the same capital.
 For example, a strategy can charge a fee on assets held through an allocator vault.
 
-These outputs report gross contract fees. They do not measure receipts of the Yearn treasury.
+These outputs report gross contract fees. Measuring Yearn treasury receipts requires
+recipient and transfer attribution.
 Keep the contract family when you interpret or combine results.
-Do not treat the family subtotals as independent treasury revenue.
+Interpret each family subtotal as gross fees charged by that contract family.
 
-For an explicitly scoped gross-fees-across-the-stack metric, a consumer can sum distinct accepted charges across families. Nesting alone does not make charges duplicates. Count each bound charge once; components and later distributions do not add another charge. Earnings recognized at multiple layers require a different consolidation policy. See the [Powerglove accounting contract](accounting.md).
+For an explicitly scoped gross-fees-across-the-stack metric, a consumer can sum distinct
+accepted charges across families. Use bound event identity to establish duplicates. Count
+each charge once across its components and later distributions. Earnings recognized at
+multiple layers require a different consolidation policy. See the [Powerglove accounting
+contract](accounting.md).
 
 ## Recover fees from older V2 reports
 
@@ -100,11 +107,11 @@ yearn-data --db neon index-fees --canonical \
 Replace `COUNT` with the maximum number of reports to process.
 
 Estimated bounds and price-per-share calculations remain candidate amounts.
-They do not enter accepted totals.
+Accepted totals include only supported execution amounts.
 
 A complete, supported receipt with no share mint can establish zero fees.
-A mint of zero shares cannot establish zero fees.
-A positive asset fee can round down to zero shares.
+A positive asset fee can round down to zero shares, so a zero-share mint requires additional
+execution evidence.
 
 ### Verify selected transactions
 
@@ -123,14 +130,14 @@ yearn-data --db neon index-fees --canonical \
 ```
 
 The trace limit applies to one invocation. Failed requests also count toward the limit.
-An unavailable trace does not prove that a fee is zero.
+An unavailable trace leaves the fee unresolved.
 
 Without `--verify-execution`, selective verification checks supported zero-gain mints
 or later vault activity found around reconstructed reports.
 
 ### Recalculate from saved evidence
 
-These commands do not make RPC requests:
+These commands replay saved evidence offline:
 
 ```bash
 yearn-data --db neon recompute-fees policy
@@ -141,8 +148,10 @@ They preserve accepted execution amounts when the source evidence still matches.
 They reject evidence if its source inputs have changed.
 Conditional and unavailable results remain outside accepted totals.
 
-Use `index-fees --canonical --filtered-evidence-only` to process complete saved V2 log evidence offline.
-Filtered logs are a selected part of the event history. They are not treated as a full receipt.
+Use `index-fees --canonical --filtered-evidence-only` to process complete saved V2 log
+evidence offline.
+Filtered logs provide selected event-history evidence. Full-receipt classifications require
+a complete receipt.
 Use `--refresh-evidence` when you need to fetch evidence again.
 
 [Documentation index](../README.md).
@@ -165,4 +174,5 @@ reuse pinned evidence; `index-fees --canonical --version v3 --retry-unresolved
 implementation before expanding the allowlist. This diagnosis is separate from
 configured-rate acquisition and verification statuses.
 
-Configured rate observation/retention has a separate [policy](../accounting/effective-fee-products.md).
+Configured rate observation/retention has a separate
+[policy](../accounting/effective-fee-products.md).

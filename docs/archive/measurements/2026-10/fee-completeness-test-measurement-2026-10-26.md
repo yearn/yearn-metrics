@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/fee-completeness-test-measurement-2026-10-26.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/development/performance.md](../../../development/performance.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/fee-completeness-test-measurement-2026-10-26.md).
 
@@ -19,7 +19,7 @@ Production code and CI configuration are unchanged.
 | Whole-suite Postgres cases | 816 | 761 |
 
 The focused file is approximately 8.2× faster (88% less elapsed time), saving
-20.96 seconds in this pair of runs. This is not a measured whole-suite speedup.
+20.96 seconds in this pair of runs. The measurement covers the focused tests recorded here.
 The earlier full-suite measurement remains in
 [the initial cleanup report](testing-measurement-2026-10-26.md).
 
@@ -53,9 +53,9 @@ modified; the normal matrix passed all 65 cases.
 
 The before/after matrix runs used CPython 3.12.3 with the same locked dependencies
 and disposable local Postgres 18 on port 55439. The baseline was the working-tree
-matrix after the earlier fixture split, before this rewrite. Timings are pytest
-elapsed times from one successful run of each version, not repeated statistical
-benchmarks; container startup is excluded. The full database suite was not rerun
+matrix after the earlier fixture split, before this rewrite. Timings record pytest elapsed
+time for one successful run per version, with container startup excluded. Repeated runs
+would be required to characterize variance. The full database suite was not rerun
 for this isolated test refactor. Each run emitted the existing websockets legacy
 deprecation warning.
 

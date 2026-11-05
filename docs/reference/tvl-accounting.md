@@ -14,15 +14,15 @@ summary fields and fee rates retain their meanings.
 ## Supported dated relationships
 
 - **Allocator → tokenized strategy:** use the allocator's recorded debt, capped
-  by the strategy's dated TVL. Allocators need not hold tokenized strategy shares.
+  by the strategy's dated TVL. Allocators can represent strategy exposure through debt
+  accounting.
 - **Intermediary → child vault:** measure `balanceOf(holder) / totalSupply` at
   that block, multiply by child TVL, and cap by the parent's recorded debt.
 - **Compounder → child vault:** retain this as a second nesting level. Use the
   compounder's asset value as its budget and measure its child shares.
 - **Vault with a vault-share asset:** value those shares from the dated child,
   including when the price provider lacks a share-token price. Ownership uses
-  share-denominated `totalAssets`, including deployed shares, rather than only
-  the wrapper's idle wallet balance.
+  share-denominated `totalAssets`, including idle and deployed shares.
 - **Registered cross-chain strategy:** verify both remote-counterpart getters
   and the destination vault at the two dated blocks. Cap remote share ownership
   by source debt and both vaults' TVL. Both chains must be included in collection;
@@ -30,7 +30,8 @@ summary fields and fee rates retain their meanings.
 - **Morpho V2 adapters:** verify historical `isAdapter` membership and read
   `realAssets()` before valuing the adapter's child holdings. See the
   [Morpho contract reference](https://docs.morpho.org/developers/contracts/morpho-vaults-v2/)
-  and [adapter interface](https://github.com/morpho-org/vault-v2/blob/main/src/interfaces/IAdapter.sol).
+  and [adapter
+  interface](https://github.com/morpho-org/vault-v2/blob/main/src/interfaces/IAdapter.sol).
 
 V2 and V3 use their different `strategies(address)` layouts. A holder shared by
 several parents is counted once and split by parent debt. Several child positions
@@ -47,30 +48,30 @@ leave the affected child's `overlap_usd` and `external_tvl_usd` null. Observed
 zero debt remains zero even without a child valuation. Unknown positions stay in
 diagnostics. Coverage remains limited to known candidates.
 
-Aggregate endpoints retain available-subtotal semantics. They do not certify
-complete TVL when some vaults are unavailable. Historical series omit unavailable
-vault values rather than inserting zero. Prepared history and constant-price
-history preserve those distinctions. Graph deductions sum available accounting
-evidence, rather than treating a missing adjusted value as a deduction. Graph
+Aggregate endpoints retain available-subtotal semantics. TVL completeness additionally
+requires available values for every vault in scope. Historical series retain available vault
+values and expose unavailable coverage separately. Prepared history and constant-price
+history preserve those distinctions. Graph deductions sum available accounting evidence;
+missing adjusted values retain unavailable status. Graph
 `diagnostics.unavailableNodes` also identifies nodes with incomplete ownership;
 their observed `rawTvlUsd` remains available while adjusted fields remain null.
 
 Diagnostic `known_gross_tvl_usd` sums observed gross values, including vaults whose
 ownership is incomplete. `known_overlap_usd` sums verified position deductions,
 including partial evidence for such vaults. `known_external_tvl_usd` sums only
-available vault-level external values. These are independently known subtotals,
-not a reconciled equation when ownership is incomplete. For example, two $100
+available vault-level external values. These subtotals each describe known evidence.
+Reconciliation requires complete ownership evidence. For example, two $100
 parents and a $200 child with one verified $30 holding and one unknown holding
-produce known gross $400, known overlap $30 and known external $200. The child's
-full external value and overlap remain null; its missing value is not a $200
-deduction. Public `overlapExcluded` sums only available vault-level overlap values
+produce known gross $400, known overlap $30 and known external $200. The child’s full
+external value and overlap remain null, reflecting incomplete ownership evidence. Public
+`overlapExcluded` sums only available vault-level overlap values
 ($0 in this example), while the position evidence retains the verified $30.
 
 `tvl export` uses unified curation deductions by default. `--include-curation`
 keeps that default; `--no-include-curation` explicitly selects the separate-product
 export convention, including its best-effort ownership availability. `tvl.json`
 records both `include_curation` and `require_complete_ownership` in its run
-metadata. This export switch does not change a publication's policy.
+metadata. The publication retains its captured policy across export choices.
 
 Powerglove's existing contract consumes these values directly:
 
@@ -92,7 +93,8 @@ combined value unavailable.
 The manifest adds `ownershipAccounting: all-yearn-v1`, changing the dataset hash
 even when the raw runs are unchanged. Old manifests retain their previous
 accounting and remain reproducible while retained. The current analytics methodology
-`powerglove-analytics-25` keeps unresolved corrected ownership partial in the fee view. Reprepare analytics even when the selected source IDs are
+`powerglove-analytics-25` keeps unresolved corrected ownership partial in the fee view.
+Reprepare analytics even when the selected source IDs are
 unchanged; an older prepared fee stack can otherwise retain a known rate for
 unresolved ownership. Prepared rows/totals must be regenerated for the new
 TVL identity; the price-repair copy shortcut rejects changed accounting policy.
@@ -106,8 +108,8 @@ release, TVL dataset and analytics IDs through the Powerglove proxy and check th
 table, expanded details and both historical charts together. Preserve the normal
 backup and recovery process before consolidation retires old publications.
 
-Implementation and local tests do not deploy the API, recollect historical data,
-or activate a hosted release.
+Deploy the API, recollect affected historical data and select a hosted release as explicit
+operational steps after implementation and local testing.
 
 ## Verification
 
@@ -128,17 +130,17 @@ The TVL summary preserves known subtotals when prices or ownership are missing.
 Its `completeness` object labels these as `known-subtotals`, reports `complete` or
 `incomplete`, and includes valued/vault counts, unresolved positions, and issues.
 The diagnostic scope is always `network`, including chain-filtered summaries:
-cross-chain ownership depends on evidence outside the requested chain. A known
-subtotal must not be interpreted as a complete total while status is incomplete.
+cross-chain ownership depends on evidence outside the requested chain. An incomplete status
+identifies the displayed amount as a known subtotal.
 
 [Documentation index](../README.md).
 
 ## Explicit reporting scope and corrected destinations
 
 Four Turtle Club Katana predeposit contracts were classified as curation by the
-old explicit extra-product list. They are Yearn V3.0.4 contracts. Their inclusion
-was a reporting mistake, and the approved policy excludes them from **all
-historical TVL**, not merely from dates after migration.
+old explicit extra-product list. They are Yearn V3.0.4 contracts. The approved reporting
+policy excludes these vaults from **all historical TVL** and corrects their earlier
+inclusion.
 
 `inventories/tvl-vault-policy.json` records their V3 classification and exclusion.
 Discovery corrects retained catalogue records even when the upstream omits these
@@ -146,7 +148,8 @@ retired vaults; generic enrichment cannot restore the old category. Publication
 normalizes the catalogue without writing to the source database. Accounting
 removes these vaults and their incoming/outgoing edges before computing totals,
 so an excluded parent cannot also deduct a child. Stored balances are preserved.
-This is an explicit reporting exclusion, not a claim about a migration date.
+This exclusion defines reporting scope across the full history. Migration timing requires
+separate evidence.
 
 Curation V2 → V1 holdings reduce curation TVL. At the time of this rollout,
 Vaults → Curation holdings retained the separate-product-layer headline policy.
@@ -166,5 +169,6 @@ prior convention. Policy exclusions remove affected vaults/edges before bridge
 and ownership deductions; stored observations remain evidence.
 
 Graph flow fields and display filters are defined in [API contracts](api.md#tvl-graph).
-Historical comparison values are [dated evidence](../archive/rollouts/tvl-overlaps.md),
-not deductions to subtract from a different inventory, price set or close.
+Historical comparison values provide [dated evidence](../archive/rollouts/tvl-overlaps.md)
+for the captured inventory, price set and close. Recalculate deductions for a different
+context.

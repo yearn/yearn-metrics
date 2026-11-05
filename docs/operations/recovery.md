@@ -2,21 +2,23 @@
 
 Recovery starts with the saved receipt, selected release, exact code/configuration
 and the identity of every possible writer. Preserve logs and retained evidence.
-Never delete pending state or relax an integrity check to force progress.
+Preserve pending state and satisfy each integrity check before continuing.
 
 ## Native refresh and publication
 
 Use [refresh recovery](refresh.md#publication-and-recovery) for `work-deferred`,
 failed stages, changed checkpoints and `selected-cleanup-failed`. Selection and
-canonical cleanup are separate commits: a cleanup error does not mean the
-previous release is still selected. Inspect `/api/publication` before acting.
-A superseded ID is not a backup; see [retention](../reference/retention.md).
+canonical cleanup are separate commits: the newly selected release remains active after a
+cleanup error. Inspect `/api/publication` before acting.
+Recovery requires retained datasets or a restorable backup; see
+[retention](../reference/retention.md).
 
-After a manual publication, complete the [nightly baseline handoff](nightly.md#required-handoff-after-a-manual-publication).
+After a manual publication, complete the [nightly baseline
+handoff](nightly.md#required-handoff-after-a-manual-publication).
 Adoption requires a selected, consolidated native receipt covering the configured
 scope and matching both the live database and hosted API. A publication without
 that receipt needs a supervised native run. Pending wrapper work must be
-recovered first; `--adopt-baseline` does not discard it.
+recovered first; `--adopt-baseline` requires idle state.
 
 ## Legacy analysis and TVL run markers
 
@@ -25,34 +27,33 @@ share one lifecycle and commit a `running` marker before
 calculating outputs. A handled Python exception or interruption now rolls back
 the partial output transaction, commits a `failed` marker with `completed_at`,
 and re-raises the error. A successful job commits its outputs and completed
-marker together. Retry creates a new run; failed output is never promoted.
+marker together. Retry creates a new run; only successful output is eligible for publication.
 
-This applies to the supported Postgres runtime. SQLite is retired; it is not
-restored to satisfy the older wording of issue #48.
+This applies to the supported Postgres runtime. Use the current Postgres lifecycle described
+here to address the recovery requirement recorded in issue #48.
 
 ## Process crashes and unavailable database connections
 
 SIGKILL, host failure, or a lost database connection can prevent terminal-state
-cleanup. A surviving `running` marker is not proof that a process is active or
-abandoned. Do not expire it on age alone, and do not disable canonical-history's
+cleanup. A surviving `running` marker requires process, host and receipt checks to establish
+liveness. Establish abandonment from execution evidence and preserve canonical-history’s
 active-writer guard. Consolidation checks both `analysis_runs` and `tvl_runs`;
-resolving a marker in one table does not clear a marker in the other. The shared
-analysis lifecycle above does not govern TVL collection.
+resolve each table’s marker independently. TVL collection uses the separate lifecycle below.
 
 1. Inspect running markers in both tables. For `analysis_runs`, record the explicit
    ID, job name, start time and parameters. For `tvl_runs`, record the explicit
    ID, start time, chain/date scope and parameters. Match each to its operator
-   receipt, process/service logs and execution host; do not assume equal IDs
-   across these tables identify the same job.
+   receipt, process/service logs and execution host; verify each table’s job identity
+   independently.
 2. Check that the process and any resuming worker have stopped, including other
    hosts. Inspect `pg_stat_activity` and locks with an appropriately privileged
-   operator connection. Database inactivity alone does not prove that an idle
-   application worker will not resume.
+   operator connection. Confirm application-worker termination on its execution host as well
+   as database inactivity.
 3. Stop or fence all possible owners before recovery. If ownership cannot be
    established, leave the marker untouched and investigate.
 4. With ownership ruled out, mark only the confirmed abandoned run failed in a
-   transaction. The conditional update below must return exactly one row. Do
-   not select IDs by age or update all running jobs.
+   transaction. The conditional update below must return exactly one row. Select only the
+   IDs whose abandonment has been verified.
 
 ```sql
 BEGIN;
@@ -75,10 +76,10 @@ RETURNING id, status, completed_at, params_json;
 COMMIT;
 ```
 
-Require exactly one returned row. Do not run both examples automatically or
-change the active-writer guard. Archive the TVL run record and its retained
+Require exactly one returned row. Run only the example appropriate to the verified lifecycle
+and preserve the active-writer guard. Archive the TVL run record and its retained
 `tvl_snapshots` / `tvl_positions` before retrying collection for its intended
-scope. Failed TVL runs are not eligible publication inputs. Recheck both tables
+scope. TVL publication inputs require successful collection runs. Recheck both tables
 before a separately authorized consolidation; a remaining live or unexplained
 marker must continue to block it.
 
@@ -87,7 +88,7 @@ any retained `analysis_outputs`, and relevant process logs to the incident's
 access-controlled diagnostic archive. Record that archive location, the recovered
 run ID and supporting evidence in the operational receipt. Publication runs
 canonical consolidation, which removes outputs outside its retained run set;
-keeping partial outputs in the working database is not durable evidence.
+export partial outputs to retained evidence before consolidation.
 
 Readers must select complete runs. Retry the original analysis with the same
 intended cutoff and source policy, inspect its completed output, and only then
@@ -103,7 +104,8 @@ amounts unavailable; genuine raw zero remains zero without a quote or scale.
 
 ## Existing analysis impact
 
-This is a calculation fix, not a data migration. Completed `lifetime-yield`,
+This fix changes calculation behavior using the existing stored data. Completed
+`lifetime-yield`,
 legacy `vault-fees`, and `vault-volume` analyses that valued nonzero amounts
 with zero decimals and an accepted quote are candidates for regeneration.
 Their stored outputs retain the old calculation until explicitly regenerated.
@@ -132,10 +134,10 @@ SELECT 'strategy_debt_flows', chain_id, asset, MIN(block_timestamp), MAX(block_t
 FROM strategy_debt_flows WHERE asset_decimals = 0 AND debt_delta_raw <> '0' GROUP BY chain_id, asset;
 ```
 
-These are candidate input counts, not proof that a particular saved run used a
-quote. Match retained analysis outputs by event identity, source policy and cutoff
+These counts identify candidate inputs. Inspect a saved run’s captured evidence to establish
+quote use. Match retained analysis outputs by event identity, source policy and cutoff
 to establish the affected runs. Review candidate regenerated outputs before any
-Redis or paired publication update. Do not rewrite raw history or automatically
-replace selected publications as part of this fix.
+Redis or paired publication update. Preserve raw history and select changed publications
+only through an explicit reviewed publication.
 
 [Documentation index](../README.md).

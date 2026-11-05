@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/testing-measurement-2026-10-26.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/development/performance.md](../../../development/performance.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/testing-measurement-2026-10-26.md).
 
@@ -45,8 +45,7 @@ and the dependency lockfile are unchanged.
 
 Cumulative elapsed-time reduction: **70.51s (16.9%)**
 against the original baseline. Since the initial cleanup, the reduction is
-**53.67s (13.4%)**. These are measured
-full-suite differences, not a sum of separately timed focused runs.
+**53.67s (13.4%)**. These differences come from measured full-suite runs.
 
 | Full-suite phase totals | Original | Initial cleanup | All cleanups |
 | --- | ---: | ---: | ---: |
@@ -54,8 +53,8 @@ full-suite differences, not a sum of separately timed focused runs.
 | Test calls | 117.97s | 113.86s | 109.70s |
 | Teardown | 124.07s | 121.29s | 106.38s |
 
-Phase totals exclude collection and some runner overhead. Setup includes domain
-fixtures, not only schema creation.
+Phase totals exclude collection and some runner overhead. Setup includes schema creation and
+domain fixtures.
 
 That measured collection has **1294 cases: 734 Postgres and 560 non-Postgres**. The
 latest database-free run was **553 passed, 7 skipped in 7.96s**, performed after
@@ -83,8 +82,9 @@ host, and temporary profiling plugin as the original measurements, with
 status zero. A fresh task-owned Postgres 18 service used local port 55439;
 container startup is excluded. No other validation ran concurrently in this
 chat. The original run had limited overlapping classification checks, as noted
-below. Host load and database cache state can vary, so this is a single-run
-comparison, not a statistically established speedup or a prediction of CI time.
+below. This single-run comparison records the observed host load and database cache
+conditions. Repeated controlled measurements are required to estimate variance or CI
+duration.
 The only warning is the existing websockets legacy deprecation.
 
 The profiler is temporary and does not change repository tests or CI. The
@@ -101,8 +101,9 @@ CI workflows and `uv.lock` have no diff.
 | After, without Postgres | 472 | 7 | 7.71s |
 
 Full-suite time changed by 16.84s (4.0% faster in this pair of runs).
-This is one before/after pair on a shared host, not a statistically established
-speedup or a prediction of GitHub CI time. The useful new capability is the
+This before/after pair records observed durations on a shared host. Repeated controlled
+measurements are required to estimate variance or GitHub CI duration. The useful new
+capability is the
 7.71s non-Postgres selection without a database service or URL.
 
 At this initial step, the suite collected 1295 cases: 816 request Postgres and 479 do
@@ -116,8 +117,8 @@ so the collected count changes from 1,297 to 1295.
 | Test calls | 117.97s | 113.86s |
 | Teardown | 124.07s | 121.29s |
 
-Phase totals exclude collection and some runner overhead. Setup includes domain
-fixtures, not only schema creation.
+Phase totals exclude collection and some runner overhead. Setup includes schema creation and
+domain fixtures.
 
 ## Method and limits
 
@@ -165,6 +166,7 @@ python -m pytest -q -m 'not postgres' --durations=10
 
 The added tests protect the new fixture boundary: unmarked access fails before
 transport, and database tests reject another database URL or an unowned schema.
-A missing-URL probe also verified an explicit setup failure, not a silent skip.
+A missing-URL probe verified that database setup fails explicitly when required
+configuration is absent.
 Ruff and `git diff --check` pass. CI remains the existing full two-version matrix.
 See [the testing policy](../../../development/testing.md) for agent rules and fixture usage.

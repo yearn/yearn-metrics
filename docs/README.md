@@ -1,8 +1,13 @@
 # Documentation
 
+Read the [project overview](../README.md) for a standalone explanation of the
+data lifecycle, metrics, update schedule, recovery and environments. Use this
+index to find the detailed guide for a task.
+
 Current guides describe supported code and reusable procedures. Check the actual
 service checkout, environment, receipt and selected publication before operating
-an installed deployment. Static documentation is not a live deployment inventory.
+an installed deployment. Establish live deployment state from the service host and selected
+publication.
 
 ## Start and operate
 
@@ -46,21 +51,24 @@ are a separate policy from actual paid fees.
 ## Develop and investigate
 
 - [Testing policy](development/testing.md): pure/HTTP/Postgres boundaries and explicit fixtures.
-- [Performance recipes](development/performance.md): supported tools, parity and measurement limits.
-- [Optional Fantom replay](development/fantom-replay.md): saved prestate and strict execution evidence.
-- [Fee fixture provenance](../tests/fixtures/fees/README.md) and [analytics fixture provenance](../tests/fixtures/analytics/README.md).
+- [Performance recipes](development/performance.md): supported tools, parity and measurement
+  limits.
+- [Optional Fantom replay](development/fantom-replay.md): saved prestate and strict
+  execution evidence.
+- [Fee fixture provenance](../tests/fixtures/fees/README.md) and [analytics fixture
+  provenance](../tests/fixtures/analytics/README.md).
 - [Agent/documentation policy](AGENTS.md) and [root agent instructions](../AGENTS.md).
 
 Use `yearn-data --help` and each subcommand's help for exact syntax. Routine work
 uses `refresh` or the nightly adapter. `scripts/update_postgres.py` is a specialized
 bounded manual publisher; `scripts/backfill_tvl.py` is deliberate historical work.
-Comparison/review scripts and benchmark/browser tools are opt-in diagnostics,
-not alternate scheduled refresh paths. Their owning guides above describe input
+Comparison/review scripts and benchmark/browser tools provide opt-in diagnostics. Their
+owning guides above describe input
 contracts, write effects and evidence limits.
 
 ## Historical reference
 
 [Archive index](archive/README.md) contains original requirements, branch history,
 dated deployments/corrections and measurements. [Migration map](migration.md)
-accounts for the previous paths and split sections. Archives must not be used as
-current environment, service-port, release-retention or branch-state instructions.
+accounts for the previous paths and split sections. Use current guides and live checks to
+establish environment, service ports, release retention and branch state.

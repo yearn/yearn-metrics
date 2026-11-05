@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/powerglove-branch-stack.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/operations/hosted-api.md](../../operations/hosted-api.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/powerglove-branch-stack.md).
 
@@ -27,8 +27,8 @@ PRs [#40](https://github.com/yearn/yearn-metrics/pull/40),
 in that order. Their curation, overlap and canonical-history work is now
 contained in `origin/ross/powerglove-hosted-api` at `f6d723d`.
 PR [#39](https://github.com/yearn/yearn-metrics/pull/39) was merged into
-`ross/tvl-overlaps` and is also included through those merges. These PRs
-do not need to be reopened or replayed.
+`ross/tvl-overlaps` and is also included through those merges. These PRs remain completed
+historical records.
 
 The follow-up originally started at `f6d723d`. That base has the same committed file tree
 as the former working branch, `ross/curation-tvl-corrections` at `f572814`;
@@ -61,18 +61,18 @@ a lower layer must also be carried through its descendants.
 - `/home/dev/raaaws/worktrees/yearn-data-effective-fee-products` retains
   `ross/ybold-fee-classification`, the merged PR #39 snapshot at `6136221`.
 - Older occupied Neon and historical-ingestion worktrees remain separate.
-  Do not force-push older local branches merely to clear ahead/behind labels.
+  Preserve older branch history; use verified commit ancestry to interpret ahead/behind labels.
 
 Git branches, running services and selected database publications are
-independent. This branch organization does not deploy or select data.
+independent. Deployment and data selection require separate explicit operations.
 The original working tip is retained at
 `refs/archive/20261015-comparison-followup/curation`.
 
 ## Earlier PRs
 
 PR #25 targets `main`; PRs #26–#37 target their immediate predecessor
-branches. Local branch numbering does not match their current GitHub PR numbers. The replacement PRs use branches in `yearn/yearn-metrics`,
-not the earlier fork PRs:
+branches. Use the table’s GitHub PR numbers to identify the corresponding local branches.
+The replacement PRs use branches in `yearn/yearn-metrics`:
 
 | Branch | Current PR | Base / target branch |
 | --- | --- | --- |
@@ -97,8 +97,8 @@ bounded-catch-up and hash-identity safeguards.
 The integrated pricing findings were placed in their owning layers:
 
 - #24 derives report-chain eligibility from the Yearn client mapping.
-- #27 preserves accepted fee quotes after failed refreshes and propagates
-  configuration errors instead of recording invalid prices.
+- #27 preserves accepted fee quotes after failed refreshes and propagates configuration
+  errors as explicit failures.
 - #28 preserves pending-day retry selection and cached-price protection while
   using parallel fallback adapters; exhausted individual provider requests remain
   retryable without aborting other targets.
@@ -109,7 +109,8 @@ disposable local PostgreSQL schemas. #24 independently passed 294 tests, with
 12 skips. These are local checks; the integrated review did not request a new
 upstream bot review or claim remote CI approval.
 
-Out-of-scope follow-ups are tracked separately: [zero-decimal scaling](https://github.com/yearn/yearn-metrics/issues/45),
+Out-of-scope follow-ups are tracked separately: [zero-decimal
+scaling](https://github.com/yearn/yearn-metrics/issues/45),
 [direct-provider versus synthetic estimates](https://github.com/yearn/yearn-metrics/issues/46),
 and [pricing-client/result extraction](https://github.com/yearn/yearn-metrics/issues/47).
 Each is recommended for a separate PR. No historical data or selected publication
@@ -117,8 +118,8 @@ was changed by the review.
 
 Pre-review heads are retained under `refs/archive/pricing-stack-review-20261020/`
 and in `artifacts/pricing-stack-review-20261020/before.bundle`. The original
-checkout and its four uncommitted files were preserved. Older recovery notes
-below describe their dated operations, not the current open-PR base layout.
+checkout and its four uncommitted files were preserved. Older recovery notes below describe
+their dated operations. The branch table records the captured PR base layout.
 
 ## Integrated review after PR #24 merged
 
@@ -136,7 +137,7 @@ The local review started at integrated PR #43 and traced defects downward:
 | #33 | Legacy catalog imports store integer active flags; real PostgreSQL tests cover import and export recovery. |
 | #35 | Price repairs require complete source totals and resume interrupted destination totals. |
 | #38 | Effective fee stacks follow the child's chain identity; analytics publication version advances. |
-| #43 | Unavailable adapter contributions remain unresolved instead of disappearing; analytics publication version advances again. |
+| #43 | Unavailable adapter contributions retain unresolved status; analytics publication version advances again. |
 
 Each fix was inserted into its owning PR and carried through all descendants.
 Before the documentation update, the rebuilt integrated tree exactly matched

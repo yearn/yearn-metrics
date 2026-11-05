@@ -16,13 +16,14 @@ For Envio requests, also set `YEARN_ENVIO_GRAPHQL_URL`.
 
 Use `--source rpc` to select RPC explicitly.
 Use `--source envio` only on a chain with configured Envio coverage.
-The command does not switch sources after a provider error.
+Provider errors retain the selected source and stop that acquisition.
 
 Optimism uses Envio for both reports and registry inventory discovery. Historical
 Optimism RPC log queries have returned inconsistent empty successes for known
-events; changing filters or reducing the range does not establish completeness.
-Use Envio for historical collection. Changing sources does not invalidate saved
-coverage. Add `--revalidate-rpc-coverage` to recheck Optimism RPC coverage through
+events; completeness requires independent source evidence and committed range validation.
+Use Envio for historical collection. Saved coverage remains valid across source changes
+under its recorded policy. Add `--revalidate-rpc-coverage` to recheck Optimism RPC coverage
+through
 Envio within the explicit `--from-block` / `--to-block` window. Reports are checked
 for retained Yearn vaults; add `--discover` to include registry inventory and newly
 discovered vaults. This option rejects other chains and `--source rpc`.
@@ -32,8 +33,8 @@ planning the selected scans. It preserves existing events and unrelated ranges.
 An identical RPC coverage row is replaced atomically only after the Envio read
 and event writes succeed. Wider overlapping RPC records remain as historical
 evidence. After a failure, repeat the same command with the flag; successful
-Envio ranges are reused and incomplete ranges remain pending. A count of zero
-inserted rows does not mean the read found no events.
+Envio ranges are reused and incomplete ranges remain pending. Inserted-row counts describe
+new database rows; fetched-event counts also include previously stored events.
 
 ```bash
 yearn-data --db staging catch-up --chain op --source envio \
@@ -41,9 +42,9 @@ yearn-data --db staging catch-up --chain op --source envio \
   --discover --revalidate-rpc-coverage
 ```
 
-Do not delete existing event observations to force a rescan. Revalidation fetches
-reports and inventory only; it does not reprice, recompute financial outputs, or
-publish a dataset.
+Preserve existing event observations and use explicit revalidation for a rescan.
+Revalidation fetches reports and inventory. Pricing, financial recalculation and publication
+require separate commands.
 
 ## Run the command
 
@@ -56,7 +57,7 @@ yearn-data --db neon catch-up --chain op \
 
 Keep these block limits in your calling script.
 To resume, run the command again with the same limits.
-The command does not use a saved scheduler run.
+The command records an independent bounded acquisition.
 
 ## Select the finality policy
 
@@ -71,7 +72,8 @@ yearn-data --db neon catch-up --chain kat \
 ```
 
 This permits blocks up to the latest block minus 1,000 blocks.
-It does not claim that the chain protocol has finalized those blocks.
+Its evidence describes the selected confirmation policy; protocol finality requires the
+finalized-block policy.
 
 The JSON result records the selected block number, hash, timestamp, and finality policy.
 Keep this result with your acquisition records.
@@ -87,14 +89,15 @@ Use `--include-experimental-v2` to include experimental V2 registrations in this
 Previously stored experimental vaults remain available on later runs.
 
 Discovery also restores cached non-Yearn classifications when the selected
-registry or role-manager facts prove membership. Factory creation alone does not
-qualify. Registration does not supply a deployment block; existing deployment
+registry or role-manager facts prove membership. Membership requires the trusted registry or
+role-manager evidence described here. A deployment block requires creation evidence;
+existing deployment
 evidence and other cached metadata are preserved.
 
 For V3 vaults, the stored active flag follows the latest recorded role-manager
 action, including actions after the requested window.
 
-This search does not prove that every historical vault has been found.
+This search reports discovery coverage for its selected sources and bounds.
 A newly found vault can have reports before `FROM_BLOCK`.
 Fetch an earlier range if you need those reports.
 
@@ -103,8 +106,8 @@ If necessary, it then requests historical details through RPC at the selected bl
 It stops if required details remain missing or the vault release is unsupported.
 When the RPC fallback confirms no contract code at `TO_BLOCK`, the command lists
 that vault in `skipped_vaults` with its address, block and reason, then scans the
-other vaults. It does not certify report coverage for the skipped vault. An RPC
-failure is not proof of absence; it stops with the vault and block in the error.
+other vaults. The skipped vault retains incomplete report coverage. An RPC failure stops
+acquisition with the affected vault and block, leaving its evidence unresolved.
 
 ## Resume after a failure
 
@@ -114,12 +117,12 @@ A failed range has no success record.
 
 Completed ranges can be reused, even if you change `--chunk-size`.
 The command checks saved block hashes before it reuses coverage.
-Matching event identities are not added again.
+Matching event identities are deduplicated.
 Conflicting amounts or hashes cause an error.
 New transaction hashes use lowercase. Replay also recognizes legacy mixed-case
 hashes without renaming keys that other tables may reference. If existing rows
 already duplicate one identity under different spellings, the command stops and
-requests explicit reconciliation; it does not choose or delete those rows.
+requests explicit reconciliation; the conflicting rows remain intact pending reconciliation.
 
 Correcting a vault's asset or decimals requires a new coverage scan. When the
 underlying report event matches, catch-up reconciles those two report metadata
@@ -130,28 +133,30 @@ Raw event conflicts still stop the scan.
 
 Envio imports name vaults and block ranges whose catalog metadata has resolved
 while stored report metadata remains missing. Use those ranges with this command;
-ordinary forward imports and `index-events` replay do not perform reconciliation.
+reconciliation is owned by explicit catch-up.
 After repair, rerun pricing, analysis, and export as described in the
 [ingestion guide](#repair-stored-report-metadata).
 
 If a request fails:
 
 1. Read the error.
-2. If the provider rejects the range size or returns its 10,000-log limit, reduce `--chunk-size`.
+2. If the provider rejects the range size or returns its 10,000-log limit, reduce
+   `--chunk-size`.
 3. Run the same block range again.
 
 Investigate conflicting evidence before you retry.
-The command does not split failed requests or retry indefinitely.
+The command uses bounded retries and preserves failed request ranges for investigation.
 
 ## Understand the scope
 
-Stored reports and older cursors do not prove that an unscanned range is complete.
-The command leaves those records intact and does not advance the older forward cursor.
-It leaves existing coordinator tables intact but does not use a coordinator run.
+Range completeness requires successful scanning and committed coverage evidence.
+The command preserves those records and the older forward cursor.
+Existing coordinator tables remain intact; catch-up records its own range evidence.
 
 Run fee accounting, pricing, analysis, and export separately.
 Use a separate command for Tokenized Strategy fees.
-`catch-up` does not fetch volume or debt flows, change financial outputs, or copy the database.
+Volume/debt-flow acquisition, financial preparation and database copying use their own
+explicit workflows.
 
 ## Grouped fetching and recovery
 
@@ -168,7 +173,8 @@ limits fall back to smaller address groups. Coverage remains per vault and
 interval, including verified empty results. Failed fetches certify no coverage.
 
 Registry inventory scans also fetch concurrently, with membership materialized
-after all required scans finish. Concurrent requests are processed in completion order. Already committed valid
+after all required scans finish. Concurrent requests are processed in completion order.
+Already committed valid
 ranges remain reusable if another range fails, even when they are later in block
 order. Repeating the same command fetches only the remaining gaps. All database
 writes and canonical end-hash checks stay on the coordinating thread.
@@ -177,9 +183,8 @@ Optimism Envio report and registry reads require the producer's
 `chain_metadata.start_block` attestation, including reads that return no events.
 A missing, invalid, or later start block rejects the range before observations
 or replacement coverage commit. The existing upper watermark and fresh canonical
-end-hash checks still apply. A chain start attestation does not by itself prove
-that every contract subscription or dynamic registration is complete; producer
-configuration and replay checks remain separate requirements.
+end-hash checks still apply. A chain start attestation establishes the producer’s starting
+bound. Verify contract subscriptions, dynamic registrations and replay coverage separately.
 
 [Documentation index](../README.md).
 
@@ -187,7 +192,7 @@ configuration and replay checks remain separate requirements.
 
 The following discovery/index-events workflow is distinct from the explicit
 `catch-up` block window above. Its forward cursors and bounded replay flags have
-their own semantics; do not substitute one command for another during recovery.
+their own semantics; choose the recovery command matching the affected coverage model.
 
 Use Envio to find Yearn vaults and import their V2 and V3 reports.
 Use Kong to fill missing vault and asset details.
@@ -209,7 +214,7 @@ YEARN_DATA_EVENT_SOURCE=rpc yearn-data index-events --chains eth
 ```
 
 Continue running both RPC commands to keep the non-Yearn reporting dimension
-current. Switching report imports to Envio does not refresh those rows.
+current. Those rows continue to require the RPC acquisition commands.
 `discover --find-deployment` and `run lifetime-yield --find-deployment` require RPC.
 `discover --to-block` requires Envio; unsupported flag/source combinations fail.
 
@@ -218,8 +223,8 @@ Optimism uses the same Envio report and registry inventory collection as the
 other default chains. Fantom remains configured for explicit historical RPC
 work and has no configured Envio source.
 Polygon and Katana have no configured V2 discovery source. Discovery leaves
-existing V2 membership flags unchanged on those chains; it does not establish
-whether historical V2 deployments exist there.
+existing V2 membership flags unchanged on those chains; historical V2 discovery there
+remains unverified.
 
 ## Import a block range
 
@@ -233,40 +238,40 @@ yearn-data --db neon discover --chains eth --include-retired --to-block "$TO_BLO
 yearn-data --db neon index-events --chains eth --include-inactive --from-block "$FROM_BLOCK" --to-block "$TO_BLOCK"
 ```
 
-Both commands reject an upper block that Envio has not processed. Rejected
-bounds do not advance the report or inventory cursors.
+Both commands reject an upper block that Envio has not processed. Report and inventory
+cursors retain their prior positions when bounds are rejected.
 
 An import for a specific range requires both block limits.
 Use `--versions v2` to select V2 reports.
 Use `--vaults ADDRESS ...` to select specific vaults.
 
-These commands do not check whether the RPC considers the last block finalized.
-Select the upper block limit before you run them.
+Select an RPC-verified finalized upper block before running these commands.
 
 ## Include historical vaults
 
 Discovery keeps vaults that previously belonged to Yearn.
-It does not mark retired vaults as active again.
+Retired vaults retain their inactive status.
 Membership from configured Yearn registries and role managers overrides a cached
-non-Yearn classification. This includes retired members when requested. Factory
-creation alone, events from other sources, and membership after a bounded
-discovery range do not reclassify a vault. Promotion uses the latest recorded
+non-Yearn classification. This includes retired members when requested. Reclassification
+requires trusted membership within the selected discovery range. Promotion uses the latest
+recorded
 trusted membership for its active flag, including cached events after that range.
 When newer membership events are already cached, discovery at an earlier block
 preserves the existing active flag for those vaults, including later additions
 and removals.
 Use `discover --include-experimental-v2` to include experimental V2 registrations.
 
-A registration event does not prove when a vault was deployed.
+Deployment bounds require creation evidence.
 Factory creation and V2 experimental-vault creation events can fill a missing
 deployment block, including for an already cached or subsequently endorsed vault.
 Registry endorsement and role-manager membership alone leave deployment unknown.
 The importer keeps reports that occurred before registration.
-It does not assume token decimals when asset details are missing.
+Missing asset details leave token decimals unknown.
 Inventory vaults absent from Kong are retained with nullable metadata. Progress
 identifies each address with unresolved asset metadata. Their raw reports can
 still be imported; missing decimals and the corresponding valuations stay
-unknown. Refreshing catalog metadata does not rewrite previously stored reports.
+unknown. Stored report metadata requires the explicit reconciliation workflow below after
+catalog metadata is resolved.
 When Kong omits an optional name, asset symbol, or API version, discovery keeps
 the existing non-null cached value. A supplied non-null value can refresh it.
 
@@ -280,12 +285,13 @@ remain inactive. The separate discovery and report commands keep their explicit
 
 When catalog metadata resolves but stored reports still lack an asset or decimal
 scale, report imports name each affected vault and its stored block range.
-Nonzero USD amounts stay unknown until that metadata is reconciled. Repeating
-`index-events`, including a bounded replay, does not update existing report rows.
+Nonzero USD amounts stay unknown until that metadata is reconciled. Use explicit catch-up to
+reconcile existing report rows; forward imports and bounded `index-events` replays preserve
+them.
 
 Use the explicit `catch-up` command provided by the bounded report catch-up layer
-([PR #23](https://github.com/yearn/yearn-metrics/pull/23)). A checkout containing
-only this ingestion layer does not yet provide that command. Once it is available,
+([PR #23](https://github.com/yearn/yearn-metrics/pull/23)). Use a checkout containing the
+bounded catch-up layer described in that PR. Once it is available,
 set `FROM_BLOCK` and `TO_BLOCK` to cover the ranges named in the diagnostics:
 
 ```bash
@@ -301,25 +307,26 @@ block evidence through RPC even when reports come from Envio. It reconciles
 asset/decimal metadata only when the raw report evidence agrees, commits metadata
 and coverage together, and stops on conflicting raw amounts or block evidence.
 Report identities and raw amounts are preserved. The commands above are an
-operator-run repair; ordinary discovery and forward imports do not run it.
-This repair example explicitly selects DefiLlama pricing, so it does not require
-`YEARN_PRICE_PROD_KEY`. For authenticated Yearn Prices, use the commands and
+operator-run repair; run it explicitly after discovery or forward imports identify
+unresolved metadata.
+This repair example explicitly selects DefiLlama pricing, and uses that provider’s
+configuration. For authenticated Yearn Prices, use the commands and
 configuration in [historical earnings pricing](../reference/pricing.md).
 
 ## Repeat or resume an import
 
-You can repeat the same block range. Existing report identities are not added again.
+You can repeat the same block range. Existing report identities are deduplicated.
 The reported count includes fetched reports that were already stored.
 
 The importer saves each completed window before it requests the next window.
-A failed request does not advance the saved position.
+A failed request preserves the last completed position.
 An import for a specific range leaves the normal forward cursor unchanged.
 A cursor is the saved position for later imports.
 
 Imports without a specific range use one forward cursor per chain and event entity.
 They also save completed coverage per vault and event entity. A newly discovered
 vault automatically catches up from block zero, then joins ordinary forward
-imports. Registration is not used as a deployment bound. Catch-up progress names
+imports. Deployment bounds use creation evidence. Catch-up progress names
 each affected address, and completed windows survive retries.
 An existing database with only shared cursors replays each vault's history once
 to establish this coverage; existing report identities remain deduplicated.
@@ -337,12 +344,12 @@ The importer stops if a response has any of these problems:
 - A report has the wrong chain, address, or block range.
 - A page does not advance beyond the previous page.
 
-An invalid response is not treated as proof that a range has no events.
+An invalid response leaves range coverage incomplete.
 Address filters accept both lowercase and checksum address forms.
 Permanent HTTP errors fail immediately. HTTP 429, server errors, and connection
 failures have at most five attempts, with no sleep after the final attempt.
-Pagination continues until an empty page. A nonempty short page can reflect a
-server response cap rather than the end of the range; it does not complete the
-window or advance its forward cursor on its own.
+Pagination continues until an empty page. A nonempty short page can reflect a server
+response cap. Continue pagination until an empty page before completing the window and
+advancing its cursor.
 
 Run pricing, analysis, and export as separate commands after the import.

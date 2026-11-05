@@ -1,10 +1,12 @@
 # Documentation migration map
 
-The cleanup starts at commit `ef03f16fe1c90299ff5342c931563a1e8ffdf26a`. This index accounts for old source
+The cleanup starts at commit `ef03f16fe1c90299ff5342c931563a1e8ffdf26a`. This index accounts
+for old source
 paths, current topic owners and retained historical sections. Git retains original
 content; the historical copies below have date/revision notices and rebased links.
 Raw JSON receipts and the upstream patch keep their exact bytes and SHA-256.
-This is a navigation/retention record, not a procedure for restoring old live data.
+This record maps documentation paths and retained evidence. Use the recovery guide for
+restoring operational data.
 
 | Previous path | Current owner or archive | Additional historical record |
 | --- | --- | --- |
@@ -69,7 +71,8 @@ This is a navigation/retention record, not a procedure for restoring old live da
 | `docs/zero-decimal-valuation.md` | [docs/operations/recovery.md](operations/recovery.md) | — |
 
 
-The upstream patch's SHA-256 is `919f276d6fe3061a46f387ae27e421bf88c47d9161f273076f3c2463043e7d80`.
+The upstream patch's SHA-256 is
+`919f276d6fe3061a46f387ae27e421bf88c47d9161f273076f3c2463043e7d80`.
 Its current upstream disposition is unverified; preserving it avoids deleting
 potentially unique evidence based only on the lack of old incoming links.
 

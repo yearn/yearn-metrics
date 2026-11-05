@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/report-coverage-performance.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/development/performance.md](../../../development/performance.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/report-coverage-performance.md).
 
@@ -8,9 +8,9 @@
 
 ## Diagnosis and scope
 
-The bounded catch-up command already subtracts committed successful ranges. It
-does not infer coverage from recent event activity, a legacy cursor, or a vault's
-active flag. A fixed 120-vault benchmark confirms that a fully covered repeat
+The bounded catch-up command already subtracts committed successful ranges. Coverage
+requires committed range evidence for the selected vault and event scope. A fixed 120-vault
+benchmark confirms that a fully covered repeat
 makes zero report fetches. The redundant work is reading the same coverage twice
 per vault: once for saved-hash validation, once for gap planning.
 
@@ -25,13 +25,15 @@ scheduling changes are included.
 The bounded read includes all policies for the selected targets. Metadata
 enrichment can change the chosen policy after the read; only the resulting exact
 policy is reusable. Successful replay still deletes superseded metadata-policy
-coverage. Unrelated targets, chains, families and out-of-window scans are not
-reused. At most 100 vaults' relevant range rows are retained at once; the number
-of historical range rows per vault is not capped.
+coverage. Reuse is restricted to matching targets, chains, families and windows. At most 100
+vaults' relevant range rows are retained at once; each vault can supply its full historical
+range set.
 
 ## Measured results
 
-[The machine-readable receipt](../../../../benchmarks/results/2026-10/report-coverage-benchmark-2026-10-27.json) compares
+[The machine-readable
+receipt](../../../../benchmarks/results/2026-10/report-coverage-benchmark-2026-10-27.json)
+compares
 integration commit `3db530831ce79bec597a43f5ab795d45d1ed8ab7` with this optimization.
 Both runs use the same offline 120-vault inventory, blocks 10–30, 60 active and
 60 inactive vaults. Forty vaults are fully covered, forty partially covered,
@@ -55,19 +57,20 @@ boundary requests, including identity/header verification, are identical:
 5 / 4 / 0 during the covered repeat. There is no time-threshold assertion in CI;
 the regression protects bounded query count, known results and retained scope.
 Single local timings vary; the request-count reduction is the stable evidence.
-The separate latency model adds delay only to coverage SELECTs, not provider
-calls or writes, and is not a claim about hosted Postgres latency.
+The separate latency model adds an assumed delay to coverage SELECTs. Provider calls and
+writes retain their observed execution timing.
 
 These timings measure **catch-up's contribution to the TVL-start barrier**.
 `scripts/update_postgres.py` waits for catch-up, fee acquisition, pricing and
-analysis before dispatching TVL collection. This optimization reduces the first
-stage's work; it does not make TVL run earlier in the dependency order. Supplementary full-worker measurements were subsequently added in
+analysis before dispatching TVL collection. This optimization reduces the first stage’s work
+while preserving TVL’s position in the dependency order. Supplementary
+full-worker measurements were subsequently added in
 [PR #90](https://github.com/yearn/yearn-metrics/pull/90), with twelve trials through
-actual TVL dispatch and complete preparation. Those measure the maintained
-refresh worker and its documented stage order, rather than the old update script
-end to end. PR #90 is merged into main at `ab9b3d7`; its
+actual TVL dispatch and complete preparation. Those measure the maintained refresh worker
+and its documented stage order. PR #90 is merged into main at `ab9b3d7`; its
 [full-worker performance document](refresh-performance.md) and
-[raw receipt](../../../../benchmarks/results/2026-10/refresh-benchmark-2026-10-27.json) are present both on main and in
+[raw receipt](../../../../benchmarks/results/2026-10/refresh-benchmark-2026-10-27.json) are
+present both on main and in
 this branch. This PR references #56 and keeps it open until this coverage-read
 optimization also reaches the default branch. That is the remaining delivery
 condition for closing #56. The refresh implementation was reviewed separately
@@ -81,8 +84,8 @@ Events name the `report-acquisition` stage and show planned pending ranges,
 started ranges, committed row counts, failures and completion. A successfully
 scanned empty range emits a commit with zero observed rows. A failed request
 emits `range-failed`, exits without claiming coverage for that range, and omits
-the completion event. Failure events contain public bounds/target coordinates,
-not provider exception text or endpoints.
+the completion event. Failure events contain public bounds and target coordinates; raw
+provider errors and endpoints remain private.
 
 The final summary includes `coverage_read_queries`, overall post-pin `seconds`,
 and `report_work` with guaranteed `active` and `inactive` keys, even when a
@@ -90,11 +93,11 @@ class has no vaults. Empty classes contain zero for every counter and processing
 seconds. Each class reports vault count, reused ranges,
 reused/scanned block counts, completed ranges and processing seconds. Per-vault
 processing seconds include metadata enrichment but exclude shared batch reads
-and the initial batched metadata lookup; they are diagnostics, not additive
-end-to-end timings. Range counts identify collector fetch units, not HTTP pages
-or transport attempts hidden inside a provider implementation.
+and the initial batched metadata lookup; use them to diagnose per-vault work and measure
+end-to-end duration separately. Range counts identify collector fetch units. Provider
+implementations own their internal HTTP pagination and transport attempts.
 
-The collector does not add automatic retries. Retry/rate-limit failures stop the
+Provider failures return to the caller for deliberate retry. Retry/rate-limit failures stop the
 stage; the pending range is explicit in progress. Repeating the same command
 reuses committed ranges and fetches the remainder. Existing regressions cover a
 provider failure after earlier empty/nonempty commits, changed chunk sizes on

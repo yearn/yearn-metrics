@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/hosted-api.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/operations/hosted-api.md](../../operations/hosted-api.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/hosted-api.md).
 
@@ -31,8 +31,8 @@ and analytics response contracts. Collection, pricing, accounting changes, Redis
 research exports and production worker hosting are outside this change.
 
 The existing file-backed server and preview remain available. This implementation
-is a foundation, not a declaration that production latency and packaging have been
-validated on Vercel.
+establishes the serving foundation. Validate production latency and packaging on Vercel
+before operational acceptance.
 
 ## Publication flow
 
@@ -53,11 +53,11 @@ PYTHONPATH=src python -m yearn_data.cli --db staging publish-hosted \
 Use the database that actually owns those publications. Source manifests must
 reference that same logical database. Existing analytics preparation is a separate
 step. The writer uses write-capable credentials; the deployed API should receive
-separate read-only credentials. API code only opens read-only connections and never
-creates schema, collects data, refreshes prices, or publishes a new selection.
+separate read-only credentials. API code opens read-only connections to prepared serving
+tables. Writers own schema setup, acquisition, pricing and release selection.
 
 Every request reads the small selected release record. Object caches are keyed by
-immutable dataset IDs; selecting another release does not require a restart.
+immutable dataset IDs; the next request observes a newly selected release.
 `GET /api/publication` returns the selected release and fee/TVL/analytics IDs.
 Existing Powerglove discovery routes and URLs pinned to the current dataset work.
 A superseded pin returns HTTP 410; reload the selection and retry related views.
@@ -65,7 +65,8 @@ A superseded pin returns HTTP 410; reload the selection and retry related views.
 ## Local entry point
 
 Set `YEARN_DATA_DB` to the logical database name, and supply the matching database
-URL in the process environment. The HTTP module does not implicitly load `.env`.
+URL in the process environment. Export the required environment variables before starting
+the HTTP module.
 
 ```bash
 PYTHONPATH=src python -m yearn_data.hosted_api --port 3494
@@ -118,8 +119,9 @@ and exercise cache/error behavior. PostgreSQL tests use disposable schemas.
 ## Isolated local staging validation (2026-10-09)
 
 A snapshot of the real selected Neon publications was copied to local PostgreSQL
-(`staging`), in the dedicated `powerglove_hosted_20261009` schema. This does not
-change Neon or the existing local staging schema. It includes earnings run 15,
+(`staging`), in the dedicated `powerglove_hosted_20261009` schema. This operation creates
+isolated preview state; Neon and the existing local staging schema retain their captured
+state. It includes earnings run 15,
 corrected fee run 18, all prepared TVL history, current raw TVL observations and
 retained analytics inputs. Analytics were regenerated against this coherent selection.
 Historical dates now come from prepared chart rows in the hosted reader, avoiding
@@ -142,11 +144,11 @@ systemctl --user restart yearn-data-hosted-api-staging.service
 curl -fsS http://127.0.0.1:3494/api/publication
 ```
 
-The private preview URL is provided in the conversation, not committed here.
+The private review conversation contains the preview URL.
 Test TVL chain/version views and individual chains; then Fees, Vaults & Curation,
-Curation Products and Comparison. This is a frozen staging snapshot, not a live
-Neon connection. A backend code change needs an API restart. This preview does not
-exercise Vercel routing, CDN caching, or serverless cold starts.
+Curation Products and Comparison. This preview serves a frozen staging snapshot. A backend
+code change needs an API restart. Validate Vercel routing, CDN caching and serverless cold
+starts in the hosted environment.
 
 Results and screenshots are retained locally under `artifacts/hosted-api-staging/`:
 
@@ -161,11 +163,12 @@ Results and screenshots are retained locally under `artifacts/hosted-api-staging
   but 14.2 MB of uncompressed JSON.
 - Process memory peaked around 1.50 GB after these requests.
 
-These are localhost timings against a local PostgreSQL copy, not production or
-Neon latency estimates. Before deployment, replace the financial full-run load
+These timings describe localhost requests against a local PostgreSQL copy. Measure
+production and Neon latency in their deployed environments. Before deployment, replace the
+financial full-run load
 with prepared serving data, validate concurrency, and validate response compression
-and payload sizes. The prepared TVL path improves history reads but does not solve
-financial cold-start memory costs.
+and payload sizes. The prepared TVL path improves history reads; financial cold-start memory
+remains a separate optimization target.
 
 
 ## Compact financial serving follow-up
@@ -185,8 +188,8 @@ coverage verifies compact row preparation and filtered reads in a disposable sch
 
 The handler now negotiates gzip for JSON responses over 1 KB, honors `gzip;q=0`,
 and emits `Vary: Accept-Encoding`. The tested Ethereum history shrank from
-14.17 MB to 3.01 MB over the wire. This does not guarantee every possible query
-fits the eventual hosting platform's response limits.
+14.17 MB to 3.01 MB over the wire. Validate representative query sizes against the target
+hosting platform’s response limits.
 
 Follow-up local measurements, same snapshot:
 
@@ -197,7 +200,7 @@ Follow-up local measurements, same snapshot:
 - Sequential benchmark process peak: 541 MB (previously about 1.50 GB).
 - A fresh-process browser traversal with concurrent UI requests peaked at 1.15 GB
   and settled around 523 MB. Concurrency and wide financial scans remain deployment
-  concerns; this is not a production memory budget guarantee.
+  concerns; measure production memory under representative concurrency and scans.
 - Eight financial/TVL route comparisons still match after metadata/order
   normalization. Browser traversal again completed without HTTP or JavaScript errors.
 
@@ -215,18 +218,19 @@ PYTHONPATH=src .venv/bin/python -m yearn_data.cli --db neon publish-hosted \
 ```
 
 This validates the selected fee/earnings cohort, requires prepared TVL history,
-and prepares analytics for those exact dataset IDs. Preparation itself does not
-change `analytics_selection`. After preparing compact financial rows, the command
+and prepares analytics for those exact dataset IDs. Selection of prepared analytics requires
+a separate update to `analytics_selection`. After preparing compact financial rows, the
+command
 atomically selects the coherent hosted release, then consolidates the database
 into one canonical history. Successful consolidation also aligns the legacy
 `analytics_selection` with that hosted release and retires superseded releases,
 analytics and serving rows. Legacy analytics consumers therefore see the new
-publication after consolidation. Existing collectors and scheduling are not
-changed or enabled by this command.
+publication after consolidation. Collector configuration and scheduler activation remain
+separate explicit operations.
 
-Keep the printed release ID for audit, not as a promise of rollback. A subsequent
-successful publication retires the old release: recording its ID does not retain
-its data. Canonical historical dates remain available, but old publication pins
+Keep the printed release ID for audit; recovery requires verified retained data. A subsequent
+successful publication retires the old release: recovery depends on retained data as well as
+recorded identity. Canonical historical dates remain available, but old publication pins
 return 410. See [canonical history](../../reference/retention.md) for retention semantics.
 
 Failures before hosted selection leave the previous hosted release active;
@@ -234,7 +238,8 @@ completed intermediate preparations may remain stored for reuse on retry. If
 consolidation fails **after selection**, the new coherent release was already
 published. The CLI exits with status 1 and prints JSON containing its `releaseId`,
 `published: true`, `consolidated: false`, and a recovery message. A consolidation
-transaction failure rolls back cleanup, not the earlier release selection. Inspect
+transaction failure rolls back its cleanup transaction; the earlier release selection
+remains committed. Inspect
 `/api/publication` before recovery, resolve the cleanup failure and retry
 consolidation, or select a still-retained coherent release:
 
@@ -244,8 +249,8 @@ PYTHONPATH=src .venv/bin/python -m yearn_data.cli --db neon select-hosted-releas
 ```
 
 This command checks that referenced prepared datasets and matching analytics exist
-before changing hosted selection; it cannot restore a release retired by successful
-consolidation and does not independently change the legacy analytics selection.
+before changing hosted selection; recovery therefore requires a retained release. Legacy
+analytics selection is managed separately.
 API processes read selection on every request; no restart is needed. CDN TTLs
 still apply after deployment. Verify the selected release after recovery.
 
@@ -253,9 +258,9 @@ Use separate read-only credentials for the API. The dedicated `powerglove_api_re
 role has SELECT on serving tables only: `api_manifests`, `api_releases`,
 `api_selection`, `api_tvl_dates`, `api_fee_rows`, `api_fee_datasets`, `analytics_publications`,
 `tvl_snapshots`, `tvl_positions`, `tvl_chart_rows`, `tvl_chart_totals`,
-`tvl_chart_publications`. It does not receive access to raw analysis outputs or
-write privileges. Keep credentials in private environment files, never manifests
-or committed documentation. Additional serving tables require explicit grants.
+`tvl_chart_publications`. Restrict its grants to those serving tables and read operations.
+Keep credentials exclusively in private environment files. Additional serving tables require
+explicit grants.
 
 ## Neon-backed local validation
 
@@ -270,15 +275,16 @@ The initial hosted release is
 `63b1d2520ffe771fd3a81c38335305291826eb91cb2686b6a4f7c21b08a1563f`.
 At that rollout, preparation retained the existing legacy analytics selection.
 The current canonical consolidation step aligns that selection as described above.
-Permission checks confirmed zero writable public tables, no access to raw analysis outputs and no
+Permission checks confirmed zero writable public tables, no access to raw analysis outputs
+and no
 CREATE privilege on the public schema for the reader.
 
 Eight financial/TVL routes matched the existing API after metadata/order
 normalization. Initial observed requests: fees summary 3.28 seconds, current TVL
 0.65 seconds, weekly all-chain TVL history 31.02 seconds, price-neutral history
-11.41 seconds. Repeated requests were about 32–289 ms. The browser and parity
-checks overlapped later benchmark requests, so these are diagnostic observations,
-not an isolated load benchmark; do not classify every first-pass request as cold.
+11.41 seconds. Repeated requests were about 32–289 ms. Browser and parity checks overlapped
+later benchmark requests. These diagnostic observations reflect that shared load; classify
+cache state from recorded evidence for each request.
 
 The initial history latency is a deployment blocker to investigate independently
 of warm caches. Vercel packaging, CDN behavior, function limits and deployment
@@ -296,14 +302,15 @@ seconds importing fee-analysis/pricing dependencies unnecessarily, plus a date
 lookup scanning the prepared vault-row table (about 1.15 million rows).
 
 TVL requests now avoid the fee-analysis import. Publication stores the complete
-ordered date list in `api_tvl_dates`; the reader fetches one small record instead
-of deriving dates from vault observations. Re-run publication and grant SELECT on
+ordered date list in `api_tvl_dates`; the reader fetches that small prepared record. Re-run
+publication and grant SELECT on
 `api_tvl_dates` when upgrading an existing hosted database. Both local preview
 readers have been upgraded with the same release IDs. Regression coverage verifies
 that date lookup works even without the vault-row table.
 
 The final fresh-process ordinary-history HTTP request took 0.33 seconds against
-Neon. This is an empty application cache, not a forcibly cold Neon database. The
+Neon. This run starts with an empty application cache; Neon retains its existing database
+cache state. The
 original 31-second event remains unexplained; database cache/compute state and
 concurrent load were not captured at the time.
 
@@ -317,7 +324,8 @@ price selection or accounting was made in this investigation.
 
 Final unprofiled HTTP timings after restarting the preview: ordinary history
 0.332 seconds; price-neutral history 3.882 seconds. Eight data-parity comparisons
-passed. These timings do not prove the original database-cold latency is resolved.
+passed. Resolution of the original database-cold latency requires a measurement with
+verified database cache state.
 
 ## Personal Vercel deployment preparation
 
@@ -346,7 +354,7 @@ API with the personal project and team IDs asserted. No secrets are committed.
 
 Authenticated smoke tests use `vercel curl --deployment <preview-url> --scope
 rossgalloways-projects`; ordinary browser access requires the owner's Vercel login.
-This protected deployment is not yet a public Powerglove production endpoint.
+This deployment serves a protected Powerglove preview.
 
 Hosted smoke-test receipt: `artifacts/vercel-preview/results.json` (local, ignored).
 All 13 consumer routes returned HTTP 200 JSON, including the Ethereum vault-history
@@ -354,7 +362,7 @@ response compressed to approximately 3.01 MB. Source-file URLs return 404. Previ
 SSO authentication remains enabled, and the authenticated cache check returned
 `x-vercel-cache: MISS`; CDN effectiveness has not been established for public traffic.
 First observed hosted fees/price-neutral requests took approximately 12–15 seconds;
-this working preview does not establish production latency readiness. The two
+production latency acceptance requires representative deployed measurements. The two
 credential-less setup deployments, including the automatically promoted initial
 production deployment, were deleted. The credentialed preview remains available.
 
@@ -363,15 +371,16 @@ production deployment, were deleted. The credentialed preview remains available.
 
 The personal Vercel project is connected to `rossgalloway/yearn-data`; its
 production branch is `main`. This API branch sets `git.deploymentEnabled=false`
-in `vercel.json`, so pushing it does not deploy. Manual preview deployments remain
+in `vercel.json`, so deployment requires a separate explicit operation. Manual preview
+deployments remain
 available with explicit `--target=preview --scope rossgalloways-projects`.
-This branch-level file does not change configuration on other Git branches.
-Do not enable production deployment until its environment and release are ready;
+This file configures deployment behavior for its own branch.
+Enable production deployment only after verifying its environment and release;
 the database credentials currently exist only in the Preview environment.
 
 A later production deployment created after connecting GitHub lacks those
-preview-only credentials and returns 503. Powerglove continues to use the pinned,
-verified preview URL above, not the production alias.
+preview-only credentials and returns 503. Powerglove uses the pinned, verified preview URL
+recorded for this rollout.
 
 ## TVL overlap graph deployment
 
@@ -391,7 +400,7 @@ prepared date index must match. A changed `asOfTimestamp`, changed date set, or 
 prepared history fails publication before changing the hosted selection. Collect
 new observations in a new run, generate its new dataset ID, and prepare its history
 and analytics before publishing. Preparation is idempotent for an existing dataset;
-it does not extend an already prepared dataset in place.
+changed inputs require a new dataset identity.
 
 ## Grouped fee vault histories
 
@@ -415,19 +424,19 @@ Buckets use UTC calendar months or Monday-based weeks. Explicit `since` and
 `until` clip the first and last bucket bounds, and event inclusion retains the
 existing half-open range capped at the immutable publication cutoff. With no
 `since`, the first bucket starts at the earliest matching event; with no `until`,
-the last bucket ends at the cutoff. Empty buckets within that range contain
-`count: 0` and `vaults: []`, rather than fabricated numeric amounts. Requests
+the last bucket ends at the cutoff. Empty buckets within that range contain `count: 0` and
+`vaults: []`; financial amounts retain their availability state. Requests
 starting at or after the cutoff still fail validation. An explicit `until`
 beyond the cutoff preserves the final publication bucket's calendar identity,
 but emits no later calendar buckets. Even an arbitrarily large `until` cannot
 create an unbounded future calendar. `dataCutoffTimestamp` distinguishes a
-partially observed final bucket from a complete period; consumers must not
-interpret wholly unobserved requested periods as genuine zero.
+partially observed final bucket from a complete period; consumers must preserve wholly
+unobserved periods as unavailable.
 
 Amounts retain the existing Decimal precision and source order within each
 bucket. Product membership, designated earnings legs, and unavailable versus
-genuine-zero values retain the existing policies. Compact rows calculate only
-the two amounts consumed by these views; they do not calculate unused subtotals. No
+genuine-zero values retain the existing policies. Compact rows calculate the two amounts
+consumed by these views. No
 monthly totals are recombined to produce financial sums. This endpoint requires
 no schema migration, publication backfill, or additional database permissions.
 It uses the existing stale-pin and mid-request publication-change HTTP 410

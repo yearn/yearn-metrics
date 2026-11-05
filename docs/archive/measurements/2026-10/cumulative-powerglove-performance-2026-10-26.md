@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/cumulative-powerglove-performance-2026-10-26.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/development/performance.md](../../../development/performance.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/cumulative-powerglove-performance-2026-10-26.md).
 
@@ -8,8 +8,7 @@
 
 This compares the actual Powerglove production build before all three serving
 passes with the final build, backed by the same actual published Yearn Data in
-read-only Neon. It measures browser navigation through the private Tailscale
-preview, rather than extrapolating synthetic backend timings.
+read-only Neon. It measures browser navigation through the private Tailscale preview.
 
 ## Frozen revisions and publication
 
@@ -18,8 +17,8 @@ preview, rather than extrapolating synthetic backend timings.
 | Yearn Data | `3f6df4b1095bddce6ddb1762df4a1c2341ca4834` | `a123d1bc58e769c34887688bc34144e31bfb7efd` |
 | Powerglove | `df81fdddfb8c70e66e40a89260326ca66bd8bc14` | `94487b84f6ca0fd49c7717c6a4ab313f2220247a` |
 
-The baseline frontend is the parent of the first grouped-history optimization,
-not that optimization itself. The after backend includes grouped histories,
+The baseline frontend is the parent revision preceding the first grouped-history
+optimization. The after backend includes grouped histories,
 ordered summary accumulation and validated bounded JSON row loading; frontend
 changes use grouped histories and reuse FeesPanel's selected dataset in the monthly table.
 The final row-loading backend is now committed locally as `a123d1b`.
@@ -49,16 +48,16 @@ a real monthly vault table with vault links, a rendered TVL chart, no fee error
 or loading state, no outstanding fee/TVL request, and the final overall history
 request matching both selected calendar dates. This successful state must remain
 stable for one second; the recorded ready time subtracts that confirmation second.
-This is **fee-critical UI ready with TVL chart**, not whole-page settlement or
-completion of every auxiliary analysis/vault chart. Rounded visible values are
+The measured milestone is **fee-critical UI ready with TVL chart**. Auxiliary analysis and
+vault charts have separate completion times. Rounded visible values are
 checked separately from exact API financial parity.
 
 The first pair started with fresh backend processes whose only prior request was
 publication discovery. Database, OS and provider caches were not flushed, and
 requests within a navigation can share application caches. Subsequent pairs keep
 the same server processes and therefore measure warm-server navigation with a
-fresh browser. They alternate version order. Server and browser cache conditions
-must not be conflated; the first single pair is not a cold-database distribution.
+fresh browser. They alternate version order. Record server and browser cache conditions
+separately. The first pair describes the observed cache state of those two navigations.
 
 ## Results
 
@@ -88,9 +87,9 @@ speedup. The slowest optimized sample is retained, without outlier removal.
 | Warm compressed response-body median (Playwright sizes) | 2,633,127.5 bytes | 2,029,543 bytes |
 
 There are **59 fewer completed API responses** in both conditions. Warm decoded
-body bytes fell 45.6%; compressed response-body bytes fell 22.9%. These counts
-include all observed `/api/` responses, not just fee routes, and exclude canceled
-requests. The raw bundle retains cancellation records: some default-range
+body bytes fell 45.6%; compressed response-body bytes fell 22.9%. These counts cover all
+observed completed `/api/` responses, including fee and other routes. The raw bundle retains
+cancellation records: some default-range
 requests were aborted normally as the TVL-bounded range replaced them. Every
 completed response in all ten valid navigations returned HTTP 200; all ten
 reached the successful target state, with no browser exceptions or visible fee
@@ -105,21 +104,23 @@ requests from four to three. Server responses are gzip encoded and advertise
 cache policy, but no CDN HIT was involved on this local preview path.
 
 First-pair summary, chain/type-chart and monthly-table milestones respectively
-fell from 16.579/26.093/26.849 s to 9.448/12.631/13.251 s. These are local observed
-milestones, not isolated backend phase attribution. On warm servers the summary
+fell from 16.579/26.093/26.849 s to 9.448/12.631/13.251 s. These milestones describe
+observed local browser behavior. Backend phase attribution requires separate
+instrumentation. On warm servers the summary
 first-ready milestone was slower after (median 1.506 s versus 0.800 s), while
 chain/type charts and the monthly table improved (4.146→2.493 s and
 3.806→2.611 s). The overall gain does not imply every individual stage improved.
 
 All request timings, sizes, headers, hashes, valid and invalid samples are in
-[the raw measurement bundle](../../../../benchmarks/results/2026-10/cumulative-powerglove-performance-2026-10-26.json).
+[the raw measurement
+bundle](../../../../benchmarks/results/2026-10/cumulative-powerglove-performance-2026-10-26.json).
 
 ## Apparatus failures retained
 
 An initial sandboxed Chromium launch failed before any navigation; authorized
 unsandboxed launch worked. An exploratory warm attempt then exposed a harness
 bug: it compared the selected range with the last completed per-vault history
-rather than the overall history. Its primary UI was ready by 2.749 s, but the
+in place of the intended overall-history result. Its primary UI was ready by 2.749 s, but the
 incorrect matcher produced a 120-second timeout. The following baseline sample
 was interrupted. Both records remain under `invalidApparatusSamples`; neither
 contributes to the reported warm results. The corrected harness was frozen for
@@ -142,7 +143,8 @@ vaults. A matching visible rounded value alone would not establish exact parity.
 
 The captured responses provide the stronger financial check: the first pair’s 32
 shared response instances (29 distinct normalized request keys), including
-summaries, fee history and TVL data, are deeply equal. The new compact grouped-history response is an
+summaries, fee history and TVL data, are deeply equal. The new compact grouped-history
+response is an
 intentional contract projection, so its whole-response hash cannot match the
 original individual vault responses. Instead, all 48 contract-scope and 12
 product-scope buckets were matched to original responses using the exact bucket
@@ -150,7 +152,9 @@ start/end timestamps, dataset pin and scope. All 14,070 returned vault rows matc
 in order, identity and every compact financial field, including exact Decimal
 strings, null and genuine zero. Compact `lifetimeEarnings` intentionally retains
 `netYieldUsd`; unrelated source fields are not asserted to exist in that projection.
-The same compact comparisons passed for each of the four warm pairs (35 common response instances per pair), and all ten rendered hashes match. Both grouped responses retain data cutoff timestamp `1792627200`.
+The same compact comparisons passed for each of the four warm pairs (35 common response
+instances per pair), and all ten rendered hashes match. Both grouped responses retain data
+cutoff timestamp `1792627200`.
 
 - Contract grouped response: `d47014e68bc2cb63672bc551c4b535ceda8d09b9b135f0fa708ab29b2cb62433`
 - Product grouped response: `82d8dbb04a9a2668f2a50fba124c48f4741ab065e1457242dc2051a425f2b905`
@@ -179,10 +183,10 @@ comparison; compare them without additional database requests using
 
 The bundle retains request paths/query parameters, response hashes, publication
 metadata, HTTP status/timing/size and cache headers. Decoded body bytes are not
-wire bytes; request sizes are also recorded. This is one shared host accessing
-its own private preview, not external-user geography, production CDN behaviour,
-a confidence interval, an isolated attribution of each optimization or a claim
-that every page panel completes at the reported time. Heavy local tests/builds
+wire bytes; request sizes are also recorded. This measurement covers one shared host
+accessing its own private preview. Generalizing to external users, production CDN behavior
+or individual optimizations requires separate measurements. The reported milestone covers
+the fee-critical UI and TVL chart. Heavy local tests/builds
 were held during measurement. Small samples still permit network/provider drift.
 
 ## Delivery validation

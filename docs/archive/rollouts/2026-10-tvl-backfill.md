@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/tvl-history.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/operations/tvl.md](../../operations/tvl.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/tvl-history.md).
 
@@ -10,7 +10,7 @@
 newest month first. It calls the same `collect_tvl` accounting code as the CLI;
 batched RPC requests only change acquisition speed. Deployment boundaries are
 verified against archive code, and successful prices and dated blocks are cached
-in the selected database. It never imports historical TVL values.
+in the selected database. It acquires historical TVL through the configured dated collectors.
 
 The initial October 2026 local job used a separate `data/tvl-backfill.sqlite`.
 TVL now owns namespaced tables in the shared database; see
@@ -41,8 +41,8 @@ than January 2020, and ends at October 5, 2026's UTC close. Chains without a usa
 finalized archive RPC remain pending. Missing prices or reads remain unknown.
 Factory discovery receipts and known candidate mappings define catalog coverage;
 this job does not certify that every historical holder or bridge transition has
-been discovered. Curation remains separate in the monthly exports. Per-chain
-exports do not claim a combined cross-chain headline TVL.
+been discovered. Curation remains separate in the monthly exports. Per-chain exports
+describe their selected chain; a combined cross-chain headline requires unified accounting.
 
 Archive settings also serve ordinary full-node reads. `ARCHIVE_RPC_URI_FOR_<id>`,
 `ARCHIVE_RPC_URL_<id>`, and `RPC_URI_FOR_<id>` take precedence over named settings
@@ -61,8 +61,8 @@ because its RPC rejects larger historical requests. Sonic (146) and Berachain
 (80094) are excluded from TVL discovery and collection by project scope. Yearn Prices
 namespaces for Gnosis, Sonic, Berachain, and Robinhood are explicitly mapped;
 HyperEVM balances can be collected, but its USD prices remain unavailable under
-the currently configured Yearn Prices namespaces. These limitations are reported
-in the progress preview rather than converted to zero.
+the currently configured Yearn Prices namespaces. The progress preview reports these
+limitations with unavailable amounts.
 
 Post-run validation found valid zero-padded ABI returns on early Ethereum Yearn
 vaults. Scalar getters and strategy tuples now accept a declared ABI prefix with
@@ -76,6 +76,7 @@ calling an undefined price-per-share getter. Residual read retries retain their
 original runs and use the same pinned historical blocks.
 
 Sonic and Berachain are excluded even when returned by upstream catalogs or
-retained in an existing database. They do not produce pending-RPC notices.
-Existing records are retained; the TVL scope excludes them rather than deleting
+retained in an existing database. Scope filtering keeps these chains outside pending-RPC
+reporting.
+Existing records are retained; the TVL scope applies its exclusion policy while preserving
 shared catalog history.

@@ -21,7 +21,8 @@ bundle as a fallback when no system CA file is available. This explicit path
 also works with binary libpq builds whose OpenSSL default paths differ from
 Python's. Remote URLs cannot weaken this verification; `sslrootcert`
 may select an explicit CA bundle. Only loopback or Unix-socket connections may
-explicitly use `sslmode=disable`. `YEARN_DATA_DB_SCHEMA` selects an already-created schema, defaulting
+explicitly use `sslmode=disable`. `YEARN_DATA_DB_SCHEMA` selects an already-created schema,
+defaulting
 to `public`. Use the same schema and logical database when reading a publication.
 
 ```bash
@@ -31,14 +32,14 @@ yearn-data --env /path/to/.env --db staging analyze lifetime-yield
 ```
 
 `migrate-postgres`, `merge-databases` and `tvl import-catalog` are removed. The
-completed import is preserved in Git history. Existing files and verified archives
-are not deleted, rewritten or silently converted. Recovery uses retained receipts
-and a historical checkout in isolation; old file-based publication manifests do
-not work with this Postgres-only runtime. Republish from the existing Postgres data.
+completed import is preserved in Git history. Existing files and verified archives retain
+their original content. Recovery uses retained receipts
+and a historical checkout in isolation; the current runtime requires Postgres-backed
+publication manifests. Republish from the existing Postgres data.
 
 ## Storage boundary
 
-The pipelines share the Postgres database, not mutable catalogs or price caches.
+The pipelines share Postgres storage and own separate catalogs and price caches.
 
 | Records | Tables |
 | --- | --- |
@@ -50,8 +51,8 @@ The pipelines share the Postgres database, not mutable catalogs or price caches.
 | TVL cached prices and backfill checkpoints | `tvl_prices`, `tvl_backfill_*` |
 
 TVL can read fee/earnings strategy evidence to expand its candidate mappings. It
-writes its own strategy mappings and coverage; TVL discovery does not change the
-fee/earnings catalog, pricing decisions or analysis outputs. Run IDs stay local to
+writes its own strategy mappings and coverage; fee/earnings catalogs, pricing decisions and
+analysis outputs retain their independent owners. Run IDs stay local to
 their respective run tables.
 
 ## Tests
@@ -74,7 +75,7 @@ docker compose -p yearn-metrics-tests -f ops/test-postgres.compose.yml down
 ```
 
 The test container uses temporary storage and a dedicated localhost port. These
-credentials are test-only examples. Never use a production database for tests.
+credentials are test-only examples. Use a disposable, isolated database for tests.
 CI runs the same suite against a disposable Postgres service. Pure SQL splitting,
 row access and parameter helpers have no SQLite module dependency.
 
@@ -83,18 +84,20 @@ row access and parameter helpers have no SQLite module dependency.
 Staging uses a separate Postgres 18 container (matching Neon), database, role and Docker volume.
 It binds only `127.0.0.1:55435` and restarts automatically. Its credentials are in
 ignored `.env` / `data/local-postgres.env` files. Set `STAGING_DB_URL` to its local
-connection URL with `?sslmode=disable`; hosted Neon requires certificate and hostname verification.
-Select staging explicitly with `--db staging`; its publications store `staging`
-rather than a credential-bearing URL. Keep staging publications separate from
+connection URL with `?sslmode=disable`; hosted Neon requires certificate and hostname
+verification.
+Select staging explicitly with `--db staging`; its publications identify the logical
+database as `staging`, keeping credentials private. Keep staging publications separate from
 Neon publications.
 
 Seed an empty staging database from a Postgres dump and restore, with explicit
-operator approval and verification; the retired SQLite importer is unavailable. The staging copy is a point-in-time development copy, not a live
-replica or Neon recovery backup. Integration tests can use `STAGING_DB_URL` as
+operator approval and verification; the retired SQLite importer is unavailable. The staging
+copy provides a point-in-time development dataset. Configure and test Neon recovery
+separately. Integration tests can use `STAGING_DB_URL` as
 `YEARN_TEST_POSTGRES_URL`; they create isolated temporary schemas.
 
 Existing SQLite archives and their verified restore metadata remain historical
-recovery evidence. Code retirement does not authorize deleting those archives.
+recovery evidence. Preserve those archives through code retirement.
 Neon recovery settings and a tested recovery path remain a separate requirement.
 
 The existing staging container can be started with
@@ -102,7 +105,7 @@ The existing staging container can be started with
 records its image, localhost binding and external volume for future management.
 Set `YEARN_STAGING_ENV_FILE` to the existing ignored credential file when using
 Compose. Adopting the existing volume requires removing only the stopped
-container first; do not remove the volume. Do not run two containers on this port.
+container first; preserve the external volume and use one container on this port.
 
 Use a dedicated environment for each checkout; verify the imported module path
 as described in [development setup](../development/setup.md). No legacy SQLite
@@ -115,7 +118,7 @@ locations and verified restore hashes are in the
 `scripts/update_postgres.py` runs a bounded report acquisition, fee calculation,
 Yearn-only pricing, paired analyses, one full-catalog TVL close and chart
 preparation. Select block bounds and a closed UTC cutoff explicitly. A report
-window covers the selected chain; it does not claim all-chain fee freshness.
+window covers the selected chain; the acquisition bounds describe fee freshness for that chain.
 For chains with product Tokenized Strategies, choose `--to-block` at a finalized
 block whose timestamp is strictly before `--cutoff`. A finalized head at or after
 the cutoff is incompatible with this updater; choose the last finalized block
@@ -137,7 +140,8 @@ python scripts/update_postgres.py --db neon --env /path/to/.env \
 Coordinate writers: run one update at a time. Pricing and fee-calculation batches
 are limited to 500 targets; inspect their results and repeat acquisition/pricing
 for larger catch-ups before publishing. Missing values retain existing semantics.
-This is a specialized manual publisher, not the nightly chain. Its block/date
+This specialized manual publisher supports explicitly bounded operator work. The nightly
+chain uses the native refresh worker. Its block/date
 scope and 500-target limits differ from native refresh budgets. Coordinate
 writers and finish the [nightly handoff](nightly.md#required-handoff-after-a-manual-publication)
 after any manual publication on an installation with a timer.

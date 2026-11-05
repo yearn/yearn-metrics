@@ -5,7 +5,7 @@ An execution trace records operations performed during a transaction.
 
 The tool replays a transaction in a local Anvil process.
 It uses saved prestate: the account and contract state from before the transaction.
-It does not connect to a public RPC, write a database, or change fee acceptance rules.
+It replays local evidence under the existing fee acceptance rules.
 
 ## Prepare the input
 
@@ -22,7 +22,7 @@ It does not connect to a public RPC, write a database, or change fee acceptance 
 | `vaults` | List of vault addresses to inspect. |
 | `fork` | EVM rules: `istanbul`, `berlin`, or `london`. |
 
-Do not invent missing state or replace the sender with a funded account.
+Use the recorded state and original sender; leave missing evidence unresolved.
 
 The optional `sender_prestate_proof` field supports a limited sender-state correction.
 It must contain the existing proof tied to the parent block hash.
@@ -31,7 +31,7 @@ The correction applies only when the required untouched-sender checks pass.
 The tool also accepts the maintained test input files.
 For these files, `event.vault_address` supplies the vault address.
 `trace.local_replay.fork` supplies the EVM rules.
-The tool does not use the expected trace operations to perform the replay.
+The tool derives replay execution independently of the expected trace operations.
 
 ## Run the replay
 
@@ -44,7 +44,7 @@ python scripts/replay_fantom_prestate.py \
 
 The command reads saved input only. It has no option to fetch missing input.
 It replaces the output file only after verification succeeds.
-It does not overwrite the original evidence.
+It preserves the original evidence.
 
 ## Understand the checks
 
@@ -59,12 +59,13 @@ The tool checks:
 
 Unsupported operations, incomplete state, uncertain refunds, or mismatched logs cause an error.
 A successful replay provides evidence for fee verification.
-It does not authorize an estimated fee or bypass the acceptance rules.
+Fee acceptance continues to require the existing supported execution evidence.
 
 ## Read the output
 
 The output contains compact traces grouped by vault.
-It also includes the original transaction and block identities and the input file's SHA-256 hash.
+It also includes the original transaction and block identities and the input file's SHA-256
+hash.
 A hash identifies the exact data used for the replay.
 
 Each trace records:
@@ -80,8 +81,8 @@ Python callers can use `fetch_replay_traces` to fetch missing native input.
 This helper sends one batch with fixed limits and checks each response identity.
 It limits the response to 20 MiB.
 
-The offline command does not call this helper.
-The helper does not require archived migration tools.
+Invoke this acquisition helper separately before offline replay.
+The helper runs with the current repository tooling.
 
 ## Run the local execution tests
 

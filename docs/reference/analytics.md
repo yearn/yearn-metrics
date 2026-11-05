@@ -1,9 +1,9 @@
 # Owned Powerglove analytics on Postgres
 
 The active stats consumers can use Yearn Data for TVL, fees, reported earnings,
-DefiLlama comparison and membership, nested fee stacks and profitability. The API
-reads stored observations and prepared analytics from Neon. It does not query the
-legacy services, their databases, Kong, DefiLlama or an RPC while serving requests.
+DefiLlama comparison and membership, nested fee stacks and profitability. The API serves
+stored observations and prepared analytics from Neon. Collectors acquire external provider
+and chain evidence before preparation.
 
 ## Prepare and serve
 
@@ -21,7 +21,8 @@ yearn-data --db staging prepare-analytics \
   --publication data/staging/fees --tvl-publication data/staging/tvl
 ```
 
-These write staging inputs/preparations, not a hosted release selection. Inspect
+These commands write staging inputs and preparations. Hosted release selection requires a
+separate publication. Inspect
 availability and matching financial/TVL IDs before a separate publication.
 `--comparison-db` is retired: prepared comparisons need no legacy database.
 
@@ -36,8 +37,8 @@ imported TVL, fees, reports and prepared daily TVL chart rows.
 
 Known zero rates/amounts are preserved. An unavailable retry retains a previous
 known observation and records the retained observation's age (fee entries expose
-`retainedFeeConfigurations`, with per-root `feeObservation` provenance); it does not erase
-known inputs. Retained fee configurations preserve the full supported observation,
+`retainedFeeConfigurations`, with per-root `feeObservation` provenance); known inputs remain
+available. Retained fee configurations preserve the full supported observation,
 including its block and contract family, and record the unavailable retry separately.
 A changed accountant or rejected verification cannot reuse old supported rates.
 Retained external references keep their timestamps and mark comparison availability
@@ -46,8 +47,8 @@ when collection fails. A preparation
 failure leaves the previous selected publication usable.
 
 Finance route collection accounts for every entry in the declared registered-route
-array, independent of key order. Unsupported declarations fail collection instead
-of silently dropping deductions. Asset references from an external JavaScript
+array, independent of key order. Unsupported declarations fail collection explicitly,
+preserving incomplete deduction status. Asset references from an external JavaScript
 module are retained under `unresolvedFields`; affected contributions stay
 unavailable until those assets can be established, while unrelated routes remain
 usable. Known-zero debt needs no asset conversion. No asset address is inferred
@@ -60,22 +61,22 @@ requests. Standalone analytics selection records its own `tvlDatasetId` and `fee
 The hosted API instead uses the analytics ID bound into the coherent hosted
 release with those same financial and TVL IDs. Inspect these identities and
 observation times; on HTTP 410 reload the hosted selection and related views
-together, rather than combining newer core data with old analytics.
+together to keep core data and analytics on matching publication IDs.
 
 ## Methodology
 
 - DefiLlama totals: collect `yearn-finance` and `yearn-curating` directly from
   `api.llama.fi`, preserving provider timestamps and payload fingerprints. They are
-  external reference figures, not a second source of local Yearn accounting.
+  external reference figures for comparison with local Yearn accounting.
 - Membership: evaluate the local catalogue against the frozen finance adapter's
   Kong candidates, exclusions, positive on-chain assets, V1 rules and nested debt
   deductions. Curation uses the current Yearn entry in the upstream curator registry,
   its explicit ERC-4626 vaults and factory creation-owner evidence. The frozen
   source URLs/text/hashes and per-vault blocks/evidence are stored with the input.
-  This is an adapter reconstruction, not a DefiLlama-supplied vault balance feed.
+  This reconstruction applies the frozen adapter’s rules to locally acquired vault evidence.
   Unknown queue/debt reads or missing creation evidence cannot prove inclusion or
-  absence. Unsupported finance chain-scope changes fail collection rather than
-  silently extending the reconstruction. Missing strategy-count evidence is unknown;
+  absence. Finance chain-scope changes require explicit support before collection can
+  proceed. Missing strategy-count evidence is unknown;
   an observed zero count remains distinct. Unsupported curation and factory source
   shapes fail collection explicitly.
 - Fee configuration: retain Kong's declared fee metadata as diagnostic evidence;
@@ -92,16 +93,16 @@ together, rather than combining newer core data with old analytics.
   realization times can change actual charged fees. Unsupported or unresolved
   paths have null effective rates. A known child outside the selected snapshot
   is also unresolved: the parent's own configured rates remain in the tree,
-  but do not establish the combined rate through the missing child. Collect the
+  while the combined rate through the missing child remains unavailable. Collect the
   child's dated valuation and fee configuration before reporting that effective
   rate. Capital-exhausted branches are reported under `truncatedAllocations`;
-  a child capped by an observed zero TVL is not truncation.
+  a child capped by an observed zero TVL has a known zero-capital allocation.
   External root fractions determine the stack
-  capital summary; nested roots do not each contribute their full gross capital.
+  capital summary; nested roots contribute their external root fractions.
 - Profitability: use the trailing 365 UTC days ending at the earlier supported
-  financial/TVL cutoff, with equal-duration daily capital observations. The
-  denominator is mean observed daily gross contract TVL, not the latest balance.
-  Do not fill gaps or prehistory with zero. Eligibility requires at least 90
+  financial/TVL cutoff, with equal-duration daily capital observations. The denominator is
+  mean observed daily gross contract TVL. Preserve gaps and unsupported prehistory as
+  unavailable. Eligibility requires at least 90
   observed days and 80% coverage from the first supported observation; fees before
   supported TVL history make annualized yield unavailable. Complete priced fee
   observations are required for a fee-yield ratio. Annualization uses the supported
@@ -109,7 +110,8 @@ together, rather than combining newer core data with old analytics.
 - Trends: adjacent half-year periods; at least three reports; changes above/below
   0.005 are improving/declining, otherwise stable. Unsupported comparisons are
   `insufficient_data`. Pricing confidence is high at 80% priced fee coverage,
-  medium at 40%, otherwise low; it is coverage, not a guarantee of quote accuracy.
+  medium at 40%, otherwise low; these levels describe priced-fee coverage. Quote accuracy
+  requires separate validation.
   Quadrants use the displayed cohort ($10k–$100M current gross TVL) within the
   requested chain scope, with current TVL on the capital axis and time-weighted
   fee yield on the yield axis. High yield is strictly above the cohort median.
@@ -117,7 +119,7 @@ together, rather than combining newer core data with old analytics.
   unavailable and excluded from classification.
 - Fee capture summaries use only vaults with complete fee and gain observations.
   `feeCaptureCoverage` states the contributing and expected vault counts and labels
-  a subset partial; it is not a complete protocol-wide capture claim.
+  a subset partial. The stated cohort defines the summary’s scope.
 - Unpriced current vaults remain in comparable coverage as `unavailableTvlVaults`;
   confirmed zero counted TVL is excluded from the positive-capital comparison.
   Fee-stack nodes expose stored contract-family evidence (or null if unknown).
@@ -127,7 +129,8 @@ together, rather than combining newer core data with old analytics.
 - Collector summary counts describe the stored input IDs, including retained
   observations; `attemptCoverage` separately describes the latest acquisition.
 - Fees charged at different layers remain distinct. Earnings are incident-adjusted
-  contract-level reported gains, not consolidated nested economic yield. Summary
+  contract-level reported gains. Consolidated nested yield requires historical ownership and
+  recognition evidence. Summary
   profitability denominators are gross contract capital and are labeled as such;
   headline external TVL retains its existing native deductions.
 
@@ -141,15 +144,16 @@ together, rather than combining newer core data with old analytics.
 | `/api/comparison` | `publicationId`, optional matching `datasetId` |
 
 Developer coverage is in response availability fields and publication input
-metadata. Financial nulls render as unavailable amounts; the UI does not add a
-quality dashboard. Only verified members show a DL indicator. The unused legacy
+metadata. Financial nulls render as unavailable amounts; detailed coverage remains in
+developer-facing metadata. Only verified members show a DL indicator. The unused legacy
 route fallbacks remain configured, but no active migrated stats request needs them.
 
 Validate the three new sections, aggregate comparison and existing core charts
 through the actual Powerglove proxy. Check the selected IDs, browser errors and
 request routing. The API must start without a legacy comparison database and
-return the prepared values with legacy services inaccessible. Recorded old publication IDs are not recovery backups after canonical consolidation.
-Verify retained data before any recovery; a local preview does not deploy code.
+return the prepared values with legacy services inaccessible. Recovery requires verified
+retained data or a restorable backup. Verify the serving deployment separately from local
+preview checks.
 
 ## Missing external chain breakdowns
 
@@ -166,7 +170,7 @@ chain/asset/day/price rejections. Affected histories and matching analytics must
 be prepared again after a policy change. No later price or fabricated zero fills
 a rejected quote; other known observations still contribute to explicitly known
 subtotals. Monthly denominators must use the repaired daily observations and
-dated ownership deductions, not an older aggregate. Historical incident dates,
+dated ownership deductions from that preparation. Historical incident dates,
 validation counts and monthly figures are retained in the
 [analytics rollout record](../archive/rollouts/2026-10-analytics-cutover.md).
 

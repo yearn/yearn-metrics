@@ -1,12 +1,14 @@
 > Historical reference captured from `docs/incremental-tvl-history.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/reference/tvl-history-preparation.md](../../../reference/tvl-history-preparation.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/incremental-tvl-history.md).
 
 ## Benchmark and validation
 
-[The saved receipt](../../../../benchmarks/results/2026-10/tvl-incremental-benchmark-2026-10-27.json) contains three
+[The saved
+receipt](../../../../benchmarks/results/2026-10/tvl-incremental-benchmark-2026-10-27.json)
+contains three
 sequential local trials on the final recovery-corrected implementation. Each
 trial compares the current explicit full-rebuild path (`--full-rebuild`) against
 incremental preparation, using 80 vaults, one ownership edge per date, 32 initial
@@ -38,11 +40,11 @@ date is 7,960. Separate integration coverage compares dependent analytics,
 unknown values, genuine zero, current-only bridge transitions, broader policy
 invalidation, competing builders and interruption recovery.
 
-These are small offline fixtures with local Postgres. Counters measure logical
-rows returned/read/written, not physical pages or hidden candidate rows scanned
-by the database query plan. Full selected-input scanning and full immutable
-row copying remain measurable costs; the change reduces accounting/aggregation
-work, not every historical read/write. Single timings vary; every raw trial is
+These are small offline fixtures with local Postgres. Counters measure logical rows
+returned, read and written. Physical pages and candidate scans require query-plan
+instrumentation. Full selected-input scanning and full immutable
+row copying remain measurable costs; the change targets accounting and aggregation work.
+Single timings vary; every raw trial is
 retained, and CI asserts work/output contracts without a timing threshold.
 No production backfill, preparation, release selection or provider calls were run.
 
@@ -60,12 +62,12 @@ separate historical original-module probe. Its loader is not part of the
 supported reproduction command. CI still runs the complete existing suite on
 both Python matrices.
 
-Gap receipts begin at each chain’s first retained observation. A newly added chain
-does not create gaps before that date. Targeted-backfill receipts record the
+Gap receipts begin at each chain’s first retained observation. Gap accounting for a newly
+added chain starts at that date. Targeted-backfill receipts record the
 requested inclusive bounds and matched dates; a range matching no captured date
 is rejected. A retry that completes interrupted totals reports `prepared`; only a
 retry with both rows and totals already complete reports `already-prepared`.
 
 If consolidation retires a newly prepared dataset before its final receipt is
-read, preparation raises an explicit retirement error. The CLI does not report
-`null` as a successful preparation; retry from the retained captured inputs.
+read, preparation raises an explicit retirement error. The CLI treats `null` as an
+incomplete preparation; retry from the retained captured inputs.

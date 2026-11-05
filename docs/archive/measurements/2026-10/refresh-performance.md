@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/refresh-performance.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/development/performance.md](../../../development/performance.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/refresh-performance.md).
 
@@ -18,7 +18,7 @@ covered, 40 partially covered and 40 initially uncovered report ranges. Every
 vault has one report with gain 1000000 at six decimals; the accepted provider
 quote is 2 USD. Independently expected net yield is 240 USD and paid fees 24 USD.
 The cutoff is 172800, with two TVL closes and identical offline archive responses.
-These are fixture amounts, not production coverage or market-price claims.
+These amounts belong to the controlled fixture.
 
 Each trial runs extension followed by a fully covered repeat. Both explicitly
 repair the same TVL dates so the timer ends at actual collection dispatch. The
@@ -32,16 +32,17 @@ are retained. This distinguishes the actual workflow ordering from the older
 single-chain script and from a catch-up-only measurement.
 
 The harness counts coverage SELECTs made by the worker's data connections,
-including discovery scopes. It records report fetches at the public provider
-boundary, not transport requests or hidden provider retries. Optional latency
-is a model adding delay only to coverage reads; it does not measure hosted
-Postgres round trips. There is no CI timing threshold or changed CI selection.
+including discovery scopes. It records report fetches at the public provider boundary.
+Provider implementations own internal transport attempts and retries. Optional latency
+models assumed delay on coverage reads. Measure hosted Postgres round trips in the deployed
+environment. There is no CI timing threshold or changed CI selection.
 The default regression suite owns recovery and financial correctness; this
 explicit harness supplies reproducible performance evidence.
 
 ## Reproduce
 
-Configure the explicit disposable service from [Postgres tests](../../../operations/postgres.md#tests).
+Configure the explicit disposable service from [Postgres
+tests](../../../operations/postgres.md#tests).
 Use the interpreter/dependencies from the README, then run:
 
 The after revision belongs to sibling PR #88. Fetch its pull-request ref before
@@ -61,14 +62,17 @@ python -m pytest -q -s tests/benchmark_refresh.py
 
 The receipt path appends six trials; remove a previous measurement file before
 collecting a new set. Add `YEARN_BENCHMARK_ROUNDTRIP_MS=2` for a separately labeled
-latency model. Both module paths are mandatory; omission fails rather than
-silently skipping the measurement. The receipt contains module hashes, all
+latency model. Both module paths are mandatory; omission fails explicitly. The receipt
+contains module hashes, all
 stage timings, raw first-dispatch/prepared intervals, report/coverage digests,
 counts and independently checked totals.
 
 ## Results
 
-[Raw trials and stage timings](../../../../benchmarks/results/2026-10/refresh-benchmark-2026-10-27.json) preserve identical report and coverage digests in all twelve trials. Each cell below is the median of three independent schemas.
+[Raw trials and stage
+timings](../../../../benchmarks/results/2026-10/refresh-benchmark-2026-10-27.json) preserve
+identical report and coverage digests in all twelve trials. Each cell below is the median of
+three independent schemas.
 
 | Coverage-read delay model | Phase | First TVL dispatch, before → after (s) | Prepared, before → after (s) |
 | --- | --- | --- | --- |
@@ -77,6 +81,14 @@ counts and independently checked totals.
 | 2 ms | extend | 1.890 → 1.196 | 3.482 → 2.861 |
 | 2 ms | covered-repeat | 1.181 → 0.601 | 2.858 → 2.253 |
 
-Coverage reads including report discovery fall from **256 to 10** in every phase. Report fetches remain **80 during extension and zero during a covered repeat**. Both paths retain 120 reports and 160 report-coverage rows. Native analyses independently yield 240 USD and 24 USD fees.
+Coverage reads including report discovery fall from **256 to 10** in every phase. Report
+fetches remain **80 during extension and zero during a covered repeat**. Both paths retain
+120 reports and 160 report-coverage rows. Native analyses independently yield 240 USD and 24
+USD fees.
 
-Local zero-delay timings show modest/noisy end-to-end gains; the covered repeat did not improve complete-preparation time. This optimization primarily removes redundant database reads. The separate two-millisecond model illustrates latency sensitivity and is not a production speed claim. Financial analyses, daily accounting, provider transport and deployment performance require their own measurements. The worker’s stage ordering is described above; these results do not claim to benchmark the older update script end to end.
+Local zero-delay timings show modest/noisy end-to-end gains; the covered repeat did not
+improve complete-preparation time. This optimization primarily removes redundant database
+reads. The separate two-millisecond model illustrates sensitivity to assumed latency.
+Financial analyses, daily accounting, provider transport and deployment performance require
+their own measurements. The worker’s stage ordering is described above; these results do not
+claim to benchmark the older update script end to end.

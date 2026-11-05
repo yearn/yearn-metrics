@@ -2,8 +2,7 @@
 
 Local fixed-parity estimates are retired under `observed-or-contract-v1`.
 Missing provider observations remain unavailable; optional contract conversions
-require underlying quotes. See the [policy, cached-estimate treatment and
-controlled coverage comparison](parity-price-policy.md).
+require underlying quotes. See the [quote classification and cached-estimate treatment](#quote-classification-and-retired-estimates).
 
 The `price` and `analyze lifetime-yield` commands use Yearn Prices first.
 By default, they can also use DefiLlama when a Yearn price is unavailable.
@@ -40,10 +39,10 @@ onchain adapters in that mode is rejected before any price requests.
 The combined `run lifetime-yield` command checks this policy and required Yearn
 Prices credential configuration before discovery or event indexing starts.
 
-These commands do not fetch onchain events again.
+These commands price already stored onchain events.
 Volume and legacy fee analyses keep their existing DefiLlama policy.
-Legacy fee analysis uses only successful stored DefiLlama prices; Yearn Prices
-rows are not substituted when a DefiLlama valuation is absent.
+Legacy fee analysis uses only successful stored DefiLlama prices; an absent DefiLlama
+valuation remains unavailable under that policy.
 
 ## Understand price requests
 
@@ -51,10 +50,11 @@ The requested price time is 23:59:59 UTC on the report day.
 The client checks the asset, timestamp, and positive price value.
 Reports from an open UTC day are saved as `pending` without requesting a future
 end-of-day point. Once the day closes, an ordinary `price` or `run lifetime-yield`
-invocation retries them automatically; `--retry-missing` is not required. The
+invocation retries them automatically; this retry is part of ordinary invocation behavior. The
 configured DefiLlama fallback can still supply an interim valuation.
 
-If a successful batch response omits a target, the client makes an exact historical request for that target.
+If a successful batch response omits a target, the client makes an exact historical request
+for that target.
 Network failures remain eligible for retry.
 An authentication failure stops the run.
 Malformed or duplicate batch points are omitted and checked through exact
@@ -64,8 +64,8 @@ response is saved as `invalid`, remains eligible for
 An unsuccessful DefiLlama fallback fetch preserves an existing successful price
 and its evidence; it can still insert a new result or refresh an unsuccessful row.
 An unsupported provider/chain combination is saved as missing with an
-`unsupported-chain` reason in its evidence. It does not stop pricing other chains
-or invoke onchain adapters for an unconfigured chain.
+`unsupported-chain` reason in its evidence. Pricing continues for other chains; adapter
+acquisition requires explicit chain configuration.
 
 Saved price records include these details:
 
@@ -87,7 +87,8 @@ Earnings include all stored reports, including reports from retired vaults.
 Reports remain in scope when vault details are missing.
 
 The outputs retain raw gain, loss, and net amounts.
-They also include amounts adjusted for known incidents, including the yRecoverer recovery accounting loss.
+They also include amounts adjusted for known incidents, including the yRecoverer recovery
+accounting loss.
 
 | Result | Meaning |
 | --- | --- |
@@ -97,15 +98,17 @@ They also include amounts adjusted for known incidents, including the yRecoverer
 
 Summaries include priced and unpriced report counts.
 A report counts as priced only when all its raw and adjusted gain, loss, and net
-amounts have USD values. A known zero net does not make unknown gains or losses
-priced. A nonzero amount with a price but unknown asset decimals stays unpriced
+amounts have USD values. Gains and losses each retain their own pricing availability even
+when their net is known zero. A nonzero amount with a price but unknown asset decimals stays
+unpriced
 and has `valuation_status: missing_decimals`.
 A completed analysis is a saved snapshot.
 Run the analysis again after you change relevant reports or prices.
 
 ## Optional DefiLlama and onchain prices
 
-If you enable DefiLlama, the client selects the nearest valid price within 12 hours of the report timestamp.
+If you enable DefiLlama, the client selects the nearest valid price within 12 hours of the
+report timestamp.
 It rejects prices outside that window.
 
 Historical requests use the batch endpoint.
@@ -121,10 +124,10 @@ Local adapters can calculate prices from these sources:
 
 These calculations can require archive RPC calls.
 Missing reserve prices or token decimals leave the asset unpriced.
-A zero reserve balance does not require a price.
+A zero reserve balance has a known zero valuation.
 
 Use `--no-onchain-fallbacks` to disable these calculations when you use DefiLlama.
-The Yearn-only commands above do not call DefiLlama or these adapters.
+The Yearn-only commands above use the configured Yearn Prices service exclusively.
 
 ### Refresh prices after an adapter correction
 
@@ -134,12 +137,12 @@ Run this command to replace saved adapter results:
 yearn-data --db staging price --source defillama --refresh-onchain-fallbacks --limit 500
 ```
 
-The flag selects successful saved local-adapter results by their recorded
-adapter source, not provider alias metadata or failed adapter attempts. It works
+The flag selects successful saved local-adapter results by their recorded adapter source and
+successful acquisition status. It works
 with the default Yearn Prices source too: those refresh targets are read from
 DefiLlama storage and refreshed through DefiLlama, while normal Yearn Prices
-pending/retry selection remains unchanged. It does not refresh provider alias
-quotes merely because their payload contains fallback metadata. The normal
+pending/retry selection remains unchanged. Provider alias quotes retain their provider
+source identity even when their payload includes fallback metadata. The normal
 chain filters and combined target limit apply to refresh and pending targets.
 Yearn-only mode cannot use this flag; enable DefiLlama provider fallback first.
 
@@ -158,7 +161,7 @@ rates, supplies and accepted underlying quotes can produce a derived valuation.
 Removing a fixed-parity guess is separate from removing a measured conversion
 rate. `--no-onchain-fallbacks` disables those local calculations. Yearn Prices
 source selection, canonical EOD acceptance and upstream pricing policy are
-unchanged; a provider quote is not newly asserted to be a market observation.
+unchanged; provider quotes retain their provider-quote classification.
 
 ## Evidence and outputs
 
@@ -169,21 +172,22 @@ and CSVs. The classifications are:
 | Classification | Meaning |
 | --- | --- |
 | `observed` | Accepted matched provider-observation evidence is present |
-| `provider-quote` | A configured provider supplied the quote; this does not assert its upstream observation/estimation method |
+| `provider-quote` | A configured provider supplied the quote; the upstream observation/estimation method remains unspecified |
 | `derived` | A contract valuation uses conversion/reserve evidence and underlying quotes |
 | `estimated` | Retained evidence identifies a retired local parity source; USD valuation is rejected |
-| `legacy-unclassified` | A previously accepted quote lacks classification metadata; it is not relabeled as an observation or guessed estimate |
+| `legacy-unclassified` | A previously accepted quote has unknown classification and retains that status |
 | `unavailable` | No usable quote is present |
 
 A retired source anywhere in a derived quote's structured underlying evidence
 rejects that quote too. A nonzero amount then retains unavailable USD, while raw
 zero still values to zero without a quote. TVL collection applies the same
-rejection and records its classification/policy in pricing evidence. Existing
-selected TVL snapshots and immutable publications are not rewritten.
+rejection and records its classification/policy in pricing evidence. Existing selected TVL
+snapshots and immutable publications retain their captured values.
 
 Yearn Prices may itself select upstream methods; `provider-quote` preserves that
-distinction and the existing upstream-source metadata. This change does not
-silently reject all provider quotes or all older unclassified evidence.
+distinction and the existing upstream-source metadata. Rejection applies to the explicitly
+identified retired estimate; other provider and unclassified quotes retain their existing
+acceptance rules.
 
 ## Existing cache repair
 
@@ -196,11 +200,11 @@ yearn-data --db staging price-volume --source defillama --no-onchain-fallbacks -
 ```
 
 A successful accepted quote can replace the estimate. If acquisition fails,
-the retired estimate is not preserved as a usable price: its old numeric value
+the retired estimate becomes audit-only evidence: its old numeric value
 and original JSON are retained under the explicitly qualified `retired_estimate`
 audit field, while the current quote is unavailable/retryable as appropriate.
-Audit JSON is opaque evidence, so it does not repeatedly select an already
-retired row or contaminate a later valid quote's classification. Existing valid
+Audit JSON retains opaque historical evidence. Subsequent selection and classification use
+the current quote’s fields. Existing valid
 observed/derived quotes still survive failed refreshes.
 
 New analyses reject known cached estimates even before a cache repair is run,
@@ -222,32 +226,32 @@ Provider transport, local valuation and job storage have separate owners:
 | `fee_valuation.py` | Yearn-only closed-day requests, fee-specific endpoint/policy cache identity and fee valuation |
 | `tvl_sources.py` | TVL-specific source selection, error handling and dated observation storage |
 
-Clients contain no SQL, database access or contract valuation. The fee consumer
-uses public client batch utilities rather than private earnings helpers. TVL uses
+Clients contain no SQL, database access or contract valuation. The fee consumer uses public
+client batch utilities. TVL uses
 the Yearn client and the existing DefiLlama adapter policy explicitly. Public
 fetch imports in `pricing.py` remain call-compatible aliases for existing callers.
-They are not substitution points for pricing jobs: patch the owning client or
-adapter module to replace acquisition in a test. The scalar DefiLlama function
+To replace acquisition in a test, patch the owning client or adapter module. The scalar
+DefiLlama function
 is owned by `pricing_clients.py`; the adapter module re-exports that same function.
 
 ## Results
 
 `PriceResult` retains the three-item `(value, status, provenance)` tuple interface.
 It also exposes `value`, `status`, `reason`, `provider`, `requested_timestamp`,
-`evidence_timestamp` and `provenance` by name. A missing USD value is `None`, never
-a guessed zero. Evidence timestamps identify accepted observations and remain
+`evidence_timestamp` and `provenance` by name. A missing USD value is `None`. Evidence
+timestamps identify accepted observations and remain
 unavailable when no observation exists. Yearn requests use normalized UTC EOD;
 earnings rows retain the original event time as `report_timestamp`, while
 `requested_timestamp` consistently names the normalized request day-end in both
-earnings and fee evidence. Existing stored rows are not rewritten; older earnings
+earnings and fee evidence. Existing stored rows retain their values; older earnings
 rows use `normalized_timestamp` for day-end and `requested_timestamp` for event time.
 
 `PriceBatch.target_results` includes every requested target, including unresolved
 Yearn targets that require exact verification. The ordinary mapping preserves
 the prior sparse Yearn interface, so missing or invalid batch points still go
 through exact recovery. An HTTP/batch acquisition exception is distinct from a
-successful response with unresolved targets. Authentication and configuration
-errors remain fatal rather than becoming unavailable evidence.
+successful response with unresolved targets. Authentication and configuration errors stop
+acquisition explicitly.
 
 The raw DefiLlama client accepts provider observations only. The separate
 [parity policy](pricing.md) retires local fixed-parity aliases;
@@ -258,13 +262,15 @@ without mixing that decision into transport or retry budgets.
 ## Scaling and recovery
 
 Explicit asset decimals of zero mean one raw unit is one token: 7 raw units at
-USD 2 is USD 14. Missing decimals do not mean 18. A genuine raw zero remains zero
+USD 2 is USD 14. Missing decimals remain unknown until supported by asset metadata. A
+genuine raw zero remains zero
 without a price or scale; a nonzero amount with unavailable scale remains unknown.
 See [valuation impact recovery](../operations/recovery.md#inspect-zero-decimal-valuation-impact)
-before regenerating affected completed analyses. Never rewrite raw history or
-silently replace selected outputs as a calculation cleanup.
+before regenerating affected completed analyses. Preserve raw history and publish changed
+calculations through a new explicitly selected output.
 
 The [controlled parity comparison](../archive/measurements/2026-10/parity-price-policy.md)
-is frozen synthetic evidence, not a statement about current production coverage.
+provides frozen synthetic evidence for its recorded inputs. Assess current production
+coverage separately.
 
 [Documentation index](../README.md).

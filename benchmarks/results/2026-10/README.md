@@ -1,7 +1,8 @@
 # Frozen October 2026 reference results
 
-These JSON receipts are historical reference evidence, not fixtures or current
-performance guarantees. Files were moved byte-for-byte from the documented source
+These JSON receipts preserve historical reference measurements for their captured
+inputs and revisions. Measure current performance under representative conditions. Files
+were moved byte-for-byte from the documented source
 revision. New benchmark runs belong in ignored `.scratch/`.
 
 | Receipt | Original path | SHA-256 |
@@ -15,4 +16,5 @@ revision. New benchmark runs belong in ignored `.scratch/`.
 | [report-coverage-benchmark-2026-10-27.json](report-coverage-benchmark-2026-10-27.json) | `docs/report-coverage-benchmark-2026-10-27.json` | `359db6698aadaa75530bf0a3e4c5e5dfeaf223cff5e14d9974fddf355d490215` |
 | [tvl-incremental-benchmark-2026-10-27.json](tvl-incremental-benchmark-2026-10-27.json) | `docs/tvl-incremental-benchmark-2026-10-27.json` | `b2a85236c40d4299e28464e2b82e955dd43ddc96127dd1c04b44b414d99cef13` |
 
-[Measurement narratives](../../../docs/archive/README.md#measurements) retain baselines, reproduction commands and limitations.
+[Measurement narratives](../../../docs/archive/README.md#measurements) retain baselines,
+reproduction commands and limitations.

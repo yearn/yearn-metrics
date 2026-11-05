@@ -1,8 +1,8 @@
 # Maintained database refresh
 
 `yearn-data refresh` coordinates the native collectors, accounting and publication
-interfaces. Run it manually or from a scheduler; the worker does not configure a
-scheduler. Acquisition and preparation write the explicitly selected database.
+interfaces. Run it manually or configure a scheduler separately to invoke it. Acquisition
+and preparation write the explicitly selected database.
 Preparation is the default; selecting a serving release requires `--mode publish`.
 
 For the optional VM scheduler adapter and disabled systemd templates, see
@@ -25,24 +25,24 @@ yearn-data --db staging refresh --chains eth op --cutoff 172800 \
   --receipt ./artifacts/refresh-receipt.json
 ```
 
-These ancient fixture bounds illustrate the syntax, not recommended production
-bounds. Normal acquisition is bounded to the last seven closed UTC days
-(`--window-days N` changes that window). Report bounds start at the window's
-first block, never a global maximum observed block; each vault's retained range
+These historical fixture bounds illustrate syntax. Choose production bounds from the
+reviewed baseline and current finalized chain evidence. Normal acquisition is bounded to the
+last seven closed UTC days
+(`--window-days N` changes that window). Report bounds start at the window’s first block;
+each vault's retained range
 coverage still determines which recent ranges need fetching. A chain with no
 retained inventory/coverage requires an explicit initial `--from-block`.
 TVL planning applies its lower bound in SQL. Older gaps are left for explicit
 repair, and all retained financial history still participates in preparation.
 If a vault's retained report coverage has unscanned blocks before the window,
 the receipt records them in a `report-coverage-gap` warning. The developer
-GitHub report lists the affected vaults and block ranges. This does not widen the
-scheduled run or block publication; use a separate catch-up to recover those reports.
+GitHub report lists the affected vaults and block ranges. The scheduled run keeps its
+bounded scope and can publish; recover those reports through a separate catch-up.
 Use `--from-block CHAIN:N` and `--first-close TIMESTAMP` for deliberate wider
 acquisition; `--repair-history` retains the older retained-history repair behavior.
 Inactive vaults remain eligible.
 
-For a regular sync, continue after an accepted baseline rather than assuming a
-run occurred exactly seven days ago:
+For a regular sync, continue after an accepted baseline:
 
 ```bash
 yearn-data --db staging refresh --chains eth op --cutoff UTC_MIDNIGHT \
@@ -57,8 +57,8 @@ therefore covers missed weeks as well. The baseline block pins are reverified
 before acquisition, so an old-chain reorg cannot be skipped by advancing the
 window. It cannot be combined with explicit
 from-block/first-close bounds or repair-history. Repeat the same flags on resume.
-This does not certify older gaps or backfill late-discovered vaults before the
-accepted baseline; those remain explicit historical repair work.
+Older gaps and late-discovered vault history before the accepted baseline require explicit
+historical repair.
 
 Report fetches use four concurrent workers by default (`--report-workers 1`
 restores serial fetching; maximum 32). Compatible vaults with the same missing
@@ -68,8 +68,8 @@ address list and the appropriate event ABI. Active and inactive vaults remain
 in scope, and coverage is still recorded individually for each vault.
 
 Registry inventory scans also use the bounded fetch pool before membership is
-materialized. Free workers are refilled as requests finish, so a slow earlier request does
-not hold up unrelated fetches. Database commits remain on the caller thread,
+materialized. Free workers are refilled as requests finish, allowing unrelated fetches to
+proceed while earlier requests remain pending. Database commits remain on the caller thread,
 with fresh canonical-hash verification. Completed independent ranges can be
 retained after another request fails; failed and uncommitted ranges are retried.
 A later metadata-enrichment failure retains already completed eligible work.
@@ -80,8 +80,8 @@ one chain. Inside each planning window, batched reads start at up to 250,000
 Envio blocks or 10,000 RPC blocks, grow on fast sparse responses and shrink after
 slow responses. Explicit provider range/result-size limits split further;
 timeouts allow at most two additional split levels along a failing path.
-Address-limit errors split address batches. Source changes, invalid evidence,
-rate limits and arbitrary failures never become successful empty coverage.
+Address-limit errors split address batches. Source changes, invalid evidence, rate limits
+and other failures retain incomplete coverage with their failure status.
 Coverage commits only after a member's entire planned interval was fetched.
 These settings are part of checkpoint identity. Catalog and Tokenized collectors
 retain their 50,000-block default unless the global chunk size is explicitly set.
@@ -89,21 +89,21 @@ retain their 50,000-block default unless the global chunk size is explicitly set
 Automatic report source routing uses the existing chain
 policy; `--source rpc` or `envio` explicitly selects a supported source. The worker
 checks chain identity, finality, the selected source watermark and pinned block
-hashes. It does not silently replace an unavailable source with a different one.
+hashes. An unavailable source retains its source identity and failure status.
 A finality head before the cutoff permits inspection but prevents publication.
 
 `--confirmations CHAIN:N` replaces that chain's finalized-head policy with
 `latest-minus-N` (for example `--confirmations eth:64`). Each count must be
-positive. The selected policy is stored in Tokenized range evidence; coverage
-acquired under a different finality policy is not reused. Confirmation settings
+positive. The selected policy is stored in Tokenized range evidence; reuse requires a
+matching finality policy. Confirmation settings
 are part of the checkpoint identity, so changing them requires a new job.
 
 `--deferred-manifest PATH` passes an explicitly reviewed fee-deferral manifest
 to the `fee-usd` analysis. Its entries determine which matching events retain a
-deferred-evidence disposition in the prepared/published fee outputs; they are
-not treated as accepted fees or invented zero values. The manifest content is
+deferred-evidence disposition in the prepared/published fee outputs; they retain their
+deferred status and unavailable amounts. The manifest content is
 hashed into checkpoint configuration and analysis provenance. Changing its
-contents requires a new job rather than resuming an older financial scope.
+contents requires a new job with a new financial scope.
 
 The receipt records fixed per-chain bounds, code/inventory and configuration
 hashes. It excludes configuration values, endpoints and private filesystem paths.
@@ -118,11 +118,11 @@ yearn-data --db staging refresh --chains eth op --cutoff 172800 \
 yearn-data --db staging refresh --inspect JOB_ID
 ```
 
-Inspection is read-only and does not take the writer lock. Progress is newline
+Inspection uses read-only access independently of the writer lock. Progress is newline
 JSON on stderr; stdout is a JSON receipt. `--receipt` also writes the receipt
 atomically to a file. One refresh holds a dedicated database advisory lock for
-the invocation. Other tools do not acquire this lock: do not run independent
-acquisition or publication writers concurrently. Completed stage inputs and
+the invocation. Coordinate independent acquisition and publication tools sequentially; their
+lock behavior is separate from the native worker’s lock. Completed stage inputs and
 outputs are checked again before selection; detected changes rerun dependent
 stages and a repeatedly changing database fails before selection.
 
@@ -131,10 +131,11 @@ stages and a repeatedly changing database fails before selection.
 The stages acquire reports, discover the TVL catalog and fill maintained Tokenized
 Strategy fee ranges for each chain. They then project canonical fees, price
 reports and fees, fill missing daily TVL closes, refresh owned analytics inputs,
-run earnings and fee accounting with pipelined database output writes, and prepare matched fee, TVL, history and
+run earnings and fee accounting with pipelined database output writes, and prepare matched
+fee, TVL, history and
 analytics datasets. Global financial preparation includes retained database
-history through the cutoff; `--chains` limits acquisition, rather than deleting
-other chains from the reporting dataset. Future raw TVL observations are retained
+history through the cutoff; `--chains` defines the acquisition scope; retained reporting
+history includes other chains. Future raw TVL observations are retained
 while the reporting cutoff hides them from this publication.
 
 `--max-targets` defaults to 10000 shared Tokenized chunk, canonical-fee and pricing
@@ -142,8 +143,8 @@ targets per invocation; native projection/pricing pages contain at most 500
 items. `--max-dates` defaults to 30 chain/day acquisitions. Exhausting a budget
 returns `work-deferred`; resume the same job to continue after committed work.
 Normal refreshes acquire new report/fee price targets and preserve existing
-quotes and explicit missing/retryable states. Starting a new refresh job does not
-retry the historical missing-price queue. Report prices for previously open days
+quotes and explicit missing/retryable states. Retry the historical missing-price queue
+through a separate repair operation. Report prices for previously open days
 can still transition from pending after the UTC day closes.
 
 Historical report and fee price repair is an explicit, separately budgeted
@@ -156,8 +157,8 @@ yearn-data --db staging price-fees --retry-missing --before-timestamp UTC_MIDNIG
 ```
 
 These commands update price evidence without publishing a release. Run a fresh
-refresh preparation afterward to capture corrections. Historical repairs are not
-part of the normal scheduled critical path. Reports include provider coverage gaps and unresolved
+refresh preparation afterward to capture corrections. Schedule historical repairs as
+separate deliberate operations. Reports include provider coverage gaps and unresolved
 statuses, and fee targets with missing metadata remain explicitly unpriceable.
 
 Daily collection fills missing asset-unit observations, including genuine zero.
@@ -167,17 +168,19 @@ UTC-close block lookups, and persisted exact-day prices scoped to endpoint and
 price-evidence policy. Readers are reused across chain/day checkpoints; values
 remain keyed by historical block. Missing cached TVL quotes remain unavailable;
 `--repair-history` explicitly retries them while reacquiring the selected closes.
-Authentication/configuration failures stop acquisition rather than becoming zero.
+Authentication/configuration failures stop acquisition explicitly.
 Known units with unavailable prices or ownership evidence are reported as
-`deferredTvlRepairs`; they do not silently become zero. To reacquire all daily
+`deferredTvlRepairs`; their amounts retain the supported availability state. To reacquire
+all daily
 closes in the selected window, start a job with `--repair-history`; the date
-budget still applies. Incomplete catalog/source stages and explicit availability
-gaps are publication warnings, not readiness blockers. This applies across chains,
-including aging networks and unreleased products; the worker does not assume that
-every upstream catalog or optional discovery API is perfect. Native financial
-availability rules still apply: missing evidence stays unavailable, not zero.
-`publishReady` means publication integrity checks passed, not that every source,
-price or ownership observation is known.
+budget still applies. Incomplete catalog/source stages and explicit availability gaps
+produce publication warnings; readiness follows the integrity checks below. This applies
+across chains,
+including aging networks and unreleased products; the worker records upstream catalog and
+optional discovery API availability explicitly. Native financial
+availability rules still apply: missing evidence stays unavailable.
+`publishReady` means publication integrity checks passed. Source, price and ownership
+availability are reported separately.
 
 Every acquisition/preparation result includes `warnings`, `warningCount` and
 `incompleteStages`. Catalog warnings include source failure reasons and affected
@@ -195,10 +198,11 @@ unexecuted stages and mismatched prepared dataset identities or reporting
 cutoffs still block publication. A finalized chain head older than the requested
 cutoff is a visible freshness warning; the pinned interval is still verified,
 and prepared financial datasets must still agree on the requested reporting
-cutoff. Exceptions that prevent preparation from completing still stop the run. Reorg/pin verification, code and
+cutoff. Exceptions that prevent preparation from completing still stop the run. Reorg/pin
+verification, code and
 configuration checks, immutable history completion and atomic release validation
 remain enforced. Fixing source evidence later triggers normal revalidation and
-new preparation rather than mutating the already published financial values.
+new immutable preparation with its own financial values.
 
 Owned analytics collectors run before analytics preparation. Receipts show input
 IDs, observation times, ages and retained-row ages, including unavailable or
@@ -208,10 +212,11 @@ collector and remains explicitly identified as retained manual evidence.
 ## Automatic developer GitHub warning report
 
 After a run commits its acquired/prepared/selected outcome, the worker updates
-one existing GitHub issue. It never creates issues or adds repetitive comments.
+one existing GitHub issue. It updates the configured existing issue with the current
+approved report.
 The default target is `yearn/yearn-metrics#92`; override it with
 `YEARN_REFRESH_GITHUB_REPOSITORY` and `YEARN_REFRESH_GITHUB_ISSUE` when needed.
-`refresh --inspect` only reads the receipt and never posts. Deferred work-budget
+`refresh --inspect` provides read-only receipt inspection. Deferred work-budget
 runs wait until a terminal outcome before reporting. Selected-job resumes retry
 notification without selecting the financial release again.
 
@@ -231,26 +236,27 @@ PYTHONPATH=src python -c 'from yearn_data.github_warning_report import template_
 If that value is missing or no longer matches, no GitHub request is made and the receipt records
 `githubWarningReport.status = awaiting-template-approval`. Changing the template
 requires a new approval digest. Set `YEARN_REFRESH_GITHUB_REPORTING=off` to
-explicitly disable notification. Review and approve a changed template before updating its configured digest. The template and reporting
+explicitly disable notification. Review and approve a changed template before updating its
+configured digest. The template and reporting
 configuration are included in refresh checkpoint identity; start a new job
 after changing them.
 
 The Markdown file is a layout framework, with room for a run summary,
-a finding table and focused explanations of affected products. Reports explain
-what happened and what the evidence means; they do not reduce every issue to a
-counter or add generic next-check instructions. Use human-readable product and
+a finding table and focused explanations of affected products. Reports describe the event,
+its evidence and its operational meaning, with measurements and concrete follow-up where
+supported. Use human-readable product and
 chain names, group repeated provider failures, and distinguish an unknown cause
 from a confirmed diagnosis. Catalog acquisition captures affected vault names,
-retained token metadata and source coverage counts for this purpose. Reports
-use that run's captured evidence rather than querying a newer catalog.
+retained token metadata and source coverage counts for this purpose. Reports use that run’s
+captured evidence and catalog.
 
 The report contains only the latest run's environment, acquisition window and
 scope, outcome, current findings and publication integrity results. Counts
-distinguish retained historical gaps from a weekly window. Branch names,
-implementation progress, conversation notes, provider bodies, credentials and
-private URLs do not belong in the issue. Affected-vault details are capped at
+distinguish retained historical gaps from a weekly window. Keep issue content focused on the
+approved operational summary; retain implementation notes, provider bodies, credentials and
+private URLs in private working evidence. Affected-vault details are capped at
 25, with remaining evidence available through the run receipt. Missing warning
-measurements from an interrupted run are marked unavailable, never all-clear.
+measurements from an interrupted run are marked unavailable.
 
 The existing issue's title/body are replaced; issue comments, labels and assignees
 are preserved. An unchanged report is a no-op. An older reporting cutoff or,
@@ -258,20 +264,22 @@ for the same cutoff, older run creation time cannot overwrite a newer managed
 report. Reports use the same issue even if it was closed: current warnings reopen
 it; an all-clear report replaces stale findings and preserves the issue's state.
 A per-issue host lock prevents concurrent staging/production reporters on this
-host from racing; a busy reporter defers rather than waiting indefinitely.
+host from racing; a busy reporter defers to a later attempt.
 Operators on multiple hosts should use one reporting writer for the target issue.
 
 Runtime transport uses the already authenticated `gh` executable (`gh api`,
 GitHub.com). It requires read/write access to the configured issue. Each request
 has a 15-second timeout, with no immediate retry. A missing executable, invalid
 configuration, permission error, timeout, render error or notification-receipt
-write failure does not roll back or fail financial publication. Financial status
+write failure leaves financial publication committed and records a separate notification
+failure. Financial status
 is committed first; notification uses a separate database connection and records
 its outcome under `githubWarningReport`, plus a `github-warning-report` progress
-event. Provider/CLI exception text is not persisted. If notification-result
+event. Persist only the sanitized provider/CLI error classification. If notification-result
 persistence itself fails, the returned receipt/progress event still identifies
 that failure. Subsequent completed syncs or selected-job resumes can retry.
-The issue updater does not change the dashboard API or deploy a scheduler.
+The issue updater owns operational reporting. Dashboard API deployment and scheduler
+installation use their own workflows.
 
 ## Incremental preparation and independent validation
 
@@ -279,8 +287,8 @@ The worker uses retained coverage and changed-date evidence while preserving
 pin, accounting, readiness and publication checks. See the
 [history preparation contract](../reference/tvl-history-preparation.md) for
 invalidation and explicit repair, and [performance recipes](../development/performance.md)
-for independent full-versus-incremental comparisons. Historical repair is a
-separate task; a nightly or weekly schedule does not change that boundary.
+for independent full-versus-incremental comparisons. Historical repair remains a separate
+task under both nightly and weekly schedules.
 
 ## Publication and recovery
 
@@ -289,22 +297,22 @@ inspectable staged datasets under `ROOT/refresh/JOB_ID` without changing the
 serving release. To publish an inspected job, repeat its options with
 `--mode publish --resume JOB_ID`. The worker verifies pinned bounds again and
 requires matching fee, TVL and analytics dataset IDs and cutoff before calling
-the existing atomic hosted-publication interface. This documentation does not
-itself authorize publication or production writes.
+the existing atomic hosted-publication interface. Obtain explicit authorization for
+production writes and publication before running the writer workflow.
 
 A failure before selection retains the previous serving release. After repairing
 the cause, resume to revalidate persisted stages. Changed cutoff, chain scope,
-code, configuration or options reject the checkpoint: start a new job rather
-than editing persisted identities. This check occurs before any stage is reused,
+code, configuration or options reject the checkpoint: start a new job with the changed
+context and preserve persisted identities. This check occurs before any stage is reused,
 including a saved TVL manifest: a changed-code `--resume` raises the explicit
 checkpoint error instructing the operator to start a new job. Start the same
 command without `--resume`; the new job publishes a manifest under the current
 financial revision while reusing retained acquisition coverage and observations.
-Do not edit an old manifest's `accountingRevision` to bypass the mismatch.
+Preserve the old manifest’s `accountingRevision` and prepare a new compatible manifest.
 The receipt distinguishes successful
 selection followed by failed/unknown consolidation as `selected-cleanup-failed`.
 Resume that job in publish mode to retry only native canonical-history cleanup;
-it does not reacquire inputs or select the release again. A durable expected
+the retry uses the already acquired inputs and committed release selection. A durable expected
 release ID also recovers interruption after selection but before saving success.
 If another release has since been selected, recovery refuses to clean up under
 the old job. Inspect the current selection first. After a code upgrade rejects
@@ -316,7 +324,7 @@ work budget pause, 4 for selection with unfinished cleanup, and 2 for a rejected
 or failed invocation. Always inspect the JSON status and `publishReady`, because
 preparation can succeed with explicit availability gaps. Receipts include stage
 completion/progress, counts, bounds, gap summaries and dataset/release IDs;
-provider exception text is not persisted.
+provider errors retain sanitized classifications.
 
 Offline regressions use explicitly provisioned disposable Postgres and public
 provider boundaries. They run the actual accounting, dataset preparation and
@@ -328,12 +336,13 @@ python -m pytest -q tests/test_refresh_*.py
 ```
 
 TVL manifests include an `observationRevision` digest of the captured bounded
-inputs. An in-place correction therefore creates a new dataset identity and
-prepared history instead of reusing the earlier immutable rows. Re-reading an
-existing manifest returns its stored close and diagnostics. A previous failed
-publication does not count as unfinished preparation; repaired jobs can prepare
-and publish again. Incomplete source outcomes remain visible warnings; unfinished
-preparation and publication integrity failures still block selection. Tokenized acquisition honors `--chunk-size` and shares finality and
+inputs. An in-place correction therefore creates a new dataset identity and its own prepared
+history. Re-reading an
+existing manifest returns its stored close and diagnostics. Repaired jobs can prepare and
+publish again after a previous publication failure. Incomplete source outcomes remain
+visible warnings; unfinished
+preparation and publication integrity failures still block selection. Tokenized acquisition
+honors `--chunk-size` and shares finality and
 end-header validation within each bounded work batch.
 
 ## Intermediate reports and previews
@@ -353,7 +362,7 @@ Warning-issue locks use a verified account-private directory with mode 0700 and
 reject symbolic links or files with unsafe ownership or permissions. Deferred
 notifications record `consecutiveDeferredRuns` and `persistentContention` so
 repeated contention across completed jobs is distinguishable from one concurrent
-reporter. Repeating the same job does not increase the run count; acquiring the
+reporter. The run count tracks distinct jobs; acquiring the
 lock resets it. Reporting failures remain isolated from publication.
 
 [Documentation index](../README.md).

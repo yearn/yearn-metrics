@@ -1,7 +1,8 @@
 # One canonical historical dataset
 
 The database retains the best accepted record for every historical identity.
-Old dashboard editions are not a retention requirement. Daily history, exact
+Retention preserves the canonical supported history and its serving dependencies. Daily
+history, exact
 amounts, source evidence, and the distinction between zero and unavailable data
 are requirements.
 
@@ -21,8 +22,8 @@ rolled back. It refuses running jobs, unpublished finished TVL observations, and
 any analysis selection that would remove a historical event identity.
 
 For the first migration, make a current database backup and prove restoration in
-an isolated database before applying. The older SQLite archive does not include
-subsequent Neon updates. Coordinate writers, then apply:
+an isolated database before applying. The older SQLite archive covers its captured revision;
+subsequent updates reside in Neon. Coordinate writers, then apply:
 
 ```bash
 PYTHONPATH=src python -m yearn_data.cli --db neon consolidate-history --apply \
@@ -30,7 +31,7 @@ PYTHONPATH=src python -m yearn_data.cli --db neon consolidate-history --apply \
 ```
 
 The transaction locks affected tables against other writers while allowing
-ordinary reads. A lock conflict times out instead of waiting indefinitely.
+ordinary reads. A lock conflict returns after the configured timeout.
 Consolidation rolls back if any preservation check fails.
 
 ## What survives
@@ -41,10 +42,10 @@ Consolidation rolls back if any preservation check fails.
   newer observations win at the same quality. Published observations take
   precedence over records from failed runs.
 - Keys found only in failed runs also survive, retaining their failed provenance.
-  This does not publish previously unpublished observations.
+  The retained serving union includes already published observations only.
 - The exact JSON, source run, snapshot block, and every historical identity are
-  checked against a temporary inventory before commit. Run IDs are provenance;
-  they are not a reason to discard earlier backfill dates.
+  checked against a temporary inventory before commit. Run IDs record provenance; retain
+  earlier backfill dates within the canonical history.
 - Selected earnings/fee outputs retain their row order and bytes. One completed
   result per other analysis type is retained, including raw canonical-fee exports.
   Every historical event identity in older outputs must exist in the retained
@@ -56,7 +57,8 @@ Consolidation rolls back if any preservation check fails.
 
 Superseded TVL observations, older derived caches, older analysis outputs and old
 hosted publications are removed. Old completed analysis metadata is marked
-`superseded`; its IDs are not reused. A small `canonical_history_receipts` row
+`superseded`; its IDs remain unique to their original analyses. A small
+`canonical_history_receipts` row
 records the selected revision, its TVL run IDs and all preservation counts.
 
 ## Ongoing updates
@@ -70,27 +72,27 @@ and returns an error; the already validated selected release remains usable.
 
 Publication IDs remain cache/revision tokens. The hosted API returns HTTP 410 for
 a request pinned to a superseded ID, with the current release ID. Consumers should
-reload `/api/publication` and retry the related views together. They must not
-combine values from different revisions. Unpublished collection/preparation
-commands do not retire serving data on their own.
+reload `/api/publication` and retry the related views together. They must keep all values
+aligned to the same revision. Serving-data retirement occurs through explicit publication
+and consolidation.
 
 Use the updated hosted API with the updated publisher: its obsolete-pin and
-in-flight revision checks are part of this retention contract. Applying the
-database consolidation alone does not deploy those API changes.
+in-flight revision checks are part of this retention contract. Deploy the matching API
+changes separately from database consolidation.
 
 Older local manifest files may remain as small operational records. The file-backed
 TVL API checks the latest consolidation receipt once, after reading a cached or
 newly loaded pin and before returning its response. It returns HTTP 410 if the pin lacks
 the canonical run union, because its observations may have been removed. Pins that
-include that union remain usable; publishing a new dataset alone does not retire
-old pins. On 410, retry without the dataset pin to use the current local pointer. Do not
-reselect an obsolete release or treat removed historical editions as backups.
+include that union remain usable; old pins remain usable while their full input union
+remains retained. On 410, retry without the dataset pin to use the current local pointer.
+Recover using a verified retained coherent release or a restorable backup.
 
 ## Storage reclamation and validation
 
 Deletion first makes space reusable inside Postgres. Measure actual table/index
-sizes after a separate planned rewrite/compaction; do not equate deleted rows
-with immediately reclaimed disk. Rewrites can require additional disk and an
+sizes after a separate planned rewrite/compaction; measure disk reclamation directly after
+that operation. Rewrites can require additional disk and an
 exclusive lock, so coordinate them separately from the verification transaction.
 
 Required validation includes all-key preservation counts, exact selected values,
@@ -99,7 +101,7 @@ and a second consolidation with no further rows removed. A matching headline
 total alone is insufficient. Regression tests inject corruption to prove that a
 verification failure rolls back the whole transaction.
 
-Observation reads order by the complete historical identity. Physical rewrites
-must not change vault/strategy collection ordering through unspecified SQL ties.
+Observation reads order by the complete historical identity. Physical rewrites must preserve
+deterministic vault/strategy ordering with explicit SQL tie-breakers.
 
 [Documentation index](../README.md).

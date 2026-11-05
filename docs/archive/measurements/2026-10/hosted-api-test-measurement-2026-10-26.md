@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/hosted-api-test-measurement-2026-10-26.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/development/performance.md](../../../development/performance.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/hosted-api-test-measurement-2026-10-26.md).
 
@@ -35,9 +35,9 @@ cases drop from 743 to 734. The full Postgres suite was not timed again.
 
 Both runs used CPython 3.12.3, the same locked dependencies and task-owned local
 Postgres 18 on port 55439. The baseline is the working tree after the malformed
-receipt change. Runs were sequential; container startup is excluded. These are
-single successful runs on a shared host, with possible cache effects, not a
-statistically established speedup or a CI-time prediction.
+receipt change. Runs were sequential; container startup is excluded. These successful single
+runs record observed durations on a shared host with possible cache effects. Repeated
+controlled runs are required to estimate variance or CI duration.
 
 The complete non-Postgres selection passed with the task-owned database removed
 and test URL unset: **553 passed, 7 skipped, 734 deselected in 7.96 s**.

@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/fee-serving-performance-2026-10-26.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/development/performance.md](../../../development/performance.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/fee-serving-performance-2026-10-26.md).
 
@@ -8,9 +8,9 @@
 
 The compact grouped monthly vault history replaces repeated full monthly vault
 responses. This measurement compares the frozen implementation at `3f6df4b` with
-the grouped implementation on the same disposable local Postgres fixture. It does
-not publish a dataset, change a selected production release, or measure a deployed
-version of the new route.
+the grouped implementation on the same disposable local Postgres fixture. It measures the
+local candidate route against retained data. Publication and deployed-route measurements
+require separate operations.
 
 ## Method
 
@@ -20,8 +20,7 @@ long decimal strings, unavailable values and genuine zero. Each scope gets three
 fresh view instances; each measured instance is queried again to distinguish its
 existing process cache from its first calculation. The SQL fixture lives in a
 unique temporary schema, which is dropped afterward. The benchmark rejects remote
-Postgres hosts. It does not use production credentials or require database access
-for its default in-memory mode.
+Postgres hosts. Its default in-memory mode uses controlled inputs and local process memory.
 
 The frozen baseline performs 32 full `/vaults` equivalent views per scope. The new
 implementation performs one compact monthly grouped view. Both read the same
@@ -33,8 +32,9 @@ had competing tests/builds and are excluded from the results below.
 
 ## Results
 
-Median of three samples, in milliseconds. Component medians need not add to the
-median total. Raw samples and canonical hashes are retained in
+Median of three samples, in milliseconds. Each component median describes its own sample
+distribution; use the measured total median for end-to-end duration. Raw samples and
+canonical hashes are retained in
 [`fee-serving-performance-2026-10-26.json`](../../../../benchmarks/results/2026-10/fee-serving-performance-2026-10-26.json).
 
 | Scope and strategy | First query total | Calculation | Serialization | Source-row reads | JSON bytes |
@@ -68,13 +68,13 @@ identical monthly ranges, and excluding overview/multimonth ranges gives:
 | Contract | 48 | 11,151 | 12,215,207 | 2,500,021 |
 | Product | 12 | 2,919 | 3,235,298 | 668,091 |
 
-These are local projections of captured responses, not responses from a deployed
-new endpoint. The model retains the selected metadata and the two financial
+These local projections use captured responses to estimate the proposed endpoint shape. The
+model retains the selected metadata and the two financial
 fields; actual period/cutoff metadata adds a small amount. The compact projection
 avoids combining more than 12 MB of detailed contract rows into one response in
 this observed publication. Future publication growth still requires response-size
-monitoring. The synthetic benchmark's detailed payload is intentionally large and
-is a stress case rather than a claim about a typical user's response.
+monitoring. The synthetic benchmark uses an intentionally large detailed payload as a stress
+case.
 
 ## Reproduction and limits
 
@@ -97,10 +97,11 @@ PYTHONPATH=src python scripts/benchmark_fee_serving.py \
 Frozen baseline file SHA-256:
 `af4d8ed71455ecb9d0af9d01f54ee208ee1d5472d63b3b5add318117820d6fb0`.
 
-This is a repeatable diagnostic, not a CI performance threshold. Three samples,
+Use this repeatable diagnostic to compare implementations under recorded conditions. Three
+samples,
 fixed strategy order, synthetic data and host scheduling do not support a precise
-production speedup forecast. Postgres buffer and OS caches may be warm; “first
-query” means a fresh application view, not a cold database or cold Vercel process.
+production speedup forecast. Postgres buffer and OS caches may be warm; “first query” means
+a fresh application view; database and Vercel cold-start state require separate checks.
 The synthetic addresses exercise the product grouping path without representing
 actual registered products; domain regression tests own those financial cases.
 
@@ -108,8 +109,8 @@ The benchmark does not include HTTP, network, TLS, gzip, CDN lookup, selection
 registry reads, or browser rendering. Earlier live request observations include
 CDN HIT/MISS headers; those observations must not be equated with process-LRU
 or fresh-view timings. Browser route-interception checks use generated fixture
-data and verify consumer wiring, rather than deployed latency or production
-financial correctness.
+data and verify consumer wiring. Deployed latency and production financial correctness
+require their own evidence.
 
 ## Implementation boundary and follow-up
 
@@ -120,8 +121,7 @@ the compact response before caching or rendering it. Release the backend before
 the consumer; older backends do not provide this route. Existing detailed fee
 endpoints and CI execution policy are unchanged.
 
-The remaining work should follow a deployed measurement, not assume that the
-local speedup applies to the whole page:
+Use deployed whole-page measurements to choose the remaining work:
 
 1. Compare initial request counts, chart-ready time, response sizes and CDN
    HIT/MISS latency against the same publication after an authorized rollout.
@@ -132,8 +132,8 @@ local speedup applies to the whole page:
    Evaluate shared response storage only if prepared outputs and the existing
    publication-pinned CDN policy leave a measured gap.
 
-Do not replace ordered lifetime-earnings arithmetic by recombining monthly
-totals: its Decimal precision can make that transformation change results.
+Preserve ordered lifetime-earnings arithmetic and its Decimal precision when computing
+aggregates.
 No production database, publication selection, or deployment was changed by
 this implementation.
 
@@ -150,10 +150,10 @@ this implementation.
 - A Chromium check loaded the actual consumer helper and intercepted the new
   route with generated backend fixtures: 32 periods and 8,000 rows per scope,
   one request each, with exact projected financial and metadata parity against
-  the old monthly responses. This verifies browser wiring, not deployed speed.
+  the old monthly responses. This verifies browser wiring. Measure deployed speed separately.
 
-The full-suite duration is not a test-performance comparison: frontend
-validation ran concurrently after the isolated serving benchmark completed.
+The full-suite duration records validation with frontend work running concurrently after the
+isolated serving benchmark.
 
 ## Grouped-response cache budget (PR review follow-up)
 
@@ -166,12 +166,11 @@ without retaining dataset objects.
 A lock protects lookup, recency and byte accounting; simultaneous cache misses
 may calculate independently.
 
-The 8 MiB budget measures the actual retained byte payloads, not an estimate of
-expanded Python response trees: only JSON bytes are cached and hits decode a
-fresh result. It excludes the bounded entry/key/container bookkeeping, source
+The 8 MiB budget measures retained JSON bytes. Cache hits decode a fresh Python response
+tree. It excludes the bounded entry/key/container bookkeeping, source
 datasets, other existing caches and transient results/serialization buffers for
-active requests. It is therefore a retained grouped-payload limit, not a process
-RSS or concurrent-request memory limit. Decimal strings, nulls, source-order
+active requests. It bounds retained grouped payloads. Measure process RSS and
+concurrent-request memory separately. Decimal strings, nulls, source-order
 calculations, publication pins and returned list order are preserved. The warm
 calculation timings above predate this change: cache hits now decode JSON and
 should not be interpreted as measurements of this bounded cache.

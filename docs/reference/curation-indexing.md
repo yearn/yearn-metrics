@@ -3,8 +3,8 @@
 `src/yearn_data/inventories/tvl-curation.json` owns Yearn discovery scope:
 owner/creator/curator identities, factory deployments, explicit products and a
 known-vault bootstrap. The expanded catalog lives in `tvl_vaults`; acquisition
-provenance lives in `tvl_catalog_evidence`. Candidates include historical and
-unnamed deployments, not just currently marketed products.
+provenance lives in `tvl_catalog_evidence`. Candidates include historical, unnamed and
+currently marketed deployments.
 
 All four configured identities apply on all chains, including
 `0x518C21DC88D9780c0A1Be566433c571461A70149`. API reconciliation covers V1 owner,
@@ -22,7 +22,7 @@ metadata reads retain their existing behavior.
 The producer indexes `CurationFactoryEvent` and dynamically registers factory-created
 vaults. Existing `MorphoGovernanceEvent` rows carry V2 `AddAdapter` history.
 `CurationVault` identifies dynamic registrations. Attribution remains in metrics:
-indexing a contract does not endorse it or classify its TVL as Yearn's.
+indexing records contract evidence; metric policy determines Yearn TVL attribution.
 
 Before accepting even an empty indexed range, metrics requires:
 
@@ -40,8 +40,8 @@ indexed results and retries the range through RPC. Coverage and observations
 commit atomically only after rechecking the range's canonical end block.
 
 Verified Envio ranges may use larger planning windows. If their fetch falls back,
-RPC divides those ranges into bounded windows. Failed acquisition never certifies
-empty coverage. Receipts retain event source counts and public fallback reasons.
+RPC divides those ranges into bounded windows. Failed acquisition retains incomplete
+coverage. Receipts retain event source counts and public fallback reasons.
 
 ## Producer rollout and backfill
 
@@ -50,7 +50,7 @@ The matching producer scope is in yearn-envio's
 `inventories/envio-curation-scope.json`. Its SHA-256 is over the compact JSON
 payload excluding `scopeHash`, preserving field order. Keep both copies identical.
 Changing contract/event coverage requires a new scope and a historical backfill;
-do not update the attestation manually to bypass that backfill.
+update the attestation only after completing the new scope’s historical backfill.
 
 The producer advances scope checkpoints only from the configured starting block
 and through contiguous checkpoint intervals. A late deployment cannot claim that
@@ -58,8 +58,8 @@ it processed earlier history. Metrics safely uses RPC until the new schema,
 complete scope and canonical anchor are available. No dashboard behavior changes.
 
 HyperEVM factory history starts at 1,988,677. Robinhood factory history starts at
-288. Existing unrelated subscriptions retain their previous start floors. A
-production database reset is not implicit in installing these changes: prepare a
+288. Existing unrelated subscriptions retain their previous start floors. Production
+     database replacement requires its own reviewed operation: prepare a
 separate deployment/backfill or review the specific migration/reset operation
 before replacing a serving indexer. Verify all seven curation chains before
 claiming that indexed acquisition is active.

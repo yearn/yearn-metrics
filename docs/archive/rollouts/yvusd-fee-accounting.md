@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/yvusd-fee-accounting.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/accounting/yvusd.md](../../accounting/yvusd.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/yvusd-fee-accounting.md).
 
@@ -8,9 +8,10 @@
 
 The Ethereum base USD yVault (`0x696d02Db93291651ED510704c9b286841d506987`)
 reports locker yield redistribution inside `StrategyReported.total_fees`.
-That redistribution is not fee revenue.
+That redistribution is classified as locker yield.
 
-The current `fees.METHOD_VERSION` (`canonical-fees-9`) binds each report to the preceding `FeesReported` event
+The current `fees.METHOD_VERSION` (`canonical-fees-9`) binds each report to the preceding
+`FeesReported` event
 from its historical accountant, using the complete transaction receipt and a
 block-hash-pinned `accountant()` call. A split cannot be reused across reports.
 This rule was introduced in `canonical-fees-7`.
@@ -22,8 +23,10 @@ The two allowed accountants serve **only this yvUSD vault**. Their verified
 `address(asset)`; `asset` is immutable in `BaseStrategy`, and both constructor
 arguments bind it to `0x696d02Db93291651ED510704c9b286841d506987`:
 
-- [Accountant 0xaaafea48 verified source and constructor](https://eth.blockscout.com/address/0xaaafea48472f77563961cdb53291dedfb46f9040?tab=contract).
-- [Accountant 0xab9018a6 verified source and constructor](https://eth.blockscout.com/address/0xab9018a699003a777d690c156045dfc4a7ef3a96?tab=contract).
+- [Accountant 0xaaafea48 verified source and
+constructor](https://eth.blockscout.com/address/0xaaafea48472f77563961cdb53291dedfb46f9040?tab=contract).
+- [Accountant 0xab9018a6 verified source and
+constructor](https://eth.blockscout.com/address/0xab9018a699003a777d690c156045dfc4a7ef3a96?tab=contract).
 
 Each has one `FeesReported` emission, inside that guarded report function.
 Consequently, a permitted accountant cannot emit a fee split for another vault;
@@ -38,13 +41,15 @@ For an accepted split:
 - `reported_total_fees_raw` / `reportedTotalFeesUsd` retain the original deduction.
 
 The additional fields are populated for this verified yvUSD classification;
-absence on other contracts does not establish a known zero. API aggregates use
+other contracts retain their own component applicability and availability states. API
+aggregates use
 the same known-amount summation policy as existing component fields.
 
 Acceptance requires the split sum to equal the final vault deduction exactly,
 with zero protocol fees. Capped, rounded, protocol-charged, missing, or ambiguous
-splits remain unresolved instead of receiving a guessed proportional allocation.
-The retained October 8, 2026 reconciliation contains 438 reports that pass this rule: 395 positive deductions
+splits remain unresolved until exact reconciliation is supported.
+The retained October 8, 2026 reconciliation contains 438 reports that pass this rule: 395
+positive deductions
 and 43 zero deductions. There are two historical accountant contracts.
 The raw totals are 1.502736 USDC actual fees and 30,213.781411 USDC locker yield.
 
@@ -56,10 +61,10 @@ Neon. `recompute-fees formulas --version v3` replays retained evidence
 without RPC access. A fee USD analysis must then be regenerated using the same
 cutoff and deferred-event manifest as the paired earnings analysis, selected
 with `select-pairing`, and followed by `prepare-analytics` for profitability.
-Never rewrite completed analysis outputs or reuse an old dataset identity.
+Preserve completed analyses and generate a new dataset identity for each changed result.
 
-The change does not modify strategy gains/losses, incident adjustments, prices,
-or the separate Tokenized Strategy accounting layer. The frontend consumes the
+Strategy gains/losses, incident adjustments, prices and Tokenized Strategy accounting retain
+their existing policies. The frontend consumes the
 corrected canonical metric without an address exclusion.
 
 Public receipt fixtures in `tests/fixtures/fees/yvusd.json` retain the relevant
@@ -82,19 +87,20 @@ A known zero fee remains zero even when its positive locker distribution cannot
 be valued. Such a row reports `zero_fee_unpriced_distribution` (or
 `metadata_unavailable` for missing asset metadata). Grouped output counts
 `unpriced_distribution_events` and leaves pricing/fee-USD completeness false
-until those distributions are valued. Optional component fields absent from
-unrelated contracts do not imply missing positive distributions.
+until those distributions are valued. Optional component fields follow each contract’s
+supported classification; evaluate distribution coverage within that scope.
 
 Canonical CSV exports include `locker_bonus_raw` and `reported_total_fees_raw`
-regardless of row order, with blank values for contracts where they do not apply.
+regardless of row order, with blank values for contracts outside their scope.
 Malformed report payloads remain unresolved in both indexing and offline replay.
 Receipt acquisition failures retain `receipt_unavailable_or_invalid`; normal V3
 reports in the same transaction can still use their own report inputs. An explicit
 `--refresh-evidence` also reacquires the historical accountant at the receipt block
 hash, while ordinary retries can reuse retained evidence.
 
-The run IDs, dataset ID and USD reconciliation above are historical operator
-receipts, not a claim about today's selected publication. The review replays the
+The run IDs, dataset ID and USD reconciliation above are operator receipts for the
+historical publication. Inspect the current selection for today’s publication. The review
+replays the
 438 retained report/receipt pairs offline for raw reconciliation; the committed
 public fixtures and regression tests cover classification, valuation, export,
 query scoping and pairing without needing the operator database.
@@ -103,11 +109,11 @@ Offline replay distinguishes `cached_distribution_evidence_missing_or_invalid`
 (missing or unreconciled accountant evidence) from
 `cached_allocator_inputs_missing_or_changed` (changed source report inputs).
 The former requires acquiring valid receipt/accountant evidence through indexing;
-offline replay itself never fetches it.
+indexing supplies that evidence for subsequent offline replay.
 
 A retained accountant outside the verified allowlist records
 `rejected_yvusd_accountant`. Ordinary `--retry-unresolved` retains that pinned
 evidence. Use `index-fees --canonical --version v3 --retry-unresolved
 --refresh-evidence` with a reliable historical provider to reacquire it. If the
 same address remains, verify the new implementation before expanding the
-allowlist; refreshing alone does not establish its safety.
+allowlist; acceptance requires implementation verification after acquisition.

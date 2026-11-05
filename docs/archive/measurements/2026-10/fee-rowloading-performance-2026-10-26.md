@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/fee-rowloading-performance-2026-10-26.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/development/performance.md](../../../development/performance.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/fee-rowloading-performance-2026-10-26.md).
 
@@ -16,9 +16,9 @@ The frozen baseline is commit `6a0437d`, after the existing summary aggregation
 and grouped-history changes. The opt-in `scripts/benchmark_fee_summary.py`
 separates connection setup, SQL execution and libpq transfer, cursor fetch and
 Python row conversion, custom `Row` construction, and JSON decoding. `row_wrap_ms`
-is nested within `fetch_ms`; these columns must not be added together. Server
-execution and result transfer are measured together, not as separate SQL and
-network timings. Per-row diagnostic timers perturb latency; latency comparisons
+is nested within `fetch_ms`; use `fetch_ms` for their combined duration. The measurement
+combines server execution and result transfer. Per-row diagnostic timers perturb latency;
+latency comparisons
 use `--no-profile`.
 
 The fixture contains 32 monthly periods, 1,000 vault identities across four
@@ -56,10 +56,10 @@ Frozen source SHA-256 digests:
 and preserves its text representation before concatenating at most 2,000 ordinal
 positions into each array. This reduces driver rows and Python decoder calls
 without changing financial arithmetic, JSON numeric conversion, source order,
-filters, or the existing process cache. PostgreSQL `json`, rather than `jsonb`,
-avoids normalizing numeric text or object keys. Empty, whitespace-only, multiple
-or truncated stored JSON values fail instead of disappearing or creating extra
-financial rows. The publication writer already rejects nonstandard NaN/Infinity.
+filters, or the existing process cache. PostgreSQL `json` preserves numeric text and object
+keys. Empty, whitespace-only, multiple
+or truncated stored JSON values fail explicitly, preserving the financial-row integrity
+boundary. The publication writer already rejects nonstandard NaN/Infinity.
 
 The chosen source SHA-256 is
 `d661faf5ef41b20e991602b0de7ee0a0cce1f7ba9442c348f61dd44b4e6fde1c`.
@@ -68,7 +68,8 @@ per view and scope were measured with `--no-profile` during an explicitly quiet
 window: root held tests/builds, the reviewer remained read-only and the backend
 agent held probes. Baseline preceded candidate. Fixture setup is excluded.
 
-Medians in milliseconds; component medians need not add to the total.
+Medians are in milliseconds. Each component has its own median; the total is measured
+independently.
 
 | View / scope | Baseline total | Protected total | Baseline row loading | Protected row loading | Total reduction |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -83,8 +84,8 @@ respectively. These are small, fixed-order samples on one shared host. Earlier
 baseline and candidate runs show material drift; an earlier unprotected candidate
 had a product-summary median regression despite lower medians in other views.
 Those samples remain in the raw bundle and are not silently excluded as
-outliers. The final protected sample supports a local improvement in every view,
-not a precise production speedup or a confidence interval.
+outliers. The final protected sample supports an observed local improvement in every view.
+Production speed and variance require deployed repeated measurements.
 
 All five baseline and candidate responses per view/scope match complete
 serialized JSON hashes, including metadata and every financial field:
@@ -110,7 +111,8 @@ supported attribution. The final protected diagnostic also checks all grouped
 history hashes. Profile totals are not used for the latency table.
 
 All raw samples, source hashes, response hashes and the earlier noisy runs are
-retained in [the measurement bundle](../../../../benchmarks/results/2026-10/fee-rowloading-performance-2026-10-26.json).
+retained in [the measurement
+bundle](../../../../benchmarks/results/2026-10/fee-rowloading-performance-2026-10-26.json).
 Its `final_baseline` and `final_protected_candidate` entries own the final table;
 `baseline_diagnostic` and `final_protected_diagnostic` own phase attribution.
 
@@ -130,20 +132,22 @@ Exploratory three-sample summary medians (contract/product) were:
 All these exploratory summary hashes matched the baseline on valid fixtures.
 They are not the final latency result and were measured at different times. SQL
 validation adds work: the exploratory validated SQL version loaded rows around
-124/132 ms slower than unvalidated SQL concatenation. This is a rough validation
-cost comparison under host drift, not an isolated controlled SQL timing. The
+124/132 ms slower than unvalidated SQL concatenation. This comparison estimates validation
+cost under host drift; the recorded duration includes the surrounding workload. The
 faster unsafe candidate was deliberately not delivered.
 
-The 2,000-row bound limits each individual array/decode by row count, not bytes.
+The 2,000-row bound limits the row count of each array/decode. Byte size depends on row
+payloads.
 The query still materializes its result in libpq and the view retains all decoded
-financial rows, as before. This is not streaming or a measured memory reduction;
-no production row-size or database-load claim follows from this synthetic fixture.
+financial rows, as before. This synthetic fixture measures bounded array loading. Streaming
+behavior, memory reduction, production row sizes and database load each require separate
+measurements.
 
 ## Reproduce
 
 Export `YEARN_TEST_POSTGRES_URL` for an explicitly provisioned disposable
-localhost database. The benchmark rejects remote hosts and never starts Postgres
-implicitly. Freeze baseline sources before editing:
+localhost database. The benchmark requires an explicitly started local Postgres service and
+rejects remote hosts. Freeze baseline sources before editing:
 
 ```bash
 git show 6a0437d:src/yearn_data/pairing.py > /tmp/row-before-pairing.py
@@ -171,8 +175,8 @@ The three new database cases cover sparse legacy ordinal ordering and filters,
 plus corrupted empty and multiple-value stored JSON. Existing known-result
 financial, product-membership and publication-selection coverage remains intact.
 Focused Ruff and `git diff --check` passed; independent review found no blockers.
-CI configuration is unchanged. This test runtime is a validation result, not a
-controlled test-suite performance comparison.
+CI configuration is unchanged. This runtime records validation cost under the observed test
+conditions.
 
 The previous summary changes were committed locally as backend `6a0437d` and
 Powerglove `94487b8`. This row-loading pass remains uncommitted; no production

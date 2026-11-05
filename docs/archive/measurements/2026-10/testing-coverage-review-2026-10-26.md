@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/testing-coverage-review-2026-10-26.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/development/performance.md](../../../development/performance.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/testing-coverage-review-2026-10-26.md).
 
@@ -10,9 +10,9 @@ Reviewed the complete test cleanup against the original PR #69 tip, then rebased
 onto `origin/ross/pr-08-fantom-replay` at
 `49b25982e76a99142b02968128f56713970714f6` for delivery.
 
-No actionable coverage gaps were found in the planned reductions. This is a
-local review, not an upstream approval. The scope is test behavior and fixture
-isolation; it is not a new audit of production accounting.
+No actionable coverage gaps were found in the planned reductions. This records a local
+review. Upstream approval has its own review record. The review scope covers test behavior
+and fixture isolation.
 
 - Verified that the bulk of changed test files add only the explicit database
   fixture argument; an AST comparison confirmed their bodies are unchanged.

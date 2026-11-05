@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/ybold-fee-accounting.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/accounting/ybold.md](../../accounting/ybold.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/ybold-fee-accounting.md).
 
@@ -8,14 +8,15 @@
 
 The Ethereum yBOLD allocator (`0x9F4330700a36B29952869fac9b33f45EEdd8A3d8`)
 uses the V3 fee mechanism to allocate yield to staked yBOLD. These allocations
-are depositor yield, not manager revenue. Underlying strategy fees remain separate.
+are classified as depositor yield. Underlying strategy fees remain separate.
 
 The verified accountant is `0x53acEBB9470Cfc9D231075154f5dcF1586A4c6fa`.
 Its `report()` returns the gain after any loss restoration as `totalFees`;
 `distribute()` transfers the accumulated tokens to its configured recipient.
 The verified staking recipient is `0x23346B04a7f55b8760E5860AA5A77383D63491cD`.
 
-Source evidence: [deployed accountant verification](https://sourcify.dev/server/v2/contract/1/0x53acEBB9470Cfc9D231075154f5dcF1586A4c6fa?fields=all).
+Source evidence: [deployed accountant
+verification](https://sourcify.dev/server/v2/contract/1/0x53acEBB9470Cfc9D231075154f5dcF1586A4c6fa?fields=all).
 The exact-match runtime hash is
 `0xa3098fa22faa347d2cded2cac45f884a69895472d3af03f2d369a4247d477e90`.
 
@@ -23,19 +24,19 @@ The exact-match runtime hash is
 
 This rule was introduced in `canonical-fees-8`.
 
-The current `fees.METHOD_VERSION` (`canonical-fees-9`) requires a successful receipt matching the report transaction,
+The current `fees.METHOD_VERSION` (`canonical-fees-9`) requires a successful receipt
+matching the report transaction,
 block, log index, strategy and amounts. Historical `accountant()`, `feeRecipient()`
 and runtime code are read at the receipt's block hash. Unknown implementations,
-recipients or unreconciled amounts remain unresolved instead of falling back to
-counting the entire deduction as revenue.
+recipients or unreconciled amounts remain unresolved until verified and reconciled.
 
 - `reported_total_fees_raw` / `reportedTotalFeesUsd` preserve the raw deduction.
 - `staker_distribution_raw` / `stakerDistributionUsd` contain the deduction less
-  genuine protocol fees. This measures allocation to the staking recipient, not
-  a separate timestamped payment or a new earnings event.
+  genuine protocol fees. This measures the report’s allocation to the staking recipient.
+  Payment timing and product earnings use their own evidence and recognition rules.
 - `total_fees_paid_raw` / `totalFeesPaidUsd` retain genuine protocol fees.
 - Manager, management and performance revenue at this allocator layer are zero
-  under this verified implementation. This does not zero fees on its strategies.
+  under this verified implementation. Its strategies retain their separately observed fees.
 
 Reported gains, losses, prices, incident adjustments, and the earnings publication
 are unchanged. The chart consumes the corrected fee metric without a vault exclusion.
@@ -48,7 +49,8 @@ evidence without RPC calls. Regenerate `fee-usd` with the existing financial
 cutoff and deferred-event manifest, validate `select-pairing`, and use
 `publish-hosted --prepare-analytics` to prepare and select a coherent release.
 Keep the TVL publication and earnings run unchanged for a fee-only correction.
-Do not edit completed analysis outputs or reuse their dataset IDs.
+Generate new analysis outputs with new dataset IDs; preserve completed analyses as immutable
+evidence.
 
 Receipt fixtures cover zero deductions and positive distributions. Tests also
 cover actual protocol fees, rejected evidence, stale-row upgrades, offline replay,
@@ -97,11 +99,11 @@ Product scope groups both addresses under the yBOLD allocator address, returns
 `productId`, `memberAddresses`, and `earningsAddress` on the vault row, and sums
 fee events at their original timestamps. Filtering either member address in
 product scope selects the complete product. `byContractFamily` preserves the
-actual fee charging layer. Product scope does not append an extra aggregate row
-to the contract rows, so total fees do not increase when switching scope.
+actual fee charging layer. Product scope replaces member rows with their grouped product
+row, preserving total fees across scopes.
 
-Only the allocator supplies product earnings. Recognizing the same yield at the
-staking layer does not create another earnings contribution. Powerglove requests
+The allocator supplies product earnings, counting the yield once across the allocator and
+staking layers. Powerglove requests
 product scope for comparison rankings, its picker, and filtered history; its
 contract-level fee stack retains contract scope.
 

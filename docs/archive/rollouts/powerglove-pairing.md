@@ -1,16 +1,22 @@
 > Historical reference captured from `docs/powerglove-pairing.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/reference/api.md](../../reference/api.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/powerglove-pairing.md).
 
 # Serve earnings and fees to Powerglove
 
-The pairing reads completed `lifetime-yield` and `fee-usd` results. It does not collect events, fetch prices or change accounting during HTTP requests. Powerglove displays the amounts available in those results; developer diagnostics remain in yearn-data.
+The pairing reads completed `lifetime-yield` and `fee-usd` results. HTTP requests serve
+prepared data; explicit writer operations own event collection, pricing and accounting.
+Powerglove displays the
+amounts available in those results; developer diagnostics remain in yearn-data.
 
 ## Select a publication
 
-Use the same database and explicit closed UTC cutoff for both analyses. Disable the earnings provider fallback for this pairing. See [the existing refresh workflow](../../operations/research-exports.md) for collecting history and repairing prices before analysis.
+Use the same database and explicit closed UTC cutoff for both analyses. Disable the earnings
+provider fallback for this pairing. See [the existing refresh
+workflow](../../operations/research-exports.md) for collecting history and repairing prices
+before analysis.
 
 Record the run IDs printed by the two analyses, then select them explicitly:
 
@@ -20,9 +26,14 @@ yearn-data --db neon select-pairing \
   --out data/powerglove
 ```
 
-Selection checks that both runs are complete, use compatible Yearn EOD pricing and the same cutoff, and contain the same V2/allocator report identities. It checks selected prices across shared asset/day targets and rejects duplicate event identities. Missing prices and unavailable accounting are retained; they do not prevent publishing the amounts that are known.
+Selection checks that both runs are complete, use compatible Yearn EOD pricing and the same
+cutoff, and contain the same V2/allocator report identities. It checks selected prices
+across shared asset/day targets and rejects duplicate event identities. Publish supported
+known amounts while retaining unavailable prices and accounting states.
 
-For the verified October 5, 2026 snapshot, the selected runs are earnings **13** and fees **12**, with exclusive cutoff `1791158400`. These are example IDs from the local canonical database, not defaults for another environment.
+For the verified October 5, 2026 snapshot, the selected runs are earnings **13** and fees
+**12**, with exclusive cutoff `1791158400`. These example IDs belong to the local canonical
+database. Select matching retained IDs in each target environment.
 
 The local selection command is:
 
@@ -34,9 +45,14 @@ PYTHONPATH=src .venv/bin/python -m yearn_data.cli --db neon \
 The publication directory contains:
 
 - `current.json`: the selected dataset ID, replaced atomically after validation succeeds.
-- `datasets/<dataset-id>.json`: source database path, completed run context, output fingerprints, cutoff, policies, financial scope, supported chains, frozen vault names and diagnostic counts.
+- `datasets/<dataset-id>.json`: source database path, completed run context, output
+  fingerprints, cutoff, policies, financial scope, supported chains, frozen vault names and
+  diagnostic counts.
 
-A failed selection leaves the previous publication selected. Older dataset manifests remain available for clients finishing requests against an earlier selection. Keep the referenced database and its completed results available. Do not overwrite completed analysis outputs; produce new runs after data repairs.
+A failed selection leaves the previous publication selected. Older dataset manifests remain
+available for clients finishing requests against an earlier selection. Keep the referenced
+database and its completed results available. Produce new analysis runs after data repairs
+and preserve completed outputs.
 
 ## Run the read-only API
 
@@ -45,7 +61,9 @@ yearn-data serve-pairing --publication data/powerglove \
   --host 127.0.0.1 --port 3490
 ```
 
-The server validates the selected results at startup, reads the source database in read-only mode, and caches bounded queries over those results. It makes no RPC or price-service requests. Without the optional TVL publication, it supplies:
+The server validates the selected results at startup, reads the source database in read-only
+mode, and caches bounded queries over those results. It makes no RPC or price-service
+requests. Without the optional TVL publication, it supplies:
 
 | Path | Result |
 | --- | --- |
@@ -53,13 +71,27 @@ The server validates the selected results at startup, reads the source database 
 | `/api/fees/history` | Ordered monthly fee/earnings buckets. |
 | `/api/fees/vaults` | Chain/address-keyed vault rows and their amounts. |
 
-Filters are `since`, exclusive `until`, `chainId` (one ID or a comma-separated list), and `vaultAddress`. History supports `interval=monthly` (the unchanged default) or `interval=weekly`. Monetary values are decimal strings or null. A wholly unavailable amount is not converted to zero. Unknown chains and invalid parameters produce normal request errors.
+Filters are `since`, exclusive `until`, `chainId` (one ID or a comma-separated list), and
+`vaultAddress`. History supports `interval=monthly` (the unchanged default) or
+`interval=weekly`. Monetary values are decimal strings or null. A wholly unavailable amount
+remains null. Unknown chains and invalid parameters produce normal request errors.
 
-`vaultAddress` selects one contract and requires exactly one `chainId`. Addresses are validated as 20-byte hex values and matched case-insensitively. The same selector applies before aggregation to all three views. A contract absent from the selected dataset on that chain produces HTTP 400; a known contract with no reports in the requested range returns empty history and unavailable totals. Missing names do not prevent selection.
+`vaultAddress` selects one contract and requires exactly one `chainId`. Addresses are
+validated as 20-byte hex values and matched case-insensitively. The same selector applies
+before aggregation to all three views. A contract absent from the selected dataset on that
+chain produces HTTP 400; a known contract with no reports in the requested range returns
+empty history and unavailable totals. Selection supports addresses with missing names.
 
-Weekly buckets use Monday 00:00 UTC through the following Monday, with an exclusive end. Their `period` is the week-start date (`YYYY-MM-DD`), and `startTimestamp` / `endTimestamp` give those calendar boundaries in Unix seconds. They are sorted by week start. Existing monthly buckets retain their `YYYY-MM` periods and response shape.
+Weekly buckets use Monday 00:00 UTC through the following Monday, with an exclusive end.
+Their `period` is the week-start date (`YYYY-MM-DD`), and `startTimestamp` / `endTimestamp`
+give those calendar boundaries in Unix seconds. They are sorted by week start. Existing
+monthly buckets retain their `YYYY-MM` periods and response shape.
 
-Amounts are filtered by `[since, until)` and the selected dataset cutoff before grouping. A first or last weekly bucket can therefore contain only part of its calendar week; its boundary fields describe the calendar week, not additional observations. Empty calendar weeks are not fabricated. Weekly earnings remain reports recognized during the period rather than continuously accrued returns.
+Amounts are filtered by `[since, until)` and the selected dataset cutoff before grouping. A
+first or last weekly bucket can therefore contain only part of its calendar week; its
+boundary fields describe the calendar week, and its values cover the observed portion.
+History includes weeks with observed data. Weekly earnings sum reports recognized during the
+period.
 
 For example, these requests describe one vault's amounts and weekly history:
 
@@ -69,15 +101,26 @@ For example, these requests describe one vault's amounts and weekly history:
 /api/fees/vaults?chainId=1&vaultAddress=0x...&since=START&until=END&datasetId=SELECTED_ID
 ```
 
-Replace the placeholders with a full address, Unix timestamps and the summary's dataset ID. Vault filtering counts that contract's own accepted fee charges and incident-adjusted reported P&L. It does not consolidate children into the parent or attribute downstream charges to historical ownership. Tokenized Strategy fees remain available independently of main vault earnings.
+Replace the placeholders with a full address, Unix timestamps and the summary's dataset ID.
+Vault filtering counts that contract's own accepted fee charges and incident-adjusted
+reported P&L. Nested earnings consolidation and downstream fee attribution require a
+separate historical-ownership policy. Tokenized Strategy fees remain available independently
+of main vault earnings.
 
-Each response carries an opaque `datasetId`. Powerglove uses the summary's ID in subsequent history/vault requests, so a manual publication change cannot mix datasets. That identifier is not displayed. Source reasons, price provenance, coverage counts and reporting cutoffs remain in developer publication records and the existing analysis exports.
+Each response carries an opaque `datasetId`. Powerglove uses the summary's ID in subsequent
+history/vault requests, so a manual publication change cannot mix datasets. That identifier
+serves as an internal selection key. Source reasons, price provenance, coverage counts and
+reporting cutoffs remain in developer publication records and the existing analysis exports.
 
-If the production frontend calls a separate API origin, pass its exact origin with `--cors-origin`. Otherwise use a same-origin reverse proxy. No Yearn Prices or RPC credentials belong in the display contract.
+If the production frontend calls a separate API origin, pass its exact origin with
+`--cors-origin`. Otherwise use a same-origin reverse proxy. No Yearn Prices or RPC
+credentials belong in the display contract.
 
 ## Connect Powerglove without replacing its other sources
 
-The Powerglove changes are based on `codex/qtov-on-improved-fee-data@04a1a30586d17a3b3da86ccdd30ecf2560a2435a`, on continuation branch `ross/yearn-data-pairing`.
+The Powerglove changes are based on
+`codex/qtov-on-improved-fee-data@04a1a30586d17a3b3da86ccdd30ecf2560a2435a`, on continuation
+branch `ross/yearn-data-pairing`.
 
 Configure the new source separately:
 
@@ -89,9 +132,15 @@ VITE_PUBLIC_YEARN_DATA_API_URL=https://your-data-service.example
 VITE_YEARN_DATA_API_TARGET=http://127.0.0.1:3490
 ```
 
-Keep `VITE_PUBLIC_YEARN_FEES_API_URL` and `VITE_YEARN_FEES_API_TARGET` on the existing fee-analytics source. `/api/fees/stack` and `/api/profitability` continue using it. Keep the TVL variables on the existing TVL source. Without the new Yearn Data variables, core views retain the existing fee-origin fallback.
+Keep `VITE_PUBLIC_YEARN_FEES_API_URL` and `VITE_YEARN_FEES_API_TARGET` on the existing
+fee-analytics source. `/api/fees/stack` and `/api/profitability` continue using it. Keep the
+TVL variables on the existing TVL source. Without the new Yearn Data variables, core views
+retain the existing fee-origin fallback.
 
-The local Vite proxy routes `/api/fees/stack` before the broader `/api/fees` prefix. This ordering preserves fee-stack analytics while the three core views use yearn-data. Production uses the same split in the request helper. Changing the new source does not move analytics or TVL requests.
+The local Vite proxy routes `/api/fees/stack` before the broader `/api/fees` prefix. This
+ordering preserves fee-stack analytics while the three core views use yearn-data. Production
+uses the same split in the request helper. Analytics and TVL requests retain their
+independently configured routes.
 
 Rebuild Powerglove after changing public build variables. For a local production preview:
 
@@ -100,17 +149,26 @@ bun run build
 bun run preview --host 127.0.0.1 --port 4598 --strictPort
 ```
 
-Review `/stats?tab=fees`. The fee cards and monthly/cumulative charts use the selected yearn-data publication. Fee Analysis and TVL vs Fee Yield retain their existing sources. Loading, filter changes and request retry remain ordinary UI states. Canonical-coverage counters and missing-source warnings are absent from the public Fees panel.
+Review `/stats?tab=fees`. The fee cards and monthly/cumulative charts use the selected
+yearn-data publication. Fee Analysis and TVL vs Fee Yield retain their existing sources.
+Loading, filter changes and request retry remain ordinary UI states. Canonical-coverage
+counters and missing-source warnings are absent from the public Fees panel.
 
 ## Refresh and diagnose
 
-1. Repair or extend source data using the existing bounded ingestion/accounting/pricing commands as needed.
+1. Repair or extend source data using the existing bounded ingestion/accounting/pricing
+   commands as needed.
 2. Run both analyses with the chosen cutoff and Yearn-only policy. Record their IDs.
-3. Export each explicit completed run with `export ... --run-id ...`; retain its context and event/report rows for diagnosis.
-4. Run `select-pairing` with those IDs. Successful selection atomically activates them; no server restart is needed for a new dataset.
-5. Verify the three served views against the selected outputs. Clients can finish requests against the preceding ID.
+3. Export each explicit completed run with `export ... --run-id ...`; retain its context and
+   event/report rows for diagnosis.
+4. Run `select-pairing` with those IDs. Successful selection atomically activates them; no
+   server restart is needed for a new dataset.
+5. Verify the three served views against the selected outputs. Clients can finish requests
+   against the preceding ID.
 
-For a revaluation using the same October 5 cutoff, these commands create new completed runs without collecting history or fetching prices. Substitute their newly printed IDs in the exports and selection command; do not assume they remain 13 and 12:
+For a revaluation using the same October 5 cutoff, these commands create new completed runs
+without collecting history or fetching prices. Substitute their newly printed IDs in the
+exports and selection command; use the IDs printed by that run:
 
 ```bash
 yearn-data --db neon analyze lifetime-yield \
@@ -122,13 +180,24 @@ yearn-data --db neon export fee-usd --run-id FEES_RUN_ID \
   --out artifacts/pairing-refresh/fee-usd/FEES_RUN_ID
 ```
 
-Use `fee_usd_events.csv` and the fee rollups for acceptance reasons, unavailable metadata/prices and component counts. Use `reports.csv` for raw/adjusted earnings, incident rules and price provenance. The selected manifest links those records to the actual publication. Price repairs and fee-execution repairs remain separate operations; neither requires adding diagnostic displays to Powerglove.
+Use `fee_usd_events.csv` and the fee rollups for acceptance reasons, unavailable
+metadata/prices and component counts. Use `reports.csv` for raw/adjusted earnings, incident
+rules and price provenance. The selected manifest links those records to the actual
+publication. Price repairs and fee-execution repairs remain separate operations; neither
+requires adding diagnostic displays to Powerglove.
 
-This delivery retains reported P&L rather than consolidating historical yield across nested contracts. Distinct accepted fee charges across the included families are summed once. See the [accounting contract](../../reference/accounting.md) and [pairing requirements](../design/powerglove-pairing-requirements.md).
+This delivery retains contract-level reported P&L. Historical yield consolidation requires a
+separate recognition policy. Distinct accepted fee charges across the included families are
+summed once. See the [accounting contract](../../reference/accounting.md) and [pairing
+requirements](../design/powerglove-pairing-requirements.md).
 
 ## Validation record
 
-The implementation is validated with offline selection/filter/accounting fixtures, the repository suites, a production Powerglove build, and an actual-source browser preview. The local detailed receipts, source reconciliation, preserved-analytics comparisons and screenshot are under `artifacts/powerglove-pairing-validation/` and are intentionally outside Git. Private preview URLs belong in the chat, not repository or pull-request content.
+The implementation is validated with offline selection/filter/accounting fixtures, the
+repository suites, a production Powerglove build, and an actual-source browser preview. The
+local detailed receipts, source reconciliation, preserved-analytics comparisons and
+screenshot are under `artifacts/powerglove-pairing-validation/` and are intentionally
+outside Git. Share private preview URLs exclusively in the private review conversation.
 
 | Requirements check | Evidence |
 | --- | --- |
@@ -143,4 +212,5 @@ The implementation is validated with offline selection/filter/accounting fixture
 
 ## TVL integration
 
-For the shared-database TVL cutover and consumer configuration, see [Powerglove TVL API](../../reference/api.md).
+For the shared-database TVL cutover and consumer configuration, see [Powerglove TVL
+API](../../reference/api.md).

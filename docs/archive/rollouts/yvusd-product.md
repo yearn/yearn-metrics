@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/accounting/yvusd-product.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/accounting/yvusd.md](../../accounting/yvusd.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/accounting/yvusd-product.md).
 
@@ -17,7 +17,7 @@ unlocked vault: they already include returns on locked holders' capital. The loc
 contracts hold yvUSD shares, and their additional reported gains include locker-bonus
 redistributions. Summing their gains again would double count product earnings.
 The locker bonus remains separate from actual fees. Contract-scope records and names
-are preserved; product charts use the API's `yvUSD` name instead of `USD yVault`.
+are preserved; product charts use the API’s `yvUSD` name.
 
 Both locked contracts are retained in the maintained Tokenized Strategy inventory,
 so bounded updater runs collect their fee reports, including any future actual fees.
@@ -25,7 +25,7 @@ The earlier contract's verified deployment is block 24271898; the current contra
 is block 24329199. Both expose API version 3.0.4 and use yvUSD as their asset.
 Sources are Sourcify exact-match `src/LockedyvUSD.sol:LockedyvUSD` at each address.
 
-The user selected full onchain history rather than a public-launch cutoff. Preserve
+The selected reporting scope covers full onchain history. Preserve
 the four underlying reports with real fees on January 26–28, 2026 (UTC):
 $0.533052320825365730302 management and $0.9690390576925535207695 performance fees.
 

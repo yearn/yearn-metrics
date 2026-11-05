@@ -1,8 +1,8 @@
 # Nightly VM refresh
 
-The repository contains a scheduler adapter and systemd **templates only**.
-Adding these files does not install, start or enable a service, change the VM's
-linger setting, update the database, or publish a release.
+The repository supplies a scheduler adapter and systemd templates. An operator installs the
+service, configures user lingering, tests a supervised publication and enables the timer
+through the steps below.
 
 ## Scope and runtime
 
@@ -10,24 +10,25 @@ linger setting, update the database, or publish a release.
 reports/fees and TVL on Ethereum, Optimism, Polygon, Fantom, Base, Arbitrum and
 Katana; TVL-only discovery/collection on Gnosis (100), HyperEVM (999) and Yeer
 (4663). Fantom uses 64 confirmations. Other report chains retain native source
-and finality policies. The seven report chains are not the whole TVL scope.
+and finality policies. The TVL scope includes the seven report chains and the three TVL-only
+chains.
 Financial preparation continues to include all retained history through the cutoff.
 
-The configured `initial_baseline_job` is a historical bootstrap candidate, not
-an assertion about the live selection. Before acquisition the adapter reads its
+The configured `initial_baseline_job` supplies a historical bootstrap candidate whose
+receipt must match the live selection. Before acquisition the adapter reads its
 native receipt, requires completed selection/consolidation and checks that its
 release still matches the database. Verify a current receipt before installing.
 A publication without a matching native receipt requires a supervised native
-baseline run; do not fabricate a receipt or reset history bounds.
+baseline run; preserve authentic receipts and reviewed historical acquisition bounds.
 
 `initial_baseline_job` only seeds an installation with no `state.json`. Once that
-file exists, `state.json:lastJob` is authoritative. Editing the bootstrap setting
-does not replace an existing baseline. Use explicit adoption below after a manual
-publication, and never delete pending state to make a different baseline fit.
+file exists, `state.json:lastJob` is authoritative. After a manual publication, use explicit
+adoption below to change an existing baseline. Preserve pending state and recover its job
+before adoption.
 For a fresh installation whose configured candidate has been superseded, either
 set the bootstrap job to a reviewed current selected native receipt or initialize
-state with `--adopt-baseline REVIEWED_JOB_ID`. The shipped historical candidate is
-not an instruction to trust a stale release; both paths enforce the live match.
+state with `--adopt-baseline REVIEWED_JOB_ID`. Both initialization paths verify that the
+reviewed receipt matches the live selection.
 
 Use a dedicated environment to avoid the existing `.venv` editable installation
 pointing at a different checkout. From the repository root:
@@ -38,11 +39,11 @@ PYTHONPATH="$PWD/src" .scratch/nightly-venv/bin/python -m yearn_data.nightly \
   --config ops/nightly-refresh.json --env .env --check
 ```
 
-`--check` validates local configuration and prints the source-module path. It does
-not load credentials, connect to Postgres, call providers, or write run state.
+`--check` validates local configuration and prints the source-module path. Its checks use
+local files and configuration only.
 Check that its package path belongs to this checkout. Python follows the repo's
 `.python-version`. The service sets an explicit source path and uses this dedicated
-environment; it does not update code or dependencies automatically.
+environment; deploy code and dependencies explicitly into that environment.
 
 The ignored `.env` needs production writer credentials, the existing price/indexer
 credentials and archive RPCs for all ten chains. TVL-only RPC overrides are
@@ -63,20 +64,20 @@ The wrapper freezes a pending cutoff and baseline before work. It first acquires
 TVL-only catalogs and missing closes using the existing collectors and missing-close
 planner under the native database advisory lock. At most 30 extra chain/date
 attempts run per pass. Completed catalog/day attempts are checkpointed; incomplete
-source evidence and unavailable prices remain recorded as warnings. A completed
-attempt with unavailable units does not retry forever. Historical repair stays
+source evidence and unavailable prices remain recorded as warnings. An attempt with
+unavailable units completes with a retained warning. Historical repair stays
 separate, just as in the native refresh worker.
 
 Transient RPC transport/HTTP failures and lagging finalized heads on TVL-only
 chains record sanitized `extraTvl.unavailableChains` warnings and allow the report
-chains to proceed. A missing catalog on such an unavailable chain is not treated
-as an empty vault inventory. Wrong-chain endpoints, authentication/configuration
+chains to proceed. A missing catalog on an unavailable chain retains an
+unavailable-inventory status. Wrong-chain endpoints, authentication/configuration
 failures, TLS failures and unclassified errors still stop the run.
 
 Next it calls `run_refresh(..., mode='publish')` with `--since` semantics. Native
 budgets, report acquisition, accounting, preparation, pin verification, atomic
-selection and consolidation remain owned by that worker. The wrapper never calls
-the older single-chain update script. Its first progress event durably saves the
+selection and consolidation remain owned by that worker. Its first progress event durably
+saves the
 job ID. Budget pauses and unfinished cleanup resume the same job and original
 cutoff. It permits twelve passes per service invocation, returning exit 3 if work
 or HTTP verification is still pending. Other failures return exit 2.
@@ -84,8 +85,8 @@ or HTTP verification is still pending. Other failures return exit 2.
 The worker emits `refresh-job-ready` immediately after obtaining its durable
 job. Proven read-only preflight failures (`RefreshNotStarted`) and writer-lock
 contention (`RefreshBusy`) permit a later retry without a new cutoff. An unknown
-connection/commit outcome during job allocation remains ambiguous and requires
-inspection; it must not be treated as proof that no job exists.
+connection/commit outcome during job allocation requires inspection of `refresh_jobs` to
+establish the allocation outcome before retrying.
 
 Successful selection is persisted before HTTP verification. The wrapper verifies
 the hosted release, fee/TVL/analytics IDs, analytics cutoff and latest TVL close,
@@ -104,18 +105,18 @@ State and per-job receipts live under ignored `artifacts/nightly/`, with private
 permissions and atomic, flushed writes. `state.json` distinguishes pending work
 from `lastJob` and `lastVerified`; `JOB_ID-verification.json` retains TVL-only
 warnings and verification evidence. Financial checkpoints remain in Postgres.
-Do not delete local state to recover an interrupted publication.
+Preserve local state while recovering an interrupted publication.
 
 Local locking prevents overlapping wrapper runs; extra collection and native
 refresh each use the existing database writer lock. There is a lock handoff
 between those stages. Independent manual acquisition/publication writers must
 remain coordinated, as described in [Database refresh](refresh.md).
 
-Code/configuration changes can invalidate native checkpoints. Stop and inspect
-instead of dropping the saved job ID. If interruption occurs before any job ID
-could be saved, the adapter stops rather than creating a potentially duplicate
-job: inspect `refresh_jobs`, identify the matching context and recover the state
-deliberately. Transient failures after a saved job ID, and proven pre-job failures,
+Code/configuration changes can invalidate native checkpoints. Retain the saved job ID and
+inspect the invalidated checkpoint before recovery. If interruption occurs before any job ID
+could be saved, the adapter stops for deliberate recovery: inspect `refresh_jobs`, identify
+the matching context and recover the state. Transient failures after a saved job ID, and
+proven pre-job failures,
 can resume without replacing state. The journal gives owned stop conditions stable
 codes such as `unknown-job-id`, `baseline-selection-drift`, `scope-changed`,
 `writer-busy` and `checkpoint-rejected`; arbitrary provider/DB messages stay hidden.
@@ -133,38 +134,38 @@ state, and refuses changed-scope or pending state. It requires a selected,
 consolidated, publish-ready receipt covering the
 configured chains, matches it to the live database selection, and verifies the
 hosted API. Only then does it atomically update local `lastJob` and `lastVerified`.
-It does not acquire data, change the database selection or publish a release.
+Adoption updates local baseline state after verifying an already completed publication.
 Coordinate other writers while adopting. If work is pending, recover that work
-first; adoption is not an escape hatch for an interrupted job.
+first; adoption requires an idle wrapper with recovered pending work.
 
 ### Required handoff after a manual publication
 
-A manual publication is not operationally complete until the nightly baseline
-has been reconciled. A selected API release and `state.json:lastJob` must refer
+Complete a manual publication’s operational handoff by reconciling the nightly baseline. A
+selected API release and `state.json:lastJob` must refer
 to the same completed native refresh. Otherwise the next activation deliberately
 stops with `baseline-selection-drift` before acquisition.
 
 Use the deployed checkout and its dedicated interpreter for this procedure:
 
 1. Stop `yearn-data-nightly.timer` before starting another acquisition or
-   publication writer. Stopping the timer does not stop an already running
-   service: inspect `yearn-data-nightly.service` and finish or recover active
+   publication writer. An already running service continues after the timer stops: inspect
+   `yearn-data-nightly.service` and finish or recover active
    work first. Coordinate every independent writer, including direct publication
-   tools, which do not necessarily take the native advisory lock.
+   tools, whose locking behavior must be checked separately.
 2. Finish the supervised native publication and consolidation. Record its job
-   ID, cutoff and selected release ID. Preserve any pending wrapper job. Do not
-   substitute a release ID for a job ID, edit an old receipt, or delete state.
+   ID, cutoff and selected release ID. Preserve any pending wrapper job. Use the native job
+   ID, authentic receipt and preserved wrapper state.
 3. If the publication was made outside the native worker and has no matching
    selected receipt, run a supervised native refresh first. A reviewed previous
    receipt can supply acquisition bounds with `--since`; the worker rechecks
-   its chain pins and prepares all retained financial history. This is a new
-   job, not a resume of a superseded selected publication. Include the configured
+   its chain pins and prepares all retained financial history. This creates a new job using
+   the reviewed acquisition bounds. Include the configured
    extra TVL chains in the supervised acquisition. Inspect warnings and readiness
-   before accepting the result; never fabricate a receipt for the external release.
+   before accepting the result; use the resulting authentic native receipt for adoption.
 4. Run `--adopt-baseline REVIEWED_JOB_ID` as shown above. Adoption must succeed
-   against the live database and hosted API. Changing `initial_baseline_job`
-   does not update an existing installation. Retain the verification evidence.
-5. Test the installed service, rather than only running `--check`:
+   against the live database and hosted API. Existing installations take their baseline from
+   `state.json:lastJob`. Retain the verification evidence.
+5. Test the installed service after local `--check` validation:
 
    ```bash
    systemctl --user reset-failed yearn-data-nightly.service
@@ -189,26 +190,26 @@ Use the deployed checkout and its dedicated interpreter for this procedure:
    Verify the next activation is 02:00 UTC. Record deployed source revision,
    native receipt, hosted verification, service result and next activation in
    the operational handoff. Check the next morning's journal and verified cutoff;
-   an enabled timer alone is not proof of successful publication.
+   confirm successful publication through the completed receipt and hosted cutoff.
 
-Record incident-specific IDs, deployed revisions and verification in ignored
-operational receipts, not as defaults in this guide. Merging wrapper code does
-not update the VM's service checkout or dedicated environment.
+Record incident-specific IDs, deployed revisions and verification in ignored operational
+receipts. Deploy merged wrapper code explicitly to the VM’s service checkout and dedicated
+environment.
 
 Native `refresh --since` rejections retain trusted baseline-validation reasons in
-CLI output and receipts through the `RefreshNotStarted` signal. Provider/database
-errors expose their class rather than raw messages or endpoints.
+CLI output and receipts through the `RefreshNotStarted` signal. Provider/database errors
+expose their class; raw messages and endpoints remain private.
 
 The service allows ten hours per invocation, then requests graceful shutdown;
 systemd may terminate it after another 90 seconds. It retries failed invocations
 after five minutes, with at most three starts in twelve hours. The next nightly
-activation can resume unfinished work. This is bounded retry, not a guarantee
-that source outages resolve within a night. Inspect journal failures and receipt
+activation can resume unfinished work. These limits bound retry work. Source outages can
+continue beyond the nightly window. Inspect journal failures and receipt
 warnings; no separate overdue-publication alert has been installed.
 
 ## New installation: review, test, then install disabled
 
-Offline validation does not contact production:
+Validate configuration and behavior offline:
 
 ```bash
 .scratch/nightly-venv/bin/python -m pytest -q tests/test_nightly.py
@@ -235,13 +236,14 @@ Expect `disabled` and `inactive` (their commands return nonzero for those states
 The templates assume `%h/raaaws/yearn-data`; change both the working directory
 and absolute paths when deploying elsewhere. Configure user lingering only when
 ready for unattended execution. Check that backups and recovery are adequate:
-canonical consolidation retires superseded releases, so old IDs are not guaranteed
-rollback points.
+canonical consolidation retires superseded releases, so recovery requires verified retained
+datasets or a restorable backup.
 
 A supervised `--run` **writes to production, publishes, consolidates and may update
 the existing approved GitHub warning issue**. Schedule that acceptance run separately
 after reviewing these files. Only after it succeeds should an operator explicitly
-enable/start the timer. This implementation does not perform those actions.
+enable/start the timer. Installation, acceptance testing and timer activation are explicit
+operator steps.
 
 For inspection after installation:
 
@@ -250,8 +252,9 @@ systemctl --user status yearn-data-nightly.service yearn-data-nightly.timer
 journalctl --user -u yearn-data-nightly.service --since yesterday
 ```
 
-Never put credentials, private preview URLs or raw provider exceptions into GitHub
-reports. See [publication recovery](refresh.md#publication-and-recovery)
+Restrict GitHub reports to approved public summary fields; keep credentials, private preview
+URLs and raw provider exceptions in private operational evidence. See [publication
+recovery](refresh.md#publication-and-recovery)
 for native selected-cleanup-failed and changed-code recovery.
 
 [Documentation index](../README.md).

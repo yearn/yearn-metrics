@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/fee-summary-performance-2026-10-26.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/development/performance.md](../../../development/performance.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/fee-summary-performance-2026-10-26.md).
 
@@ -29,20 +29,22 @@ constructed and queried per scope, followed by one same-object cached query each
 Root, backend and consumer agents confirmed that heavy checks were stopped before
 the final paired runs; the baseline run preceded the candidate run. Earlier
 exploratory runs are excluded. Source SHA-256 digests, all samples and output hashes
-are retained in [the raw measurement](../../../../benchmarks/results/2026-10/fee-summary-performance-2026-10-26.json).
+are retained in [the raw
+measurement](../../../../benchmarks/results/2026-10/fee-summary-performance-2026-10-26.json).
 
 The profile records total connection-establishment time, JSON decode time and
 row-loading wall time. Row loading includes connection setup, SQL execution,
 transfer, Python row iteration and JSON decoding. Aggregation is calculation time
 minus row-loading time, so also includes filtering/grouping and ordinary view
 bookkeeping. JSON decoding timers wrap each call and add overhead in both runs.
-These are diagnostic phase measurements rather than an uninstrumented throughput
-benchmark. Initial in-memory cProfile attributed almost all summary computation to
+These measurements record instrumented diagnostic phases. Initial in-memory cProfile
+attributed almost all summary computation to
 ordered Decimal summation, motivating this narrow aggregation change.
 
 ## Results
 
-Medians of five samples, milliseconds. Component medians need not sum to the total.
+Medians of five samples, milliseconds. Use the measured total for overall duration;
+component medians describe their individual distributions.
 
 | Scope / version | Fresh-object total | Row loading | JSON decode (within loading) | Aggregation | Connection setup (all phases) |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -83,8 +85,8 @@ remain explicitly unavailable. Retry still refreshes the parent summary as well
 as retrying the product data, preserving recovery from an expired publication;
 the regression covers HTTP 410 followed by a replacement dataset.
 
-This removes one request dependency, not a measured four-second improvement to
-the deployed page. The earlier default-range summary followed by a TVL-bounded
+This removes one request dependency. Quantify the deployed page improvement with a separate
+browser measurement. The earlier default-range summary followed by a TVL-bounded
 range summary remains unchanged; eliminating that duplication requires a separate
 decision about shared date-range readiness and failure behavior.
 

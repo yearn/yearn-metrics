@@ -16,10 +16,10 @@ The workflow has five steps:
 5. Export each completed run.
 
 To update prices only, start at step 3.
-You do not need to collect reports again or repeat verified fee calculations.
+Reuse the stored reports and verified fee calculations.
 Completed runs are exportable while retained. Canonical consolidation can retire
-superseded outputs; export needed evidence before a later publication and do not
-treat a run ID as a backup.
+superseded outputs; export needed evidence before a later publication and retain exported
+evidence or a restorable backup for recovery.
 
 ## 1. Collect the required history
 
@@ -46,17 +46,17 @@ Run the command separately for each required chain:
 
 The command selects the configured source and retains known retired vaults.
 It records completed ranges for those vaults.
-This does not prove that every historical contract has been found.
+Historical discovery coverage defines the retained inventory’s boundary.
 
 Collect Tokenized Strategy fees separately with `index-tokenized-fees`.
 Set its inventory, chain, block limits, cutoff, and maximum vault count.
 See [fee accounting](../reference/fee-accounting.md).
-The packaged inventory is a maintained list, not complete historical discovery.
+The packaged inventory is a maintained list of discovered contracts.
 
 If the RPC finalized block is stale, you can use `--confirmations 1000`.
 This permits blocks up to the latest block minus 1,000 blocks.
 Save the printed finality policy with your acquisition records.
-The buffer does not prove protocol finality.
+Record confirmation-buffer acquisition separately from protocol-finalized acquisition.
 
 ## 2. Calculate fees in asset units
 
@@ -71,7 +71,7 @@ Older V2 reports can require verification of selected transactions.
 See [fee accounting](../reference/fee-accounting.md) for report selection and request limits.
 
 Use `recompute-fees` to recalculate from saved evidence without RPC requests.
-Missing evidence must remain unavailable. It must not become a zero amount.
+Missing evidence retains an unavailable amount.
 
 ## 3. Fetch prices
 
@@ -105,7 +105,7 @@ Use these options when you need to update saved results:
 | `--retry-missing` | Retry previously unsuccessful price results. |
 | `price-fees --refresh` | Refresh selected fee prices that are already saved. |
 
-A failed Yearn batch does not cause separate requests for each target or requests to another provider.
+A failed Yearn batch retains its batch failure; retry through the configured provider policy.
 Fee pricing reuses one price per asset and day across contract families.
 It keeps prices from different service endpoints and valuation policies separate.
 Earnings retain a price record per report target.
@@ -150,7 +150,8 @@ Each export includes CSV files and `context.json`.
 The context file records the run ID, name, timestamps, parameters, and CSV file list.
 
 Earnings parameters include the selected price providers and cutoff.
-Fee parameters include the cutoff, valuation policy, and a hash that identifies the service endpoint.
+Fee parameters include the cutoff, valuation policy, and a hash that identifies the service
+endpoint.
 If you supply a deferred-accounting manifest, its hash is also recorded.
 
 The CSVs and context file always refer to the same completed run.
@@ -164,16 +165,22 @@ The CSVs and context file always refer to the same completed run.
 
 Raw amounts are integer strings in the asset's smallest unit.
 USD amounts are decimal strings.
-Missing accounting, missing asset details, missing prices, and known zero amounts remain separate.
+Missing accounting, missing asset details, missing prices, and known zero amounts remain
+separate.
 
 Summaries show known subtotals and counts of events with unknown values.
-A known subtotal can be incomplete. It is not necessarily the full revenue total.
+A known subtotal can be incomplete. Use the accompanying completeness state to determine
+whether it covers the full scoped total.
 
 Keep V2 vault, V3 allocator, and Tokenized Strategy fees separate.
 They can charge fees at different layers of the same capital.
-A consumer can combine distinct accepted charges into an explicitly scoped total of gross fees across the stack, retaining family and completeness details. Do not add components or distributions of an existing charge again. Reported gains/losses require separate treatment because underlying yield can be recognized at multiple layers. See the [Powerglove accounting contract](../reference/accounting.md).
-These are gross contract fees, not Yearn treasury receipts.
-A missing price affects the USD value, not the stored raw fee amount.
+A consumer can combine distinct accepted charges into an explicitly scoped total of gross
+fees across the stack, retaining family and completeness details. Count each charge once
+across its components and distributions. Reported gains/losses require separate treatment
+because underlying yield can be recognized at multiple layers. See the [Powerglove
+accounting contract](../reference/accounting.md).
+These are gross contract fees. Yearn treasury receipts require recipient attribution. A
+missing price leaves the USD value unavailable while preserving the stored raw fee amount.
 
 Use `--deferred-manifest` only to label unresolved accounting with a validated manifest.
 The manifest cannot supply a fee amount or override accepted current evidence.
@@ -184,24 +191,40 @@ Known zero fees remain zero when another amount, such as a refund, cannot be
 priced. Such events use `zero_fee_unpriced_component` (or retain
 `metadata_unavailable`). Aggregate `unpriced_component_events` counts positive
 amounts without USD values across every exported amount field; pricing and
-fee-USD completeness remain false until they are valued. Missing optional
-components do not imply a positive amount and do not change completeness.
+fee-USD completeness remain false until they are valued. Optional components affect
+completeness only when their supported classification establishes an amount requiring
+valuation.
 
 ## Incident-adjusted earnings fields
 
-Lifetime earnings include stored history from both active and retired vaults. Retirement does not remove earlier reports. Unpriced reports remain counted with unavailable USD values. For the Powerglove integration scope and the different treatment of nested fees and earnings, see the [accounting contract](../reference/accounting.md).
+Lifetime earnings include stored history from both active and retired vaults. Earlier
+reports remain included after retirement. Unpriced reports remain counted with unavailable
+USD values. For the Powerglove integration scope and the different treatment of nested fees
+and earnings, see the [accounting contract](../reference/accounting.md).
 
-For selecting completed results and serving the Powerglove fee/earnings views, see the [pairing operator guide](../reference/api.md).
+For selecting completed results and serving the Powerglove fee/earnings views, see the
+[pairing operator guide](../reference/api.md).
 
-The `lifetime-yield` aggregate columns `gross_gain_usd`, `loss_usd`, and `net_yield_usd` are reported P&L totals adjusted for known Yearn public incident disclosures where vault reports emitted paper losses or compensating phantom profits. The raw report-time accounting values remain available as `raw_gross_gain_usd`, `raw_loss_usd`, and `raw_net_yield_usd`.
+The `lifetime-yield` aggregate columns `gross_gain_usd`, `loss_usd`, and `net_yield_usd` are
+reported P&L totals adjusted for known Yearn public incident disclosures where vault reports
+emitted paper losses or compensating phantom profits. The raw report-time accounting values
+remain available as `raw_gross_gain_usd`, `raw_loss_usd`, and `raw_net_yield_usd`.
 
-Rows changed by an incident adjustment are marked in `reports.csv` with `is_adjusted`, `incident_id`, `incident_classification`, `incident_description`, and `incident_disclosure_url`. Raw indexed `strategy_reports` rows in Postgres are not modified.
+Rows changed by an incident adjustment are marked in `reports.csv` with `is_adjusted`,
+`incident_id`, `incident_classification`, `incident_description`, and
+`incident_disclosure_url`. Raw indexed `strategy_reports` rows in Postgres retain their
+original values.
 
 ## Vault Volume Outputs
 
-The `vault-volume` job indexes user `Deposit`/`Withdraw` events and strategy debt movement. V2 strategy allocation volume is derived from `StrategyReported.debtAdded` and `debtPaid`; V3 allocation volume is indexed from `DebtUpdated` events.
+The `vault-volume` job indexes user `Deposit`/`Withdraw` events and strategy debt movement.
+V2 strategy allocation volume is derived from `StrategyReported.debtAdded` and `debtPaid`;
+V3 allocation volume is indexed from `DebtUpdated` events.
 
-The headline volume metric is `gross_total_volume_usd`, defined as deposits + withdrawals + allocations + deallocations. Exports also include net user flow, net strategy flow, per-chain/vault/strategy/token/month rollups, and raw `vault_flows.csv` / `strategy_debt_flows.csv` event files.
+The headline volume metric is `gross_total_volume_usd`, defined as deposits + withdrawals +
+allocations + deallocations. Exports also include net user flow, net strategy flow,
+per-chain/vault/strategy/token/month rollups, and raw `vault_flows.csv` /
+`strategy_debt_flows.csv` event files.
 
 See [pricing](../reference/pricing.md) for volume versus earnings/fee policy.
 

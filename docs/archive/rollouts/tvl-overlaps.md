@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/tvl-overlaps.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/reference/api.md](../../reference/api.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/tvl-overlaps.md).
 
@@ -13,9 +13,10 @@ selected Yearn Data TVL publication. It supports `chainId`, `category`
 for a retired dataset follow the existing HTTP 410 / reload contract.
 
 The response contains `snapshotAt`, `asOfTimestamp`, `datasetId`,
-`totalRawTvlUsd`, `totalOverlapTvlUsd`, `totalBridgeExcludedTvlUsd`, `totalTvlUsd`, `nodes`, `edges`, and
-`bridgeExclusions`. The timestamp is the publication's stored close, not a
-current RPC read. No request performs discovery, RPC collection, or pricing.
+`totalRawTvlUsd`, `totalOverlapTvlUsd`, `totalBridgeExcludedTvlUsd`, `totalTvlUsd`, `nodes`,
+`edges`, and
+`bridgeExclusions`. The timestamp identifies the publication’s stored close. No request
+performs discovery, RPC collection, or pricing.
 
 ## Accounting and display conditions
 
@@ -28,20 +29,21 @@ current RPC read. No request performs discovery, RPC collection, or pricing.
   separately in `totalBridgeExcludedTvlUsd` and `bridgeExclusions`, matching the
   summary route's `overlapExcluded` and `vaultBridgeExcluded` distinction.
 - Recorded debt, shared ownership, and parent/child TVL caps use `tvl.account`.
-  Synthetic intermediary nodes explain allocations but never add to aggregate TVL.
+  Synthetic intermediary nodes provide allocation context; aggregate TVL counts the
+  underlying capital once.
 - Each holder's ownership is split across parents and children once. The graph
   merges a shared holder's child edge while retaining distinct parent allocations.
 - `tvlUsd` on an edge describes flow. `deductedTvlUsd` describes the contribution
   to overlap accounting. They intentionally differ for ordinary strategies and
-  curation flows. Do not sum all displayed edges to derive headline overlap;
-  multi-hop context and filtered categories make that incorrect.
+  curation flows. Use the headline overlap field for its defined scope; displayed edges
+  include multi-hop context and filtered categories.
 - Retained strategy debts can exceed a V2 parent's assets. Verified downstream
   flows receive their accounted budget first; the remaining parent TVL is split
   among other debts. Such allocation edges have
   `valueSource=parent-tvl-capped-debt-estimate`; `recordedDebtUsd` retains the
   uncapped observation. Ordinary verified debt uses `dated-strategy-debt`.
 - Unpriced vaults are omitted from graph nodes and retained under
-  `diagnostics.unavailableNodes`, rather than shown as zero-value vaults.
+  `diagnostics.unavailableNodes` with unavailable valuations.
   Graph totals follow the existing API's available-amount convention;
   `diagnostics.status` identifies incomplete accounting.
 - Vaults and curation retain their existing separate-layer headline policy.
@@ -68,8 +70,9 @@ Read-only checks against Yearn Data's October 8, 2026 UTC close
 
 An independent withdrawal-queue scan at the report's block found 19 routes with
 positive recorded debt, delegated assets, and child shares in our catalog: five
-existing plus 14 newly registered. This verifies those relationships, not the
-report's exact 20-route list or complete $40.132M execution. The report does not
+existing plus 14 newly registered. This verifies the relationships in the checked subset.
+The report’s complete 20-route list and $40.132M execution require full route-level
+verification. The report does not
 provide its full raw relationship list or fixed-price replay inputs.
 
 Cross-chain validation separately reproduced `REMOTE_CHAIN_ID=747474`, both
@@ -85,8 +88,8 @@ Using the same stored close and prices, a separate local review dataset produced
 | yvUSD → Katana | 928,357.17 |
 | Total | 6,370,731.32 |
 
-Known external TVL changed from $236,787,808.55 to $230,417,077.24. These remain
-known subtotals, not certified complete unique-capital totals. The DUSD router's
+Known external TVL changed from $236,787,808.55 to $230,417,077.24. These amounts remain
+known subtotals with incomplete unique-capital coverage. The DUSD router's
 valuation is unavailable because of missing price evidence; it contributes no
 invented zero deduction. No prices or catalog membership were altered.
 
@@ -108,8 +111,9 @@ PYTHONPATH=src .venv/bin/python scripts/review_tvl_overlaps.py \
 The script reads the pinned source database and archive RPCs, saves a new
 single-close `frame.json`, `validation.json`, and `graph.json`. It refuses to
 overwrite an existing output directory. The JSON frame freezes the source policy
-and can be reopened with `ReviewDataset.load()` without any database access. It does not
-write to Neon, activate a hosted release, or rebuild the full historical series.
+and can be reopened with `ReviewDataset.load()` without any database access. It writes an
+isolated single-close review dataset. Historical rebuilding and hosted publication require
+separate writer operations.
 Getter-backed routes without a fixed source vault use parent/strategy pairs
 observed in the pinned frame and reverify the destination and ownership at that
 close. A route whose source cannot be established is listed under
@@ -120,8 +124,8 @@ editable installation pointing to another worktree.
 For an actual data rollout, recollect affected dated positions into new runs,
 prepare the resulting TVL history and matching analytics, validate the source →
 API → consumer path, and activate the release through the existing publication
-workflow. Old point-in-time balances must never be replaced with today's
-holdings. New cross-chain collections need both chain snapshots at the same
+workflow. Use balances observed at each historical point in time. New cross-chain
+collections need both chain snapshots at the same
 requested close; mismatched selected parent or child blocks are unavailable.
 
 Powerglove must classify `/api/tvl/graph` in its Yearn Data lane and proxy it to
@@ -136,8 +140,7 @@ Powerglove build routes the graph to that API and displays explicit
 `deductedTvlUsd` amounts, including zero-deduction curation flows.
 
 Repair run `488` stores the 27 reviewed positions at their original October 8
-blocks. It does not replace historical snapshots or use current RPC balances for
-past dates. Dataset
+blocks. It preserves historical snapshots and uses dated evidence for past balances. Dataset
 `c09c5663cb62c7178b5d34764e764bcbb537e0ea98ecbf5b3adafece4e0e472c`
 contains 1,153,961 chart rows spanning 2,265 closes. An exhaustive comparison
 found 17 changed chart rows, all at `1791503999`; every earlier chart row remains

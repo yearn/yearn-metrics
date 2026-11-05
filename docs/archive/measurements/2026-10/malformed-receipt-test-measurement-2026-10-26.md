@@ -1,6 +1,6 @@
 > Historical reference captured from `docs/malformed-receipt-test-measurement-2026-10-26.md` at `ef03f16`.
-> This records a past design, measurement or rollout; its ports, IDs, branch
-> states and rollback availability are not current operating instructions.
+> This record captures a past design, measurement or rollout. Use the current
+> guides and live checks for ports, IDs, branch state and recovery options.
 > Current guidance: [docs/development/performance.md](../../../development/performance.md).
 > Original source: [frozen revision](https://github.com/yearn/yearn-metrics/blob/ef03f16fe1c90299ff5342c931563a1e8ffdf26a/docs/malformed-receipt-test-measurement-2026-10-26.md).
 
@@ -24,7 +24,7 @@ the stored receipt and verify that recomputation marks it unavailable.
 | Pytest elapsed | 9.60 s | 3.00 s |
 
 This saves 6.60 seconds in the measured pair: 69% less elapsed time, or 3.2×
-faster. It is not a whole-suite speedup measurement. Total Postgres cases drop
+faster. The measurement covers the focused tests recorded here. Total Postgres cases drop
 from 761 to 743; the total collected count drops by six because pure decoding
 need not be repeated for online and offline execution.
 
