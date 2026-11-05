@@ -341,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError('refresh requires a named Postgres database: neon or staging')
         from .refresh import run_refresh
         from .refresh_scope import RefreshOptions
-        from .refresh_state import read_receipt,CheckpointRejected,RefreshBusy
+        from .refresh_state import read_receipt,CheckpointRejected,RefreshBusy,RefreshNotStarted
         if args.inspect:
             try:result=read_receipt(args.db,args.inspect)
             except Exception as exc:
@@ -371,6 +371,9 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:
                 result={'status':'rejected','failureClass':type(exc).__name__}
                 if isinstance(exc,(CheckpointRejected,RefreshBusy)):result['reason']=str(exc)
+                elif isinstance(exc,RefreshNotStarted):
+                    result['sourceFailureClass']=exc.failure_class
+                    if exc.reason is not None:result['reason']=exc.reason
         body=json.dumps(result,sort_keys=True,indent=2)
         if args.receipt:
             args.receipt.parent.mkdir(parents=True,exist_ok=True)

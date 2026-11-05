@@ -1,0 +1,12 @@
+{
+  "database": "neon",
+  "chains": ["arb", "base", "eth", "ftm", "kat", "op", "polygon"],
+  "extra_tvl_chains": [100, 999, 4663],
+  "confirmations": {"ftm": 64},
+  "initial_baseline_job": "167c385affbf423c99388cbb7168bd86",
+  "api_origin": "https://yearn-data-api-preview.vercel.app",
+  "publication_root": "../artifacts/nightly/publication",
+  "state_dir": "../artifacts/nightly",
+  "max_invocations": 12,
+  "retry_seconds": 60
+}

@@ -5,6 +5,36 @@ from yearn_data import cli
 from test_refresh_workflow import workflow as workflow,CUTOFF
 
 
+@pytest.mark.parametrize('case,reason', [
+    ('unknown', 'unknown refresh job'),
+    ('not-ready', 'baseline must be a publish-ready prepared or selected refresh'),
+    ('provider-error', None),
+])
+def test_since_rejections_preserve_owned_reasons_without_provider_text(monkeypatch, tmp_path, capsys, case, reason):
+    from yearn_data import refresh, refresh_state
+    import requests
+    monkeypatch.setattr(cli, 'load_environment', lambda _: None)
+    def read(database, identity):
+        if case == 'unknown':
+            raise refresh_state.CheckpointRejected('unknown refresh job')
+        if case == 'provider-error':
+            raise requests.ConnectionError('https://secret@provider.invalid')
+        return dict(status='acquired', result=dict(publishReady=False))
+    monkeypatch.setattr(refresh_state, 'read_receipt', read)
+    monkeypatch.setattr(refresh, 'RefreshState', lambda *args, **kwargs: pytest.fail('rejected preflight allocated a job'))
+    receipt = tmp_path / 'receipt.json'
+    args = ['--db', 'staging', 'refresh', '--chains', 'eth', '--cutoff', '172800',
+            '--publication-root', str(tmp_path / 'publication'), '--since', 'baseline', '--receipt', str(receipt)]
+    assert cli.main(args) == 2
+    output = capsys.readouterr().out
+    body = json.loads(output)
+    assert body == json.loads(receipt.read_text())
+    assert body['failureClass'] == 'RefreshNotStarted'
+    assert body['sourceFailureClass'] == ('ConnectionError' if case == 'provider-error' else 'CheckpointRejected')
+    assert body.get('reason') == reason
+    assert 'secret' not in output
+
+
 def test_explicit_database_and_scope_are_required_before_connections(monkeypatch,tmp_path):
     monkeypatch.setattr(cli,'load_environment',lambda _:None)
     with pytest.raises(ValueError,match='explicit --db'):
