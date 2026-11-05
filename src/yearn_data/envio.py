@@ -455,7 +455,7 @@ def _report_metadata_repairs(
             f"with unresolved metadata in blocks {row['first_block']}-{row['last_block']}; "
             "catalog metadata is now available. Use bounded catch-up to reconcile report metadata, "
             "then rerun pricing and analysis. index-events replay does not repair existing metadata; "
-            "see docs/historical-envio-ingestion.md"
+            "see docs/operations/report-ingestion.md"
         )
 
 

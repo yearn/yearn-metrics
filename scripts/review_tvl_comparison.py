@@ -1,7 +1,7 @@
 """Reconcile a saved TVL frame with pinned upstream inventory and archive evidence.
 
 Usage: PYTHONPATH=src python scripts/review_tvl_comparison.py ARTIFACT_DIRECTORY
-See docs/tvl-comparison.md for the input contract and publication workflow.
+See docs/operations/tvl-comparison.md for the input contract and publication workflow.
 """
 import argparse
 import json,requests,hashlib

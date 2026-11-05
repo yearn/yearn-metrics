@@ -9,6 +9,7 @@ artifacts
 exports
 tests
 docs
+benchmarks
 ops
 scripts
 *.sqlite

@@ -1,198 +1,179 @@
-# yearn-data
+# Yearn Data
 
-Reusable Python tooling for indexing Yearn vault data and running research jobs on top of normalized onchain data.
+Yearn Data turns onchain activity and provider evidence into a consistent record
+of Yearn vaults, fees, reported earnings and historical capital. It supplies the
+Powerglove stats views, a published HTTP API, and research exports for analysis
+and reconciliation.
 
-The first analysis job is `lifetime-yield`, which backfills Yearn V2/V3 `StrategyReported` events, prices report-time vault asset gains/losses, and exports aggregate yield totals.
+The project is Python tooling backed by Postgres. Collectors gather evidence;
+accounting and pricing turn it into financial records; preparation builds the
+responses and charts that consumers read. A publication selects matching fees,
+TVL and analytics as one release. This page explains that complete lifecycle and
+the meaning of its main outputs.
 
-For pricing policy, configuration and Yearn-only commands, see [historical earnings pricing](docs/earnings-pricing.md).
+## From source evidence to published data
 
-## Quick Start
+| Stage | What happens | Result |
+| --- | --- | --- |
+| Collect | Discover vaults and acquire reports, fee events, transaction evidence, dated balances and ownership relationships. Envio and RPC supply chain evidence; external services supply metadata, prices and comparison inputs. | Stored observations with identities, block bounds and acquisition coverage. |
+| Account and price | Calculate supported fees, apply documented incident adjustments to reported earnings, value amounts, and resolve ownership between vaults. | Financial records with explicit evidence and availability states. |
+| Prepare | Build earnings and fee analyses, daily TVL history, charts and matching analytics from captured inputs through a chosen cutoff. | Prepared datasets with immutable identities and a common reporting context. |
+| Publish | Validate that the datasets belong together, select a coherent release, and consolidate retained history. | One selected release for readers, plus a receipt of the work and its warnings. |
+| Serve | Read the selected prepared data through the HTTP API or export completed analyses as CSVs. | Consistent values for Powerglove, other API consumers and researchers. |
 
-Copy `.env.example` to `.env` and configure `YEARN_PRICE_PROD_KEY` before running
-the Yearn Prices commands below, along with the ingestion/RPC settings you need.
+Postgres holds source evidence, coverage, prices, accounting results and prepared
+serving data. Collectors and publishers use writer credentials. The hosted API
+uses separate read-only credentials to serve prepared results. Each published
+release identifies its contributing datasets and cutoff, so related requests
+can stay on the same revision.
 
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -e '.[dev]'
+Publication and application deployment are separate steps. Publication updates
+which prepared data readers receive; deployment updates the code running the
+worker or API. Operators verify each through its own receipt, selected release
+and serving host.
 
-yearn-data init-db
-yearn-data discover
-yearn-data index-events
-yearn-data price --source yearn-prices --no-provider-fallback --no-onchain-fallbacks
-yearn-data analyze lifetime-yield --price-source yearn-prices --no-provider-fallback
-yearn-data export lifetime-yield
-```
+## What the numbers mean
 
-By default the CLI loads RPC and API values from `.env` in this repo. Required RPC variables depend on the chains you run:
+| Output | Meaning |
+| --- | --- |
+| Reported earnings | Gains minus losses recognized in stored reports, with documented incident adjustments. Active and retired vault history remains included within the discovered inventory. Each reporting contract retains its recognition scope. |
+| Actual fees | Supported charges established from report, receipt or execution evidence. Distinct charges at strategy and allocator layers each contribute once to a scoped gross-fee total. Components and distributions retain their relationship to the original charge. |
+| Treasury revenue | Receipts attributed to a defined treasury or protocol recipient universe. Establishing this metric requires recipient and transfer reconciliation. |
+| Gross TVL | The observed asset value at a vault before internal ownership deductions. |
+| External TVL | Capital attributed to outside holders after dated, capped deductions for ownership by other counted Yearn vaults. Headline TVL and historical charts use the publication's captured ownership policy. |
+| Effective fee rates | Observed configured rates composed across supported allocation paths and weighted by attributable capital. Actual fees depend on execution, caps, refunds and realization timing. |
+| Profitability and comparisons | Prepared views relating fees to supported capital history, and comparing Yearn Data's counted scope with independently checked DefiLlama references and membership. Each view carries its methodology and coverage. |
 
-```bash
-ETH_RPC_URL=
-POLYGON_RPC_URL=
-BASE_RPC_URL=
-ARB_RPC_URL=
-KAT_RPC_URL=
-OP_RPC_URL=
-FTM_RPC_URL=
-YEARN_ENVIO_GRAPHQL_URL=
-YEARN_PRICE_PROD_KEY=
-ETHERSCAN_API_KEY=
-```
+These metrics use aggregation rules suited to their economic meaning. A deposit
+can pass through an allocator into a strategy: ownership accounting counts the
+capital once, while fee accounting retains each distinct charge. Consolidating
+underlying investment yield additionally requires historical ownership and a
+policy for recognizing that yield once across reporting layers.
 
-`ETHERSCAN_API_KEY` is optional for most indexing runs, but useful for V2 source/ABI review workflows.
+Product views group related contracts under a product identity. For example,
+yvUSD locker redistribution, yBOLD staking allocations and yETH recovery
+contributions have explicit classifications. Each product designates the
+contract supplying its investment earnings and retains genuine fees from its
+members. Contract views remain available for inspecting the charging and
+reporting layers.
 
-## Development checks
+Pricing records its provider, date and evidence policy. Fee USD valuation uses
+Yearn Prices; earnings workflows have a configurable provider policy, including
+a supported DefiLlama fallback. A paired publication aligns the chosen valuation
+policy across its financial views. Historical TVL uses dated observations and
+its own captured price evidence.
 
-Install the development dependencies with `python -m pip install -e '.[dev]'`,
-then run the same lint command as CI from the repository root:
+## How to read availability
 
-```bash
-python -m ruff check .
-```
+Every amount has an evidence boundary. The stored states make that boundary
+visible to accounting, preparation and consumers:
 
-Ruff is pinned in `pyproject.toml`. The enabled `E9` and `F` rules check syntax,
-undefined names, unused imports and variables, and other Python correctness
-errors. They preserve the existing formatting style. The independent `lint`
-CI job needs no database or credentials. Both CI jobs use `uv sync --locked --extra dev`
-to validate and install the committed lockfile before running checks. Lint and
-tests use the interpreter pinned in `.python-version`; tests also run on the
-Python 3.10 minimum declared in `pyproject.toml`. uv uses the interpreter supplied
-by CI, with managed interpreter downloads disabled. See the [Postgres test guide](docs/postgres.md#tests)
-to run the test suite, and the [testing policy](docs/testing.md) for retention
-rules and selecting tests without Postgres.
+| State | How to interpret it |
+| --- | --- |
+| Genuine zero | Evidence supports an amount of zero. |
+| Unavailable | Evidence is insufficient to establish the amount; financial API values remain null. |
+| Incomplete | Some expected evidence is missing. Available amounts can contribute to explicitly scoped known subtotals. |
+| Retryable | Acquisition can be attempted again under the supported retry policy. |
+| Retained | A compatible earlier observation remains in use with its original date and the latest acquisition outcome. |
+| Estimated | A value uses an explicitly identified estimation method and its stated assumptions. |
 
-Fixtures defined in `tests/conftest.py` are available automatically; request them
-as test arguments without importing them. Fixtures defined in other test modules
-use explicit aliases, such as `from test_canonical_fees import db as db`, so Ruff
-recognizes their intentional use by pytest. Keep those imports while the tests
-use their fixtures. Ruff does not detect every unused function; disconnected test
-helpers still need review when their callers or monkeypatches are removed.
+These states apply independently where needed. A report can have known earnings
+and unresolved fee evidence; a raw asset amount can be known while its dollar
+valuation is unavailable. A publication can pass integrity checks and serve useful
+known values while recording source or pricing gaps as warnings. Its receipt
+and developer metadata explain those gaps.
 
-## Useful Options
+## Nightly updates and historical repair
 
-```bash
-yearn-data --db neon discover --chains eth arb kat
-yearn-data index-events --to-block 25400000 --chunk-size 5000
-# Requires YEARN_PRICE_PROD_KEY in .env; use --price-source defillama without it.
-yearn-data run lifetime-yield
-yearn-data run vault-volume
-```
+The maintained `refresh` worker coordinates collection, accounting, pricing and
+preparation. Its default mode prepares data for inspection. Publish mode also
+selects and consolidates a coherent hosted release.
 
-The database stores raw event rows, normalized strategy reports, prices, resumable cursors, and analysis outputs so later research jobs can reuse the same indexed data. Postgres is the only supported database, and Neon is the default logical selection. See the [Postgres operator guide](docs/postgres.md) for hosted configuration and isolated local testing.
+The VM adapter invokes that worker through a systemd timer configured for
+**02:00 UTC daily**. It uses the activation day's closed UTC midnight as its
+cutoff: a run at 02:00 covers through 23:59:59 UTC on the preceding day. This
+schedule stays fixed in UTC across daylight-saving changes.
 
-## Lifetime Yield Outputs
+The repository's nightly configuration covers reports, fees and TVL on Ethereum,
+Optimism, Polygon, Fantom, Base, Arbitrum and Katana. It also collects TVL on
+Gnosis, HyperEVM and Yeer. Financial preparation includes retained history through
+the cutoff. The installed service and its receipts establish actual runtime
+state and freshness.
 
-Lifetime earnings include stored history from both active and retired vaults. Retirement does not remove earlier reports. Unpriced reports remain counted with unavailable USD values. For the Powerglove integration scope and the different treatment of nested fees and earnings, see the [accounting contract](docs/powerglove-accounting-contract.md).
+Each cycle continues from a verified prior job, acquiring the next report ranges
+and missing daily TVL closes. It refreshes analytics inputs such as external
+references, membership and fee configurations, then prepares and publishes the
+matching datasets. New fee and earnings amounts appear as source reports and
+fee events become available; daily balances and prices provide new TVL closes.
 
-For selecting completed results and serving the Powerglove fee/earnings views, see the [pairing operator guide](docs/powerglove-pairing.md).
+A weekly run uses the same pipeline and can acquire the intervening days from
+its accepted baseline. Daily scheduling makes those observations available
+sooner and reduces the delay between a source event and its publication. Weekly
+chart buckets group the observations into calendar weeks; their display interval
+is independent of the acquisition schedule.
 
-The `lifetime-yield` aggregate columns `gross_gain_usd`, `loss_usd`, and `net_yield_usd` are economic totals adjusted for known Yearn public incident disclosures where vault reports emitted paper losses or compensating phantom profits. The raw report-time accounting values remain available as `raw_gross_gain_usd`, `raw_loss_usd`, and `raw_net_yield_usd`.
+Older coverage gaps, historical price repairs and history for late-discovered
+vaults require deliberately scoped repair work. Routine updates preserve those
+gaps in their evidence and warnings. Repair results enter a new preparation and
+publication after review.
 
-Rows changed by an incident adjustment are marked in `reports.csv` with `is_adjusted`, `incident_id`, `incident_classification`, `incident_description`, and `incident_disclosure_url`. Raw indexed `strategy_reports` rows in Postgres are not modified.
+## Reliability and recovery
 
-### Redis Headline
+A refresh records its cutoff, scope, inputs and progress in a durable job receipt.
+The nightly wrapper also saves pending work and hosted verification locally.
+Bounded retries resume compatible work from its checkpoints. After selection,
+the wrapper checks the hosted release, matching dataset identities and published
+cutoffs before advancing its verified baseline.
 
-A ticking estimate needs bounded analyses, not just `run lifetime-yield`, which
-produces unbounded totals. After indexing and pricing, analyze through an explicit
-closed UTC midnight and publish:
+Failures before release selection leave the previous release serving. A cleanup
+failure after selection leaves the new coherent release selected and reports
+unfinished consolidation for recovery. Source gaps retain their availability
+states; integrity failures stop the affected publication or verification step.
+Operators inspect receipts and service logs to determine the required action.
 
-```bash
-CUTOFF=$(date -u -d '00:00 today' +%s)
-yearn-data analyze lifetime-yield --before-timestamp "$CUTOFF"
-REDIS_URL='rediss://...' yearn-data publish lifetime-yield --ttl 259200
-```
+A separate manual publication requires a nightly handoff: coordinate writers,
+finish publication and consolidation, adopt the reviewed native job as the
+wrapper's baseline, test the installed service, and verify the next timer
+activation. This keeps the live selection and the next scheduled job aligned.
 
-The publisher atomically replaces `lifetime_yield:headline` with one JSON blob containing `net_yield_usd`, `as_of_ms`, `rate_usd_per_sec`, previous anchor fields, and `run_id`. Use `--dry-run` to inspect without writing Redis. With a Redis URL configured,
-it reads the existing anchor and makes the same extrapolation decision as a
-publish. Without Redis it reports `anchor-not-read` rather than predicting a
-reset. Unbounded analyses always report `unbounded-analysis`.
+Canonical retention preserves accepted historical identities and source evidence
+while retiring superseded derived outputs and releases. Publication IDs identify
+revisions. Recovery uses verified retained datasets or a tested backup. A reader
+whose pinned revision has retired reloads the current selection and retries its
+related views together.
 
-The first bounded publication seeds a zero-rate anchor. Repeat at a later cutoff
-to derive a rate from a comparable covered interval. `net_yield_usd` is the stored
-value through `coverage_through_timestamp`, while `as_of_ms` is publication time.
-For a `coverage-verified` estimate, consumers tick from the coverage timestamp:
-`net_yield_usd + rate_usd_per_sec * max(0, now_ms / 1000 - coverage_through_timestamp)`.
-This includes any delay between the close and publication; it remains an estimate.
-Do not tick from `as_of_ms`. On resets or unbounded runs the rate is zero.
-The `prev_*` fields retain the actual previous publication even when no rate can
-be inferred; they do not fabricate a replacement anchor on resets.
+## Development, staging and production
 
-Publishing requires explicit complete valuation counts and retained report rows.
-Incomplete or legacy summaries with unknown completeness fail before replacing
-Redis, including in dry-run mode. Rejection leaves an existing anchor unchanged,
-but does not extend its TTL: it remains available only until its existing expiry.
-With the example TTL above, the key can disappear after 72 hours without a
-successful publication. A
-complete genuine zero remains publishable. Payloads add completeness and hashed
-coverage/policy metadata. Extrapolation continues only when the previous anchor
-is verified complete and its historical report rows match the current run.
-For analyses with an explicit `--before-timestamp`, the rate divides new yield
-by the advance in covered chain time, independent of publication frequency.
-Cutoff-less analyses (including `run lifetime-yield`) publish complete totals
-with a zero rate, `coverage_through_timestamp: null` and
-`extrapolation_status: "unbounded-analysis"`; analysis start time never stands in
-for closed chain coverage. Bounded anchors report `coverage-verified` or
-`coverage-reset` according to the historical comparability check. Retained coverage is checked in
-one bounded-memory streaming pass; unbounded runs validate rows without sorting
-or computing unusable coverage digests. New reports after that history can contribute yield; backfills, changed historical
-valuations, source-policy changes and legacy anchors reset the rate to zero.
-Only the publication timestamp `as_of_ms` remains monotonic across a reset.
-Selecting an earlier bounded analysis can reduce `coverage_through_timestamp`
-and the covered value; selecting an unbounded analysis sets coverage to `null`.
-Consumers must read the new coverage and status rather than assuming forward
-financial coverage across resets. Existing Redis publications
-are not changed until this command is explicitly invoked.
+| Environment | Purpose and setup |
+| --- | --- |
+| Development | Use this checkout's pinned Python environment and an explicitly selected isolated Postgres database. Local work can exercise individual collectors, analyses and serving paths. |
+| Tests | Use pure or local boundary tests for suitable behavior, and a disposable Postgres database for persistence, transactions and locking. Database fixtures own isolated schemas. |
+| Staging | Use a separate database, role and storage for rehearsing collection, preparation, publication and API behavior. Seed data through a reviewed acquisition or dump/restore. |
+| Production | Deploy the worker and API deliberately, keep credentials private, coordinate writers and verify the selected hosted release. The VM scheduler requires its own installation, acceptance test and activation. |
 
-## Vault Volume Outputs
+Select the intended logical database explicitly before writing. Most CLI commands
+otherwise default to `YEARN_DATA_DB` or `neon`; `refresh` requires an explicit
+`--db`. Keep credentials in ignored environment files and use separate read-only
+credentials for serving.
 
-The `vault-volume` job indexes user `Deposit`/`Withdraw` events and strategy debt movement. V2 strategy allocation volume is derived from `StrategyReported.debtAdded` and `debtPaid`; V3 allocation volume is indexed from `DebtUpdated` events.
+## Guides for carrying out a task
 
-The headline volume metric is `gross_total_volume_usd`, defined as deposits + withdrawals + allocations + deallocations. Exports also include net user flow, net strategy flow, per-chain/vault/strategy/token/month rollups, and raw `vault_flows.csv` / `strategy_debt_flows.csv` event files.
+The overview above explains the system as a whole. The following guides provide
+commands, configuration and detailed policies for specific work.
 
-## Pricing
+| Task | Guide |
+| --- | --- |
+| Set up a local checkout | [Development setup](docs/development/setup.md) |
+| Find all maintained guides and specialist tools | [Documentation index](docs/README.md) |
+| Prepare/publish a maintained multi-chain refresh | [Refresh operations](docs/operations/refresh.md) |
+| Install, operate or recover the 02:00 UTC adapter | [Nightly operations](docs/operations/nightly.md) |
+| Finish a separate manual publication safely | [Required nightly handoff](docs/operations/nightly.md#required-handoff-after-a-manual-publication) |
+| Collect explicit history and export earnings/fees | [Research exports](docs/operations/research-exports.md) |
+| Collect or repair historical TVL | [TVL operations](docs/operations/tvl.md) |
+| Deploy/serve already published data | [Hosted API operations](docs/operations/hosted-api.md) and [consumer contract](docs/reference/api.md) |
+| Interpret fees, reported earnings and external TVL | [Accounting contract](docs/reference/accounting.md) |
+| Run local checks | [Testing policy](docs/development/testing.md) |
 
-Earnings default to Yearn Prices with optional DefiLlama fallback. For the
-Yearn-only delivery workflow, use the explicit flags in the quick start. Volume
-pricing retains its DefiLlama path:
-
-```bash
-yearn-data price --source defillama
-yearn-data price-volume --source defillama
-yearn-data price --source defillama --no-onchain-fallbacks
-```
-
-Yearn Prices is the default earnings pricing source, with optional DefiLlama fallback; see [historical earnings pricing](docs/earnings-pricing.md). Volume and legacy fee analyses retain their DefiLlama source. Optional contract adapters use historical conversion/reserve evidence and accepted underlying quotes. Local fixed-parity estimates are retired: a missing provider quote does not become USD 1 or another token's price. Use `--source defillama --no-onchain-fallbacks` for direct DefiLlama results. See the [parity policy and coverage comparison](docs/parity-price-policy.md) for classifications and legacy-cache handling. All source/status rows are stored in Postgres.
-
-## Backfill Efficiency
-
-Event indexing uses resumable `eth_getLogs` block chunks and dedupes logs by `(chain_id, tx_hash, log_index)`. The default chunk size is `50,000` blocks, intended for Tenderly-style archive RPCs; lower it if an RPC returns block range errors. Block timestamps are cached in the local database after first lookup.
-
-## Historical report ingestion
-
-See [the Envio ingestion guide](docs/historical-envio-ingestion.md) for retired vault discovery, metadata and bounded replay.
-
-For explicit per-chain RPC/Envio windows, including Optimism and Fantom, see [bounded report catch-up](docs/bounded-report-catchup.md).
-The [coverage performance receipt](docs/report-coverage-performance.md) documents
-batched coverage reads, active/inactive progress, and benchmark limits.
-
-For maintained multi-chain acquisition, missing daily TVL collection, durable
-resume and explicitly selected publication, see [Database refresh](docs/database-refresh.md).
-
-For the complete scriptable workflow and reproducible CSV exports, see
-[Refresh and export earnings and fees](docs/earnings-and-fees.md).
-
-
-## Historical TVL
-
-Store dated TVL for the complete vault inventory, including retired and curated
-vaults, and export nested capital positions with overlap deductions. Start from an empty database with
-`tvl discover`, collect an explicit date range with `tvl collect`, and use
-`tvl export` for CSV/JSON outputs. See [Historical TVL and nested positions](docs/tvl-history.md)
-for the accounting rules, mapping, and coverage boundaries.
-See [incremental history preparation](docs/incremental-tvl-history.md) for
-input invalidation, targeted backfills, immutable rebuilds and measured costs.
-
-Use one Postgres database with separate TVL and fee/earnings tables. See
-[Shared database](docs/shared-database.md) for the storage boundary.
-
-Serve the accumulated observations to Powerglove with the [TVL pairing API](docs/powerglove-tvl-api.md).
+The [historical archive](docs/archive/README.md) preserves dated designs,
+measurements and rollout evidence. Use current operating guides and live checks
+to establish deployment state, selected releases and recovery options.

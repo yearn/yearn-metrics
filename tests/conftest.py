@@ -38,7 +38,7 @@ def database_guard(monkeypatch):
 def postgres_database(database_guard, monkeypatch):
     test_url = os.environ.get('YEARN_TEST_POSTGRES_URL')
     if not test_url:
-        pytest.fail('Set YEARN_TEST_POSTGRES_URL to a disposable local Postgres database; see docs/postgres.md')
+        pytest.fail('Set YEARN_TEST_POSTGRES_URL to a disposable local Postgres database; see docs/operations/postgres.md')
     schemas, connections = [], []
     original = Connection.__init__
     def tracked(connection, url, *args, **kwargs):
