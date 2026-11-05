@@ -14,7 +14,7 @@ import re
 from .fee_products import product_for
 
 POLICY = 'report-time-strategy-ownership-v1'
-METHOD_VERSION = 'strategy-earnings-2'
+METHOD_VERSION = 'strategy-earnings-3'
 ANNUAL_THRESHOLD_USD = Decimal('1000')
 FAMILY = 'yearn-v3-tokenized-strategy'
 HASH = re.compile(r'0x[0-9a-f]{64}')
@@ -185,6 +185,7 @@ def apply_ownership(fees, ledger):
                 'omittedGrossActivityUsd': format(sum((Decimal(p['grossActivityUsd']) for p in paths), Decimal(0)), 'f')})
     return rows, {'policy': POLICY, 'methodVersion': METHOD_VERSION, 'annualPathThresholdUsd': '1000',
         'ownershipSha256': digest(ledger), 'coveragePeriods': disclosures,
+        'rawAmountBasis': 'source reports before incident and ownership adjustments',
         'includedReportCount': len(rows), 'outsideCoverageReportCount': outside,
         'redistributedReportCount': redistributed_count,
         'timing': 'strategy-report-time; parent earnings retain their existing recognition dates',

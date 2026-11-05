@@ -565,7 +565,11 @@ def test_strategy_ownership_round_trips_selection_and_hosted_serving(postgres_da
         from types import SimpleNamespace
         from yearn_data.hosted_publications import save_release, Registry
         from yearn_data.refresh import RefreshWorker
-        release = save_release(db, manifest, {'datasetId': 'a'*64}, 'b'*64)
+        # Match the five-field fees manifest that publish() actually persists.
+        hosted_manifest = {key: manifest[key] for key in
+                           ('datasetId', 'database', 'earningsRunId', 'feesRunId', 'vaultNames')}
+        release = save_release(db, hosted_manifest, {'datasetId': 'a'*64}, 'b'*64)
+        assert 'strategyEarningsAccounting' not in Registry('staging').manifest('fees', selected.id)
         worker = RefreshWorker.__new__(RefreshWorker)
         worker.options = SimpleNamespace(database='staging')
         worker.root = tmp_path / 'next-refresh-job'

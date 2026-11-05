@@ -400,10 +400,10 @@ def _strategy_ownership_selected(database, root):
     # Native refreshes create a fresh directory for each job. The live hosted
     # selection is the policy boundary across those directories.
     with closing(connect(database, readonly=True)) as conn:
-        if all(table_exists(conn, table) for table in ('api_selection', 'api_releases', 'api_manifests')):
-            row = conn.execute("""SELECT m.body_json FROM api_selection s
+        if all(table_exists(conn, table) for table in ('api_selection', 'api_releases', 'api_fee_datasets')):
+            row = conn.execute("""SELECT f.metadata_json FROM api_selection s
                 JOIN api_releases r ON r.id=s.release_id
-                JOIN api_manifests m ON m.kind='fees' AND m.id=(r.body_json::jsonb->>'feesDatasetId')
+                JOIN api_fee_datasets f ON f.dataset_id=(r.body_json::jsonb->>'feesDatasetId')
                 WHERE s.name='powerglove'""").fetchone()
             return row is not None and json.loads(row[0]).get('strategyEarningsAccounting') is not None
     return False

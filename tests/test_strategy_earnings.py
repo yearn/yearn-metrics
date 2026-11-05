@@ -34,6 +34,7 @@ def test_counts_only_external_fraction_and_preserves_raw_earnings_and_fees():
     rows, meta = apply_ownership(fees, ledger(fees))
     assert (rows[0]['gross_gain_usd'], rows[0]['loss_usd'], rows[0]['net_yield_usd']) == ('50', '10', '40')
     assert rows[0]['raw_net_yield_usd'] == '80'
+    assert meta['rawAmountBasis'] == 'source reports before incident and ownership adjustments'
     assert rows[0]['price_usd'] == fees[0]['price_usd']
     assert fees == original
     # The API's summary, catalog and time series consume the same counted rows.
@@ -146,3 +147,26 @@ def test_rejects_conflicting_classifications_for_the_same_beneficiary(other_clas
     evidence['reports'][0]['fractions'][1]['pathId'] = evidence['reports'][0]['fractions'][0]['pathId']
     with pytest.raises(ValueError, match='duplicate ownership path'):
         apply_ownership(fees, evidence)
+
+
+def test_attributed_gains_keep_full_scope_fee_ratios_unavailable():
+    from types import SimpleNamespace
+    from yearn_data.analytics import DAY, profitability
+    fees = [fee(gain='100', loss='0')]
+    financial = SimpleNamespace(fees=fees, earnings=fees, vault_names={})
+    current = [dict(chain_id=1, vault=VAULT, category='v3', tvl_usd='100', external_tvl_usd='100')]
+    history = {(1, VAULT): [(START+i*DAY+DAY-1, 100) for i in range(365)]}
+    before = profitability(financial, current, history, {'vaults': []}, END)
+    assert before['vaults'][0]['feeCapture'] == pytest.approx(0.07)
+    assert before['vaults'][0]['gainYield'] == 1
+    assert 'earningsRatiosAvailability' not in before['vaults'][0]
+    financial.earnings, _ = apply_ownership(fees, ledger(fees))
+    after = profitability(financial, current, history, {'vaults': []}, END)
+    vault = after['vaults'][0]
+    assert vault['totalGainUsd'] == 50
+    assert vault['totalFeeRevenue'] == 7
+    assert vault['feeYield'] == before['vaults'][0]['feeYield']
+    assert vault['feeCapture'] is vault['gainYield'] is None
+    assert vault['earningsRatiosAvailability']['state'] == 'unavailable'
+    assert after['feeCaptureRate'] is None
+    assert after['feeCaptureCoverage']['contributingVaults'] == 0

@@ -25,7 +25,11 @@ per-path gate does not by itself establish that the combined omission is small.
 Known overlap is normal accounting, not a missing-data warning. Small unresolved
 omissions remain identifiable in publication metadata rather than being described
 as observed zero. Raw strategy gains/losses remain in `lifetimeEarnings.raw*`;
-the existing gains/losses/net fields contain the counted portion.
+the existing gains/losses/net fields contain the counted portion. Across the
+financial series, `raw*` means source report amounts before incident and ownership
+adjustments. The difference between source and counted values reflects all
+applied transformations. Accounting metadata declares this `rawAmountBasis`;
+measure incident adjustments separately from their recorded evidence.
 
 ## Evidence and selection
 

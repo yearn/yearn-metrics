@@ -228,3 +228,14 @@ as unavailable. A by-chain comparison requires explicit values from both finance
 and curation snapshots, including explicit zero where appropriate. Without them,
 `defillama` and `difference` are null; protocol-level totals remain separate.
 Reprepare analytics to replace previously prepared chain comparisons.
+
+## Ownership-attributed financial inputs
+
+An optional strategy-ownership pairing supplies attributed strategy gains and
+losses under its declared accounting policy. Profitability retains full contract
+fees and gross contract capital. For vaults carrying attributed gains,
+`feeCapture` and `gainYield` are unavailable; `earningsRatiosAvailability` explains
+the required matching ownership scope. Their available attributed gain amounts
+remain visible as `totalGainUsd`. Fee yield continues to use full fees and gross
+contract capital. Fee-capture summaries use the compatible-scope cohort and
+report its contributing and expected vault counts.
