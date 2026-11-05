@@ -164,6 +164,13 @@ def test_incomplete_ownership_keeps_gross_and_partial_evidence_distinct(source):
     assert summary['completeness']['status'] == 'incomplete'
     assert summary['completeness']['unresolvedPositions'] > 0
     assert summary['overlapExcluded'] == 30  # Preserve the independent verified deduction.
+    from yearn_data.tvl_api import tvl_response
+    status, audit = tvl_response(TvlStore(path, root), '/api/audit/tree')
+    assert status == 200
+    provisional = next(v for v in audit['vaults'] if v['address'] == CHILD)
+    assert provisional['countedTvlUsd'] == 170
+    assert provisional['ownershipIncomplete'] is True
+    assert audit['completeness'] == summary['completeness']
 
 
 @pytest.mark.parametrize('include_curation', [True, False])

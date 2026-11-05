@@ -815,10 +815,12 @@ class TvlDataset:
                 'detectionMethod':'registry' if edge.get('method')=='service-registry' else 'auto' if child else None,'label':None})
         summary = self.summary(chain_id)
         return {'summedTvl':money(rows,'tvl_usd'),'overlapTvl':summary['overlapExcluded'],
+                'completeness':summary['completeness'],
                 'crossChainOverlap':summary['vaultBridgeExcluded'],'vaultCount':len(rows),
                 'vaults':[{'address':r['vault'],'chainId':r['chain_id'],'name':r.get('name'),'category':r.get('category',r['version']),
                            'vaultType':1 if key(r) in self.allocators else None,'tvlUsd':float(decimal(r['tvl_usd'])) if r['tvl_usd'] is not None else None,
                            'countedTvlUsd':float(decimal(r['external_tvl_usd'])) if r.get('external_tvl_usd') is not None else None,
+                           'ownershipIncomplete':bool(r.get('ownership_incomplete')),
                            'isRetired':not self.catalog.get(key(r),{}).get('active',1),'isHidden':False,
                            'strategies':by_parent[key(r)]} for r in rows],
                 'crossChainVaults':[{'address':r['vault'],'chainId':r['chain_id'],'targetChainId':r['bridge_target_chain'],

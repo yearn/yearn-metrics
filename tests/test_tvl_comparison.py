@@ -89,14 +89,15 @@ def test_comparison_inputs_replace_instead_of_retaining_stale_vaults(postgres_da
     assert selected_input(conn,'comparison-evidence')['body']['vaults']==[]
 
 
-def test_prepared_publication_pins_evidence_without_rewriting_previous_result(postgres_database, tmp_path):
+@pytest.mark.parametrize('ownership_incomplete', [False, True])
+def test_prepared_publication_pins_evidence_without_rewriting_previous_result(postgres_database, tmp_path, ownership_incomplete):
     from types import SimpleNamespace
     from yearn_data.analytics import prepare, AnalyticsStore
     from yearn_data.storage import connect
     database='staging'
     financial=SimpleNamespace(id='fees',cutoff=86400,fees=[],earnings=[],vault_names={})
     tvl=SimpleNamespace(id='dataset',as_of=lambda:123,dates=lambda:(),
-        frames=lambda dates:[(123,[row('ours')],[],{})],history_prepared=lambda:False,
+        frames=lambda dates:[(123,[row('ours') | {'ownership_incomplete': ownership_incomplete}],[],{})],history_prepared=lambda:False,
         summary=lambda:{'retiredVaultTvl':0,'overlapExcluded':0,'vaultBridgeExcluded':0})
     with connect(database) as conn:
         conn.executescript(SCHEMA)
@@ -107,7 +108,13 @@ def test_prepared_publication_pins_evidence_without_rewriting_previous_result(po
     second=prepare(database,financial,tvl)
     assert first!=second
     store=AnalyticsStore(database)
-    assert len(store.load(first)['comparable']['reconciliation']['categories'][0]['oursOnly'])==1
+    first_comparison = store.load(first)['comparable']
+    first_category = first_comparison['reconciliation']['categories'][0]
+    assert len(first_category['oursOnly']) == (0 if ownership_incomplete else 1)
+    assert len(first_category['unresolvedVaults']) == int(ownership_incomplete)
+    if ownership_incomplete:
+        assert first_comparison['availability']['state'] == 'partial'
+        assert first_comparison['availability']['unavailableTvlVaults'][0]['reason'] == 'ownership incomplete'
     assert store.load(second)['comparable']['reconciliation']['categories'][0]['oursOnly']==[]
 
 
@@ -139,3 +146,17 @@ def test_incomplete_evidence_does_not_abort_preparation(postgres_database, missi
     assert result['state'] == 'unavailable'
     assert 'incomplete' in result['reason']
     assert 'categories' not in result
+
+
+@pytest.mark.parametrize('observed', [False, True])
+def test_provisional_capital_stays_in_unresolved_reconciliation(observed):
+    candidate = row('provisional', '200', '200') | {'ownership_incomplete': True}
+    result = discrepancy_details([candidate], evidence([external('provisional')] if observed else []),
+                                 'dataset')['categories'][0]
+    assert result['oursOnly'] == []
+    assert result['theirsOnly'] == []
+    assert len(result['unresolvedVaults']) == 1
+    provisional = result['unresolvedVaults'][0]
+    assert provisional['oursUsd'] == 200
+    assert provisional['ownershipIncomplete'] is True
+    assert provisional.get('defillamaUsd') != 0
