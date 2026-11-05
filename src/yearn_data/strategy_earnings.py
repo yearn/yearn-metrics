@@ -14,7 +14,7 @@ import re
 from .fee_products import product_for
 
 POLICY = 'report-time-strategy-ownership-v1'
-METHOD_VERSION = 'strategy-earnings-3'
+METHOD_VERSION = 'strategy-earnings-4'
 ANNUAL_THRESHOLD_USD = Decimal('1000')
 FAMILY = 'yearn-v3-tokenized-strategy'
 HASH = re.compile(r'0x[0-9a-f]{64}')
@@ -105,6 +105,8 @@ def apply_ownership(fees, ledger):
             # One stable chain/address key combines all routes to that beneficiary.
             if not isinstance(path, str) or not re.fullmatch(r'[1-9]\d*:0x[0-9a-f]{40}', path):
                 raise ValueError('invalid ownership path identity')
+            if int(path.split(':', 1)[0]) != chain:
+                raise ValueError('ownership path chain does not match report')
             if path in seen_paths:
                 raise ValueError('duplicate ownership path')
             seen_paths.add(path)
@@ -122,7 +124,9 @@ def apply_ownership(fees, ledger):
             raise ValueError('ownership fractions must sum to one')
         evidence[key] = parts
 
-    annual = defaultdict(lambda: [Decimal(0), Decimal(0)])
+    annual = defaultdict(lambda: [Fraction(), Fraction()])
+    unpriced = defaultdict(list)
+    priced_included = 0
     selected = []
     outside = 0
     redistributed_count = 0
@@ -148,7 +152,16 @@ def apply_ownership(fees, ledger):
                 if gain is None or loss is None:
                     raise ValueError(f'unpriced unresolved strategy ownership: {path}')
                 for i, value in enumerate((gain, loss)):
-                    annual[period, path][i] += value * weight.numerator / weight.denominator
+                    annual[period, path][i] += Fraction(value) * weight
+            included = any(status == 'included' for status, _, _ in parts)
+            if included:
+                if gain is None or loss is None:
+                    unpriced[period].append({'chainId': row['chain_id'],
+                        'txHash': row['tx_hash'], 'logIndex': row['log_index'],
+                        'vaultAddress': row['vault_address'],
+                        'reason': 'attributed report valuation unavailable'})
+                else:
+                    priced_included += 1
             selected.append((row, gain, loss, parts))
         for (_, path), (gain, loss) in annual.items():
             if gain + loss >= ANNUAL_THRESHOLD_USD:
@@ -175,18 +188,24 @@ def apply_ownership(fees, ledger):
                 'price_usd': row.get('price_usd'),
                 'strategy_earnings_policy': POLICY,
             })
+        def usd(value):
+            return format(Decimal(value.numerator) / value.denominator, 'f')
+
         disclosures = []
         for i, (start, end) in enumerate(bounds):
-            paths = [{'pathId': path, 'grossGainsUsd': format(values[0], 'f'),
-                      'lossesUsd': format(values[1], 'f'),
-                      'grossActivityUsd': format(sum(values), 'f')}
+            paths = [{'pathId': path, 'grossGainsUsd': usd(values[0]),
+                      'lossesUsd': usd(values[1]),
+                      'grossActivityUsd': usd(sum(values))}
                      for (period, path), values in sorted(annual.items()) if period == i]
             disclosures.append({'since': start, 'until': end, 'omittedPaths': paths,
-                'omittedGrossActivityUsd': format(sum((Decimal(p['grossActivityUsd']) for p in paths), Decimal(0)), 'f')})
+                'unpricedIncludedReports': unpriced[i],
+                'omittedGrossActivityUsd': usd(sum((sum(v) for (period, _), v in annual.items() if period == i), Fraction()))})
     return rows, {'policy': POLICY, 'methodVersion': METHOD_VERSION, 'annualPathThresholdUsd': '1000',
         'ownershipSha256': digest(ledger), 'coveragePeriods': disclosures,
         'rawAmountBasis': 'source reports before incident and ownership adjustments',
-        'includedReportCount': len(rows), 'outsideCoverageReportCount': outside,
+        'includedReportCount': priced_included,
+        'unpricedIncludedReportCount': sum(map(len, unpriced.values())),
+        'emittedReportCount': len(rows), 'outsideCoverageReportCount': outside,
         'redistributedReportCount': redistributed_count,
         'timing': 'strategy-report-time; parent earnings retain their existing recognition dates',
         'omissionPolicy': 'conservative omission; unresolved is not observed zero'}

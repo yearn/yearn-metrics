@@ -45,8 +45,11 @@ yearn-data --db neon select-pairing \
 Use a separate candidate directory when reviewing a change. Selection does not
 modify source analyses. Existing selections without this option keep their exact
 legacy IDs and behavior. The ledger is embedded in the selected manifest, hashed
-into the dataset identity, revalidated on reload, and retained in hosted response
-metadata after consolidation. A failed validation does not replace `current.json`.
+into the dataset identity, and revalidated on reload. Keep the reviewed ledger
+and the local publication manifest for future selections. Hosted consolidation
+retains derived accounting metadata and the ledger hash; the complete ledger
+persists in the local publication manifest. A failed validation preserves
+`current.json`.
 
 Ledger fields:
 
@@ -57,7 +60,8 @@ Ledger fields:
 - `reports`: event identity (`chainId`, `txHash`, `logIndex`), `vaultAddress`,
   `blockTimestamp`, and `fractions`.
 - Each fraction has `classification` (`included`, `parent-overlap`, `unresolved`),
-  a stable `pathId`, and positive integer-string `numerator` / `denominator`.
+  a stable `pathId` using the report chain ID and beneficiary address, and positive
+  integer-string `numerator` / `denominator`.
   Each `pathId` appears once per report, with one classification. Fractions must
   sum exactly to one. Fractions must describe pre-report ownership,
   before that report's fee-share mints and profit locking.
@@ -98,3 +102,12 @@ require additional annual evidence coverage before a full-history rollout.
 
 The implementation and candidate do not activate a live publication. Preview the
 candidate totals and coverage disclosures before consolidation/activation.
+
+`includedReportCount` counts priced reports with a positive included share.
+`unpricedIncludedReportCount` counts attributed reports with unavailable gain or
+loss valuation; each appears in its coverage period's `unpricedIncludedReports`
+with its event identity and reason. Their row amounts retain null values, so
+readers can distinguish available subtotals from complete valuation.
+`emittedReportCount` counts all supplemental rows, including zero-included shares.
+The annual materiality gate accumulates exact rational amounts and converts to
+decimal only for disclosure. Exactly $1,000 requires resolved ownership evidence.

@@ -23,7 +23,7 @@ def ledger(rows, weights=(('included', '1', '2'), ('parent-overlap', '1', '2')))
             'periods': [{'since': START, 'until': END}], 'reports': [
                 {'chainId': r['chain_id'], 'txHash': r['tx_hash'], 'logIndex': r['log_index'],
                  'vaultAddress': r['vault_address'], 'blockTimestamp': r['block_timestamp'],
-                 'fractions': [{'classification': s, 'pathId': f"1:{'0x' + '44' * 20 if s == 'parent-overlap' else OWNER}",
+                 'fractions': [{'classification': s, 'pathId': f"{r['chain_id']}:{'0x' + '44' * 20 if s == 'parent-overlap' else OWNER}",
                                 'numerator': n, 'denominator': d} for s, n, d in weights]}
                 for r in rows]}
 
@@ -94,7 +94,12 @@ def test_missing_evidence_is_never_assumed_external_or_zero():
 
 def test_known_direct_ownership_preserves_missing_prices():
     fees = [fee(gain=None, loss=None)]
-    rows, _ = apply_ownership(fees, ledger(fees, (('included', '1', '1'),)))
+    rows, meta = apply_ownership(fees, ledger(fees, (('included', '1', '1'),)))
+    assert meta['includedReportCount'] == 0
+    assert meta['unpricedIncludedReportCount'] == 1
+    assert meta['coveragePeriods'][0]['unpricedIncludedReports'] == [{
+        'chainId': 1, 'txHash': fees[0]['tx_hash'], 'logIndex': 0,
+        'vaultAddress': VAULT, 'reason': 'attributed report valuation unavailable'}]
     assert rows[0]['net_yield_usd'] is None
     assert rows[0]['gross_gain_usd'] is None
 
@@ -170,3 +175,32 @@ def test_attributed_gains_keep_full_scope_fee_ratios_unavailable():
     assert vault['earningsRatiosAvailability']['state'] == 'unavailable'
     assert after['feeCaptureRate'] is None
     assert after['feeCaptureCoverage']['contributingVaults'] == 0
+
+
+def test_fractional_annual_activity_at_exact_threshold_requires_resolution():
+    fees = [fee(i, gain='1000', loss='0') for i in range(1, 4)]
+    weights = (('unresolved', '1', '3'), ('parent-overlap', '2', '3'))
+    with pytest.raises(ValueError, match='reaches annual'):
+        apply_ownership(fees, ledger(fees, weights))
+    fees[-1]['gross_gain_usd'] = '999.99'
+    _, meta = apply_ownership(fees, ledger(fees, weights))
+    assert meta['coveragePeriods'][0]['omittedGrossActivityUsd'].startswith('999.996666')
+
+
+def test_annual_beneficiary_activity_cannot_split_across_chain_spellings():
+    fees = [fee(1, gain='700', loss='0'), fee(2, gain='700', loss='0')]
+    evidence = ledger(fees, (('unresolved', '1', '1'),))
+    evidence['reports'][1]['fractions'][0]['pathId'] = f'10:{OWNER}'
+    with pytest.raises(ValueError, match='path chain'):
+        apply_ownership(fees, evidence)
+
+
+def test_mixed_priced_and_unpriced_included_reports_disclose_partial_valuation():
+    fees = [fee(1), fee(2, gain=None, loss=None)]
+    rows, meta = apply_ownership(fees, ledger(fees))
+    assert meta['includedReportCount'] == 1
+    assert meta['unpricedIncludedReportCount'] == 1
+    assert meta['emittedReportCount'] == 2
+    assert rows[0]['net_yield_usd'] == '40'
+    assert rows[1]['net_yield_usd'] is None
+    assert meta['coveragePeriods'][0]['unpricedIncludedReports'][0]['txHash'] == fees[1]['tx_hash']
