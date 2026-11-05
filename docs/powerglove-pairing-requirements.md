@@ -62,7 +62,7 @@ Here, a completed dataset means the selected analysis runs and publication finis
 
 Support the filters used by the first delivery: `since`, exclusive `until`, `chainId`, and `interval=monthly` for history. Use Unix seconds and `[since, until)` semantics. With no `since`, include all stored history within the selected scope. Cap the effective end at the dataset cutoff and record the applied range in yearn-data. This does not require a public cutoff or incomplete-range notice.
 
-Define and validate an explicit family scope for fees. Its initial combined view includes V2 vault, V3 allocator and Tokenized Strategy charges and retains their separate amounts. Main reported earnings use the existing V2/allocator report universe; Tokenized P&L must not be added to that series. Additional family/vault selectors can be added only where the UI actually uses them.
+Define and validate an explicit family scope for fees. Its initial combined view includes V2 vault, V3 allocator and Tokenized Strategy charges and retains their separate amounts. Default main reported earnings use the existing V2/allocator report universe. The separately selected [strategy-ownership policy](strategy-earnings.md) supplements it with attributed strategy earnings and declares that basis in `strategyEarningsAccounting`. Additional family/vault selectors can be added only where the UI actually uses them.
 
 Apply time/chain filters before grouping. Day rollups grouped only by family cannot answer chain-filtered monthly history; use completed event/report rows or a directly derived equivalent. Invalid request parameters must produce a normal API error. Yearn-data must distinguish unsupported or unscanned scope from genuine zero activity internally and avoid manufacturing a successful zero total for a wholly unavailable scope.
 
@@ -82,7 +82,7 @@ Include active and retired stored reports. Retain records with missing vault met
 
 A report's earnings must not disappear merely because its fee accounting is unavailable. Fee and earnings known/unknown counts are independent developer diagnostics in yearn-data. Do not substitute gains/losses from accepted fee projections for the earnings report universe.
 
-For this delivery, describe the main earnings series as incident-adjusted reported P&L. Its net amount is adjusted reported gains minus losses, not a promise of earnings after every fee in the stack. Do not label its aggregate as consolidated underlying yield or depositor net earnings. Keep contract/family identity available so later historical attribution can be added without changing raw records.
+For the default pairing, describe the main earnings series as incident-adjusted reported P&L. An ownership-enabled pairing combines those reports with the supported external share of strategy gains/losses. Its gain/loss/net fields are attributed amounts, and its raw strategy fields preserve full report amounts; metadata identifies the policy and reviewed periods. Its net amount is adjusted reported gains minus losses, not a promise of earnings after every fee in the stack. Do not label its aggregate as consolidated underlying yield or depositor net earnings. Keep contract/family identity available so later historical attribution can be added without changing raw records.
 
 The old consumer's separate `tokenizedStrategyYield` field must not be filled with zero or folded into main earnings to satisfy a type check. Keep its definition separate in the backend. A missing optional projection does not require adding a public diagnostic panel.
 

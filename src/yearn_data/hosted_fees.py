@@ -25,13 +25,15 @@ def prepare(conn, dataset):
         for kind, rows, fields in (('fees', dataset.fees, FEE_FIELDS),
                                    ('earnings', dataset.earnings, EARNINGS_FIELDS)):
             keep = set(fields.values()) | {'chain_id', 'vault_address', 'block_timestamp',
-                                           'contract_family', 'version'}
+                                           'contract_family', 'version', 'strategy_earnings_policy'}
             conn.executemany('INSERT INTO api_fee_rows VALUES (?,?,?,?,?,?,?)',
                 [(dataset.id, kind, i, row['block_timestamp'], row['chain_id'],
                   row['vault_address'].lower(), _json({k:v for k,v in row.items() if k in keep}))
                  for i,row in enumerate(rows)])
         meta = {'cutoff':dataset.cutoff, 'chains':dataset.chains,
                 'vaults':sorted(dataset.vaults), 'vaultNames':dataset.vault_names}
+        if getattr(dataset, 'strategy_earnings', None) is not None:
+            meta['strategyEarningsAccounting'] = dataset.strategy_earnings
         conn.execute('INSERT INTO api_fee_datasets VALUES (?,?)', (dataset.id, _json(meta)))
 
 
@@ -48,6 +50,7 @@ class PublishedFees(PairingDataset):
         self.chains = tuple(meta['chains'])
         self.vaults = frozenset(tuple(v) for v in meta['vaults'])
         self.vault_names = meta['vaultNames']
+        self.strategy_earnings = meta.get('strategyEarningsAccounting')
 
     def view_rows(self, since, end, chains, vault_address):
         clauses = ['dataset_id=?', 'timestamp<?']
