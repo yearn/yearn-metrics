@@ -225,3 +225,17 @@ def test_unavailable_balance_pairs_render_with_price_gaps_and_other_findings(rec
         assert 'Some expected daily asset-unit observations are unavailable' in body
         assert 'Asset units are known' in body
         assert '7,240 missing' in body and 'affected vaults' in body
+
+
+@pytest.mark.parametrize('unavailable', [0, 3])
+def test_history_report_names_provisional_and_unavailable_rows_separately(receipt, unavailable):
+    from yearn_data.refresh_warnings import findings
+    history = {'provisionalHistoryDates': [{'timestamp': 86399, 'provisionalRows': 2}],
+               'unavailableHistoryDates': ([{'timestamp': 86399, 'unavailableRows': unavailable}]
+                                           if unavailable else [])}
+    receipt['result']['warnings'] = findings([], {'gaps': {}, 'history': history})
+    body = report.render(receipt)
+    assert '2 rows have provisional ownership' in body
+    if unavailable:
+        assert '3 rows have unavailable USD fields' in body
+    assert '0 rows have unavailable USD fields' not in body

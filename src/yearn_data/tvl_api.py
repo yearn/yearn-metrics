@@ -465,7 +465,6 @@ class TvlDataset:
         rows, positions, diagnostics = account(account_points, included_positions,
             include_curation=include_curation,
             deduct_internal_curation=self.manifest.get('deductInternalCuration',False),
-            require_complete_ownership=canonical_ownership,
             vault_policies=self.manifest.get('vaultPolicies',[]),
             target_corrections=self.manifest.get('targetCorrections',[]))
         positions.extend(dict(edge,overlap_usd='0',accounting_excluded=True,reason='bridge_parent_excluded') for edge in excluded_positions)
@@ -816,10 +815,12 @@ class TvlDataset:
                 'detectionMethod':'registry' if edge.get('method')=='service-registry' else 'auto' if child else None,'label':None})
         summary = self.summary(chain_id)
         return {'summedTvl':money(rows,'tvl_usd'),'overlapTvl':summary['overlapExcluded'],
+                'completeness':summary['completeness'],
                 'crossChainOverlap':summary['vaultBridgeExcluded'],'vaultCount':len(rows),
                 'vaults':[{'address':r['vault'],'chainId':r['chain_id'],'name':r.get('name'),'category':r.get('category',r['version']),
                            'vaultType':1 if key(r) in self.allocators else None,'tvlUsd':float(decimal(r['tvl_usd'])) if r['tvl_usd'] is not None else None,
                            'countedTvlUsd':float(decimal(r['external_tvl_usd'])) if r.get('external_tvl_usd') is not None else None,
+                           'ownershipIncomplete':bool(r.get('ownership_incomplete')),
                            'isRetired':not self.catalog.get(key(r),{}).get('active',1),'isHidden':False,
                            'strategies':by_parent[key(r)]} for r in rows],
                 'crossChainVaults':[{'address':r['vault'],'chainId':r['chain_id'],'targetChainId':r['bridge_target_chain'],
@@ -835,7 +836,6 @@ class TvlDataset:
         selected = [r for r in all_rows if self.catalog.get(key(r),{}).get('active',1) and
                     (r.get('category')=='curation' or key(r) in self.allocators)]
         rows, edges, diagnostics = account(selected, positions, include_curation=True,
-                                 require_complete_ownership=self.manifest.get('ownershipAccounting') == 'all-yearn-v1',
                                  vault_policies=self.manifest.get('vaultPolicies', []),
                                  target_corrections=self.manifest.get('targetCorrections', []))
         rows = [row for row in rows if chain_id is None or row['chain_id']==chain_id]

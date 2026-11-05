@@ -37,12 +37,14 @@ def findings(stages, result, bounds=None):
             warnings.append(dict(code='analytics-availability', stage=kind,
                 message='Analytics uses partial, unavailable or retained source evidence.', details=source))
     history = result.get('history', {}).get('unavailableHistoryDates', [])
-    if history:
+    provisional = result.get('history', {}).get('provisionalHistoryDates', [])
+    dates = {r['timestamp'] for r in history + provisional}
+    if dates:
         warnings.append(dict(code='history-availability', stage='history',
-            message='Historical rows retain explicit unavailable values.',
-            details=dict(dates=len(history), firstTimestamp=min(r['timestamp'] for r in history),
-                         lastTimestamp=max(r['timestamp'] for r in history),
-                         unavailableRows=sum(r['unavailableRows'] for r in history))))
+            message='Historical rows retain unavailable values or provisional ownership contributions.',
+            details=dict(dates=len(dates), firstTimestamp=min(dates), lastTimestamp=max(dates),
+                         unavailableRows=sum(r['unavailableRows'] for r in history),
+                         provisionalRows=sum(r['provisionalRows'] for r in provisional))))
     return warnings
 
 

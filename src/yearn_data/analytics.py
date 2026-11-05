@@ -16,7 +16,7 @@ from .tvl_api import CHAINS, encoded, key, money
 
 DAY = 86400
 YEAR = 365 * DAY
-VERSION = 'powerglove-analytics-25'
+VERSION = 'powerglove-analytics-28'
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS analytics_inputs (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, observed_at INTEGER NOT NULL,
@@ -181,11 +181,20 @@ def fee_stack(rows, positions, configurations):
     rates=[c['effectivePerfFee'] for c in chains if c['effectivePerfFee'] is not None]
     # External fractions attribute the same capital only once even with nested roots.
     identities={(c['root']['vault']['chainId'],c['root']['vault']['address']) for c in chains}
-    capital=money([by_key[i] for i in identities],'external_tvl_usd')
+    capital_rows = [by_key[i] for i in sorted(identities)]
+    capital=money(capital_rows,'external_tvl_usd')
+    capital_availability = coverage(capital_rows, 'external_tvl_usd')
+    capital_availability['ownershipIncompleteVaults'] = [list(key(row)) for row in capital_rows
+                                                       if row.get('ownership_incomplete')]
+    if capital_availability['ownershipIncompleteVaults'] and capital_availability['state'] == 'available':
+        capital_availability['state'] = 'partial'
     from .fee_views import fee_view_entries
-    return {'chains':chains,'entries':fee_view_entries(chains + standalone, rows),'maxDepth':max((c['maxDepth'] for c in chains),default=0),
+    entries = fee_view_entries(chains + standalone, rows)
+    provisional = any(entry['ownershipIncomplete'] for entry in entries)
+    return {'chains':chains,'entries':entries,'maxDepth':max((c['maxDepth'] for c in chains),default=0),
             'maxEffectivePerfFee':max(rates) if rates else None,'avgEffectivePerfFee':sum(rates)/len(rates) if rates else None,
-            'totalStackedCapital':capital,'availability':{'state':'available' if len(rates)==len(chains) and not issues else 'partial',
+            'totalStackedCapital':capital,'totalStackedCapitalAvailability':capital_availability,
+            'availability':{'state':'available' if len(rates)==len(chains) and not issues and not provisional else 'partial',
              'knownStacks':len(rates),'expectedStacks':len(chains),'unresolvedAllocations':issues}}
 
 
@@ -195,10 +204,10 @@ def comparable(rows, membership):
     for row in rows:
         identity=key(row)
         value=row.get('external_tvl_usd')
-        if value is None:
+        if value is None or row.get('ownership_incomplete'):
             unavailable.append({'vaultAddress':identity[1],'chainId':identity[0],
-                                'name':row.get('name'),'countedTvlUsd':None,
-                                'reason':'counted TVL unavailable'})
+                                'name':row.get('name'),'countedTvlUsd':None if value is None else float(value),
+                                'reason':'counted TVL unavailable' if value is None else 'ownership incomplete'})
             continue
         if float(value)<=0:continue
         match=observations.get(identity,{})
@@ -369,12 +378,13 @@ def owned_comparison(tvl, rows, snapshots):
     available=all(v is not None for v in totals)
     retained=any(r.get('retainedAfterUnavailableRetry') for r in refs.values())
     total=sum(totals) if available else None
-    unavailable=[{'chainId':r['chain_id'],'vaultAddress':r['vault'],'reason':'counted TVL unavailable'}
-                 for r in rows if r.get('external_tvl_usd') is None]
+    unavailable=[{'chainId':r['chain_id'],'vaultAddress':r['vault'],
+                  'reason':'counted TVL unavailable' if r.get('external_tvl_usd') is None else 'ownership incomplete'}
+                 for r in rows if r.get('external_tvl_usd') is None or r.get('ownership_incomplete')]
 
     def complete_total(scope):
         # A known subtotal cannot be reconciled against a complete external total.
-        return None if any(r.get('external_tvl_usd') is None for r in scope) else money(scope,'external_tvl_usd')
+        return None if any(r.get('external_tvl_usd') is None or r.get('ownership_incomplete') for r in scope) else money(scope,'external_tvl_usd')
 
     ours=complete_total(rows)
     difference=ours-total if ours is not None and total is not None else None

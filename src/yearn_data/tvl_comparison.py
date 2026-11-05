@@ -74,10 +74,22 @@ def discrepancy_details(rows, evidence, dataset_id):
         for identity, row in local.items():
             if (row.get('category') == 'curation') != curation:
                 continue
+            record = entry(row)
             amount = value(row.get('external_tvl_usd'))
+            if row.get('ownership_incomplete') and amount is not None:
+                observation = external.get((protocol, *identity))
+                observed = None
+                if observation is not None and observation.get('units') is not None:
+                    units = Decimal(observation['units'])
+                    if units == 0:
+                        observed = 0.0
+                    elif units > 0:
+                        observed = value(observation.get('replayTvlUsd'))
+                unresolved.append(record | {'ownershipIncomplete': True, 'defillamaUsd': observed,
+                    'reason': 'Local ownership incomplete; counted capital is provisional'})
+                continue
             if amount is None or amount <= 0 or (protocol, *identity) in external:
                 continue
-            record = entry(row)
             if curation and identity[0] in evidence.get('coverage', {}).get('incompleteChains', []):
                 unresolved.append(record | {'reason': 'External factory inventory incomplete; exclusion unverified'})
             else:

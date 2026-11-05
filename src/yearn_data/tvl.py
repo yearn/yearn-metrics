@@ -196,13 +196,13 @@ def asset_units(raw, decimals):
 
 
 def account(snapshots, positions, *, include_curation=True, deduct_internal_curation=True,
-            require_complete_ownership=True, vault_policies=VAULT_POLICIES, target_corrections=TARGET_CORRECTIONS):
+            vault_policies=VAULT_POLICIES, target_corrections=TARGET_CORRECTIONS):
     """Deduct each actual holding once, capped by parent debt and child TVL.
 
     A shared holder's balance is split among its parents by recorded debt. Several
     child positions share that same debt budget. This prevents duplicate deductions.
-    Curated vaults share the same ownership ledger. Legacy publications can
-    retain their separate-product policy and known-subtotal row semantics.
+    Curated vaults share the same ownership ledger. Available capital retains
+    verified deductions, with incomplete ownership flagged on provisional rows.
     """
     excluded = {(p['chainId'],p['address'].lower()) for p in vault_policies if p.get('excludeFromTvl')}
     snapshots = [classify_vault(s,vault_policies) for s in snapshots
@@ -213,10 +213,10 @@ def account(snapshots, positions, *, include_curation=True, deduct_internal_cura
         ctx.prec = 78
         return _account(snapshots, positions, include_curation=include_curation,
                         deduct_internal_curation=deduct_internal_curation,
-                        target_corrections=target_corrections, require_complete_ownership=require_complete_ownership)
+                        target_corrections=target_corrections)
 
 
-def _account(snapshots, positions, *, include_curation, deduct_internal_curation, target_corrections, require_complete_ownership):
+def _account(snapshots, positions, *, include_curation, deduct_internal_curation, target_corrections):
     by_key = {(s['chain_id'], s['vault'].lower()): s for s in snapshots}
     adjustments = defaultdict(lambda: Decimal(0))
     edges = [dict(p, overlap_usd=None, accounting_unresolved=False) for p in positions]
@@ -328,13 +328,13 @@ def _account(snapshots, positions, *, include_curation, deduct_internal_curation
 
     rows = []
     for key, s in by_key.items():
-        row = dict(s, accounting_unresolved=bool(s.get('bridge_target_chain') in chains and decimal(s.get('tvl_usd'))))
+        row = dict(s, ownership_incomplete=key in unavailable_children,
+                   accounting_unresolved=bool(s.get('bridge_target_chain') in chains and decimal(s.get('tvl_usd'))))
         value = decimal(s.get('tvl_usd'))
         row['overlap_usd'] = str(adjustments[key]) if value is not None else None
         row['external_tvl_usd'] = str(max(Decimal(0), value - adjustments[key])) if value is not None else None
-        if require_complete_ownership and key in unavailable_children:
-            row['overlap_usd'] = None
-            row['external_tvl_usd'] = None
+        # Failed deductions do not erase known capital or successful deductions.
+        # The row flag and incomplete diagnostics keep this contribution provisional.
         rows.append(row)
     valued = [r for r in rows if r['tvl_usd'] is not None]
     complete = len(valued) == len(rows) and not issues
@@ -372,12 +372,9 @@ def export_tvl(conn, out, run_id=None, *, include_curation=True):
     for row in conn.execute('SELECT data_json FROM tvl_positions WHERE run_id=? ORDER BY timestamp,chain_id,parent,strategy,child', (run_id,)):
         data = json.loads(row['data_json'])
         positions[data['timestamp']].append(data)
-    # The export opt-out retains both legacy layering and legacy availability.
-    require_complete_ownership = include_curation
     output = {'vaults': [], 'positions': [], 'history': []}
     for timestamp, points in snapshots.items():
-        rows, edges, summary = account(points, positions[timestamp], include_curation=include_curation,
-                                       require_complete_ownership=require_complete_ownership)
+        rows, edges, summary = account(points, positions[timestamp], include_curation=include_curation)
         output['vaults'].extend(rows)
         output['positions'].extend(edges)
         output['history'].append(summary)
@@ -392,7 +389,6 @@ def export_tvl(conn, out, run_id=None, *, include_curation=True):
     metadata = dict(run)
     metadata['params'] = json.loads(metadata.pop('params_json'))
     metadata['include_curation'] = include_curation
-    metadata['require_complete_ownership'] = require_complete_ownership
     metadata['mapping_scope'] = 'known candidates; positive share scans expand coverage, absence is not proof of no nesting'
     (out / 'tvl.json').write_text(json.dumps({'run': metadata, **output}, indent=2) + '\n')
     return out
