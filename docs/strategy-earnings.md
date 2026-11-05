@@ -62,6 +62,9 @@ Ledger fields:
 - Each fraction has `classification` (`included`, `parent-overlap`, `unresolved`),
   a stable `pathId` using the report chain ID and beneficiary address, and positive
   integer-string `numerator` / `denominator`.
+  Validation checks `included` beneficiaries against same-chain reporting
+  contracts in the bound fee rows. Classify their known ownership as
+  `parent-overlap`.
   Each `pathId` appears once per report, with one classification. Fractions must
   sum exactly to one. Fractions must describe pre-report ownership,
   before that report's fee-share mints and profit locking.

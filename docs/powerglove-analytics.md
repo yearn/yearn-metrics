@@ -239,3 +239,10 @@ the required matching ownership scope. Their available attributed gain amounts
 remain visible as `totalGainUsd`. Fee yield continues to use full fees and gross
 contract capital. Fee-capture summaries use the compatible-scope cohort and
 report its contributing and expected vault counts.
+
+For ownership-enabled datasets, `feeCaptureCoverage.scopeExcludedVaults` counts
+vaults whose attributed gains use a different scope from their fees and capital.
+`expectedVaults` counts the compatible cohort; missing observations within that
+cohort reduce `contributingVaults` and determine its coverage state. An entirely
+scope-excluded cohort has zero expected/contributing vaults and unavailable
+capture. Default datasets retain their existing coverage fields and values.

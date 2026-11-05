@@ -14,7 +14,7 @@ import re
 from .fee_products import product_for
 
 POLICY = 'report-time-strategy-ownership-v1'
-METHOD_VERSION = 'strategy-earnings-4'
+METHOD_VERSION = 'strategy-earnings-5'
 ANNUAL_THRESHOLD_USD = Decimal('1000')
 FAMILY = 'yearn-v3-tokenized-strategy'
 HASH = re.compile(r'0x[0-9a-f]{64}')
@@ -81,6 +81,7 @@ def apply_ownership(fees, ledger):
         if key in source:
             raise ValueError('duplicate fee event identity')
         source[key] = row
+    reporting_contracts = {(row['chain_id'], row['vault_address'].lower()) for row in fees}
     evidence = {}
     for report in ledger.get('reports', []):
         chain = integer(report['chainId'], 1)
@@ -107,6 +108,8 @@ def apply_ownership(fees, ledger):
                 raise ValueError('invalid ownership path identity')
             if int(path.split(':', 1)[0]) != chain:
                 raise ValueError('ownership path chain does not match report')
+            if status == 'included' and (chain, path.split(':', 1)[1]) in reporting_contracts:
+                raise ValueError('included beneficiary is a reporting contract; classify parent overlap')
             if path in seen_paths:
                 raise ValueError('duplicate ownership path')
             seen_paths.add(path)

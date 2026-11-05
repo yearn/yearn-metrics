@@ -175,6 +175,9 @@ def test_attributed_gains_keep_full_scope_fee_ratios_unavailable():
     assert vault['earningsRatiosAvailability']['state'] == 'unavailable'
     assert after['feeCaptureRate'] is None
     assert after['feeCaptureCoverage']['contributingVaults'] == 0
+    assert after['feeCaptureCoverage']['expectedVaults'] == 0
+    assert after['feeCaptureCoverage']['scopeExcludedVaults'] == 1
+    assert after['feeCaptureCoverage']['state'] == 'unavailable'
 
 
 def test_fractional_annual_activity_at_exact_threshold_requires_resolution():
@@ -204,3 +207,42 @@ def test_mixed_priced_and_unpriced_included_reports_disclose_partial_valuation()
     assert rows[0]['net_yield_usd'] == '40'
     assert rows[1]['net_yield_usd'] is None
     assert meta['coveragePeriods'][0]['unpricedIncludedReports'][0]['txHash'] == fees[1]['tx_hash']
+
+
+@pytest.mark.parametrize('family', ['yearn-v3-allocator', 'yearn-v3-tokenized-strategy'])
+@pytest.mark.parametrize('parent_chain', [1, 10])
+def test_reporting_beneficiary_requires_overlap_on_its_own_chain(family, parent_chain):
+    fees = [fee(), fee(2, vault_address=OWNER, chain_id=parent_chain, contract_family=family)]
+    evidence = ledger(fees)
+    evidence['reports'] = evidence['reports'][:1]
+    if parent_chain == 1:
+        with pytest.raises(ValueError, match='included beneficiary is a reporting contract'):
+            apply_ownership(fees, evidence)
+        evidence['reports'][0]['fractions'] = [{
+            'classification': 'parent-overlap', 'pathId': f'1:{OWNER}',
+            'numerator': '1', 'denominator': '1'}]
+        rows, _ = apply_ownership(fees, evidence)
+        assert rows[0]['net_yield_usd'] == '0'
+    else:
+        rows, _ = apply_ownership(fees, evidence)
+        assert rows[0]['net_yield_usd'] == '40'
+
+
+def test_capture_coverage_separates_scope_exclusions_from_missing_observations():
+    from types import SimpleNamespace
+    from yearn_data.analytics import profitability
+    other, missing = '0x' + '55' * 20, '0x' + '66' * 20
+    fees = [fee(), fee(2, vault_address=other), fee(3, vault_address=missing, gain=None)]
+    financial = SimpleNamespace(fees=fees, earnings=fees, vault_names={})
+    default = profitability(financial, [], {}, {'vaults': []}, END)['feeCaptureCoverage']
+    assert default == {'state': 'partial', 'contributingVaults': 2, 'expectedVaults': 3,
+                       'basis': 'vaults with complete fee and gain observations in the calculation period'}
+    attributed, _ = apply_ownership(fees[:1], ledger(fees[:1]))
+    financial.earnings = attributed + fees[1:]
+    partial = profitability(financial, [], {}, {'vaults': []}, END)['feeCaptureCoverage']
+    assert partial == {'state': 'partial', 'contributingVaults': 1, 'expectedVaults': 2,
+                       'scopeExcludedVaults': 1,
+                       'basis': 'vaults with complete fee/gain observations and matching ownership scope'}
+    fees[-1]['gross_gain_usd'] = '100'
+    complete = profitability(financial, [], {}, {'vaults': []}, END)['feeCaptureCoverage']
+    assert complete == partial | {'state': 'available', 'contributingVaults': 2}
