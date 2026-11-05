@@ -465,7 +465,6 @@ class TvlDataset:
         rows, positions, diagnostics = account(account_points, included_positions,
             include_curation=include_curation,
             deduct_internal_curation=self.manifest.get('deductInternalCuration',False),
-            require_complete_ownership=canonical_ownership,
             vault_policies=self.manifest.get('vaultPolicies',[]),
             target_corrections=self.manifest.get('targetCorrections',[]))
         positions.extend(dict(edge,overlap_usd='0',accounting_excluded=True,reason='bridge_parent_excluded') for edge in excluded_positions)
@@ -835,7 +834,6 @@ class TvlDataset:
         selected = [r for r in all_rows if self.catalog.get(key(r),{}).get('active',1) and
                     (r.get('category')=='curation' or key(r) in self.allocators)]
         rows, edges, diagnostics = account(selected, positions, include_curation=True,
-                                 require_complete_ownership=self.manifest.get('ownershipAccounting') == 'all-yearn-v1',
                                  vault_policies=self.manifest.get('vaultPolicies', []),
                                  target_corrections=self.manifest.get('targetCorrections', []))
         rows = [row for row in rows if chain_id is None or row['chain_id']==chain_id]

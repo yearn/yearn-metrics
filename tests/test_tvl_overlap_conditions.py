@@ -69,11 +69,10 @@ def test_cross_chain_exposure_uses_smaller_dated_debt_and_remote_holding(debt,sh
 
 
 @pytest.mark.parametrize('failure',['mismatch','failure'])
-@pytest.mark.parametrize('require_complete_ownership', [True, False])
-def test_cross_chain_unverified_remote_state_remains_unknown(failure, require_complete_ownership):
+def test_cross_chain_unverified_remote_state_remains_unknown(failure):
     p,c,e=remote_position(**{failure:True})
     assert e['status']=='unavailable'
-    rows,positions,totals=account([p,c],[e],require_complete_ownership=require_complete_ownership)
+    rows,positions,totals=account([p,c],[e])
     assert positions[0]['overlap_usd'] is None
     by={(r['chain_id'],r['vault']):r for r in rows}
     assert by[(1,address(1))]['external_tvl_usd']=='100'

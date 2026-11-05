@@ -169,12 +169,12 @@ def test_incomplete_ownership_keeps_gross_and_partial_evidence_distinct(source):
 @pytest.mark.parametrize('include_curation', [True, False])
 def test_export_records_current_and_legacy_ownership_policy(source, tmp_path, include_curation):
     conn, _, _ = source
-    # A non-curation edge verifies that legacy availability is restored too.
+    # Both export scopes preserve provisional capital and explicit completeness.
     run(conn, 1, DAY, [(PARENT, '100'), (CHILD, '200')], [(CHILD, None)])
     out = export_tvl(conn, tmp_path / 'export', include_curation=include_curation)
     exported = json.loads((out / 'tvl.json').read_text())
     assert exported['run']['include_curation'] is include_curation
-    assert exported['run']['require_complete_ownership'] is include_curation
+    assert 'require_complete_ownership' not in exported['run']
     child = next(row for row in exported['vaults'] if row['vault'] == CHILD)
     assert child['tvl_usd'] == '200'
     assert child['external_tvl_usd'] == '200'

@@ -195,10 +195,10 @@ def comparable(rows, membership):
     for row in rows:
         identity=key(row)
         value=row.get('external_tvl_usd')
-        if value is None:
+        if value is None or row.get('ownership_incomplete'):
             unavailable.append({'vaultAddress':identity[1],'chainId':identity[0],
-                                'name':row.get('name'),'countedTvlUsd':None,
-                                'reason':'counted TVL unavailable'})
+                                'name':row.get('name'),'countedTvlUsd':None if value is None else float(value),
+                                'reason':'ownership incomplete' if row.get('ownership_incomplete') else 'counted TVL unavailable'})
             continue
         if float(value)<=0:continue
         match=observations.get(identity,{})

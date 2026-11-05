@@ -44,9 +44,9 @@ The complete external total remains unavailable while diagnostics are incomplete
 
 `tvl export` uses unified curation deductions by default. `--include-curation`
 keeps that default; `--no-include-curation` explicitly selects the separate-product
-export convention, including its best-effort ownership availability. `tvl.json`
-records both `include_curation` and `require_complete_ownership` in its run
-metadata. This export switch does not change a publication's policy.
+export convention. Both scopes preserve provisional known capital and flag
+incomplete ownership. `tvl.json` records `include_curation` in its run metadata.
+The publication retains its captured policy across export choices.
 
 Powerglove's existing contract consumes these values directly:
 
@@ -63,12 +63,20 @@ expanded details consume the new publication's values. yvUSD product grouping
 continues to sum canonical member values once; any unavailable member leaves the
 combined value unavailable.
 
+Prepared history retains `ownership_incomplete` for each dated row, including
+reused dates and quote-repair copies. Refresh receipts distinguish unavailable
+amounts from provisional ownership contributions and summarize both in the
+`history-availability` warning. Comparable membership responses identify
+provisional values under `unavailableTvlVaults` and report partial availability.
+
 ## Publication rollout
 
 The manifest adds `ownershipAccounting: all-yearn-v1`, changing the dataset hash
 even when the raw runs are unchanged. Accounting changes also advance the
-financial source fingerprint; prepare a new dataset instead of mutating retained
-prepared rows. Analytics methodology advances
+financial source fingerprint; prepare a new dataset with the current history
+format before deployment. Preparation adds the ownership-status column to the
+chart cache and writes the new immutable rows; retained prepared datasets keep
+their original values. Analytics methodology advances
 to `powerglove-analytics-25`, which keeps unresolved corrected ownership partial
 in the fee view. Reprepare analytics even when the selected source IDs are
 unchanged; an older prepared fee stack can otherwise retain a known rate for

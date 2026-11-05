@@ -47,8 +47,7 @@ def edge(parent,strategy,child,debt,owned,chain=1):
 
 @pytest.mark.parametrize('replacement', ['missing', 'verified', 'wrong-block', 'wrong-parent',
                                        'wrong-date', 'no-getter', 'failed', 'missing-value', 'zero'])
-@pytest.mark.parametrize('require_complete_ownership', [True, False])
-def test_superseded_registry_position_needs_dated_replacement(replacement, require_complete_ownership):
+def test_superseded_registry_position_needs_dated_replacement(replacement):
     correction = {'chainId':1,'strategyAddress':address(9),'targetVaultAddress':address(3),
                   'supersededTargetVaultAddresses':[address(2)]}
     stale = dict(edge(1,9,2,'50','80'), method='service-registry', block_number=123)
@@ -63,8 +62,7 @@ def test_superseded_registry_position_needs_dated_replacement(replacement, requi
     if replacement == 'zero': repaired.update(debt_usd='0', owned_usd=None)
     positions = [stale] + ([] if replacement == 'missing' else [repaired])
     rows, positions, total = account([snapshot(i,'100') for i in (1,2,3)], positions,
-                                    target_corrections=[correction],
-                                    require_complete_ownership=require_complete_ownership)
+                                    target_corrections=[correction])
     assert rows[1]['external_tvl_usd'] == '100'
     assert positions[0]['overlap_usd'] == '0'
     assert positions[0]['accounting_excluded'] is True
@@ -77,12 +75,11 @@ def test_superseded_registry_position_needs_dated_replacement(replacement, requi
         assert total['status'] == 'incomplete'
         assert total['external_tvl_usd'] is None
         assert 'superseded_registry_target' in total['issues']
-        if require_complete_ownership:
-            assert rows[2]['ownership_incomplete'] is True
-            known = replacement in ('wrong-block','wrong-date','no-getter')
-            assert rows[2]['overlap_usd'] == ('50' if known else '0')
-            assert rows[2]['external_tvl_usd'] == ('50' if known else '100')
-            assert total['known_external_tvl_usd'] == ('250' if known else '300')
+        assert rows[2]['ownership_incomplete'] is True
+        known = replacement in ('wrong-block','wrong-date','no-getter')
+        assert rows[2]['overlap_usd'] == ('50' if known else '0')
+        assert rows[2]['external_tvl_usd'] == ('50' if known else '100')
+        assert total['known_external_tvl_usd'] == ('250' if known else '300')
     # No rewriting or relabelling of raw historical ownership.
     assert stale['owned_usd'] == '80' and stale['child'] == address(2)
 

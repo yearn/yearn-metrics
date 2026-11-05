@@ -365,10 +365,16 @@ class RefreshWorker:
         dataset=tvl_api.TvlDataset(self.manifest(tvl))
         receipt=tvl_history_cache.prepare(dataset,progress=lambda message:self.job.emit('history-progress',detail=message))
         with closing(connect(self.options.database,readonly=True)) as conn:
-            gaps=[dict(timestamp=r[0],unavailableRows=r[1]) for r in conn.execute('''SELECT timestamp,count(*)
-                FROM tvl_chart_rows WHERE dataset_id=? AND (tvl_usd IS NULL OR external_tvl_usd IS NULL)
-                GROUP BY timestamp ORDER BY timestamp''',(dataset.id,))]
-        return {'datasetId':dataset.id,'preparation':receipt,'unavailableHistoryDates':gaps}
+            availability=list(conn.execute('''SELECT timestamp,
+                count(*) FILTER (WHERE tvl_usd IS NULL OR external_tvl_usd IS NULL),
+                count(*) FILTER (WHERE ownership_incomplete)
+                FROM tvl_chart_rows WHERE dataset_id=?
+                AND (tvl_usd IS NULL OR external_tvl_usd IS NULL OR ownership_incomplete)
+                GROUP BY timestamp ORDER BY timestamp''',(dataset.id,)))
+        gaps=[dict(timestamp=r[0],unavailableRows=r[1]) for r in availability if r[1]]
+        provisional=[dict(timestamp=r[0],provisionalRows=r[2]) for r in availability if r[2]]
+        return {'datasetId':dataset.id,'preparation':receipt,'unavailableHistoryDates':gaps,
+                'provisionalHistoryDates':provisional}
 
     def make_pairing(self,earnings,fee_usd):
         pair=select_pairing(self.options.database,earnings['runId'],fee_usd['runId'],self.root/'fees')
