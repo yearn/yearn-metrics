@@ -3,7 +3,7 @@
   "functions": {
     "api/index.py": {
       "maxDuration": 60,
-      "excludeFiles": "{data/**,artifacts/**,exports/**,tests/**,docs/**,scripts/**,ops/**,cache/**,build/**,.agents/**,.aws/**,.codex/**,.github/**,.pytest_cache/**,.vscode/**,.venv/**,.env,.env.*,**/*.sqlite,**/*.sqlite-*,**/*.db,**/*.zst}"
+      "excludeFiles": "{data/**,artifacts/**,exports/**,tests/**,docs/**,benchmarks/**,scripts/**,ops/**,cache/**,build/**,.agents/**,.aws/**,.codex/**,.github/**,.pytest_cache/**,.vscode/**,.venv/**,.env,.env.*,**/*.sqlite,**/*.sqlite-*,**/*.db,**/*.zst}"
     }
   },
   "framework": null,

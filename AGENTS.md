@@ -1,6 +1,6 @@
 # Agent instructions
 
-Read [the testing policy](docs/testing.md) before adding, changing, or removing
+Read [the testing policy](docs/development/testing.md) before adding, changing, or removing
 tests. Keep distinct supported failure modes at the cheapest faithful boundary.
 Consolidate exploratory tests before delivery; identify surviving coverage when
 removing duplicates. Test count and coverage percentages are not goals.
