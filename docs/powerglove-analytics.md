@@ -123,8 +123,12 @@ analytics publication.
 - Fee capture summaries use only vaults with complete fee and gain observations.
   `feeCaptureCoverage` states the contributing and expected vault counts and labels
   a subset partial; it is not a complete protocol-wide capture claim.
-- Unpriced current vaults remain in comparable coverage as `unavailableTvlVaults`;
-  confirmed zero counted TVL is excluded from the positive-capital comparison.
+- Comparable coverage retains unpriced and ownership-incomplete vaults in
+  `unavailableTvlVaults`. `reason` is `counted TVL unavailable` when valuation is
+  missing, or `ownership incomplete` when a provisional counted amount is known.
+  `countedTvlUsd` can carry a provisional number, including zero, in this list.
+  Confirmed zero counted TVL is excluded from the positive-capital comparison.
+  See [canonical TVL ownership](canonical-tvl-ownership.md) for the accounting rule.
   Fee-stack nodes expose stored contract-family evidence (or null if unknown).
 - Chain and category profitability rows include contribution counts for TVL, fees,
   and annualized yield. Partial fee subtotals distinguish contributing vaults from
@@ -228,3 +232,13 @@ as unavailable. A by-chain comparison requires explicit values from both finance
 and curation snapshots, including explicit zero where appropriate. Without them,
 `defillama` and `difference` are null; protocol-level totals remain separate.
 Reprepare analytics to replace previously prepared chain comparisons.
+
+Fee-view entries carry `ownershipIncomplete` and `adjustedTvlAvailability` beside
+`adjustedTvlUsd`. Valued provisional capital has `state: partial` and reason
+`ownership incomplete`; missing valuation has `state: unavailable` and reason
+`counted TVL unavailable`. Grouped yvUSD entries inherit incomplete ownership
+from any member while keeping their existing capital grouping and fee rates.
+`totalStackedCapitalAvailability` gives priced-row coverage and lists
+`ownershipIncompleteVaults` for the stack roots contributing to the capital
+subtotal. Its state is partial when any valued contribution is provisional.
+The enclosing fee-view availability also identifies provisional entries as partial.

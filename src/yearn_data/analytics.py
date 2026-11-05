@@ -16,7 +16,7 @@ from .tvl_api import CHAINS, encoded, key, money
 
 DAY = 86400
 YEAR = 365 * DAY
-VERSION = 'powerglove-analytics-27'
+VERSION = 'powerglove-analytics-28'
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS analytics_inputs (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, observed_at INTEGER NOT NULL,
@@ -181,11 +181,20 @@ def fee_stack(rows, positions, configurations):
     rates=[c['effectivePerfFee'] for c in chains if c['effectivePerfFee'] is not None]
     # External fractions attribute the same capital only once even with nested roots.
     identities={(c['root']['vault']['chainId'],c['root']['vault']['address']) for c in chains}
-    capital=money([by_key[i] for i in identities],'external_tvl_usd')
+    capital_rows = [by_key[i] for i in sorted(identities)]
+    capital=money(capital_rows,'external_tvl_usd')
+    capital_availability = coverage(capital_rows, 'external_tvl_usd')
+    capital_availability['ownershipIncompleteVaults'] = [list(key(row)) for row in capital_rows
+                                                       if row.get('ownership_incomplete')]
+    if capital_availability['ownershipIncompleteVaults'] and capital_availability['state'] == 'available':
+        capital_availability['state'] = 'partial'
     from .fee_views import fee_view_entries
-    return {'chains':chains,'entries':fee_view_entries(chains + standalone, rows),'maxDepth':max((c['maxDepth'] for c in chains),default=0),
+    entries = fee_view_entries(chains + standalone, rows)
+    provisional = any(entry['ownershipIncomplete'] for entry in entries)
+    return {'chains':chains,'entries':entries,'maxDepth':max((c['maxDepth'] for c in chains),default=0),
             'maxEffectivePerfFee':max(rates) if rates else None,'avgEffectivePerfFee':sum(rates)/len(rates) if rates else None,
-            'totalStackedCapital':capital,'availability':{'state':'available' if len(rates)==len(chains) and not issues else 'partial',
+            'totalStackedCapital':capital,'totalStackedCapitalAvailability':capital_availability,
+            'availability':{'state':'available' if len(rates)==len(chains) and not issues and not provisional else 'partial',
              'knownStacks':len(rates),'expectedStacks':len(chains),'unresolvedAllocations':issues}}
 
 

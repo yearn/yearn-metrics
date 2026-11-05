@@ -48,6 +48,12 @@ def test_yvusd_groups_external_capital_and_keeps_underlying_rates():
     assert len(product['roots']) == 2
     assert product['roots'][0]['children'][0]['perfFee'] == 500
     assert any(c['effectivePerfFee'] > 0 for c in result['chains'])
+    rows[1]['ownership_incomplete'] = True
+    provisional = next(r for r in fee_stack(rows, positions, configs)['entries'] if r['vault']['address'] == YVUSD)
+    assert provisional['ownershipIncomplete'] is True
+    assert provisional['adjustedTvlAvailability']['state'] == 'partial'
+    assert provisional['adjustedTvlUsd'] == 95
+    assert provisional['performanceFee'] == pytest.approx(400)
     rows[1]['external_tvl_usd'] = None
     unavailable = next(r for r in fee_stack(rows, positions, configs)['entries'] if r['vault']['address'] == YVUSD)
     assert unavailable['adjustedTvlUsd'] is None
@@ -339,3 +345,29 @@ def test_product_discloses_retained_fee_observations(postgres_database, failed_a
             'failureKind': 'acquisition_failed'}]
         put_input(conn, 'fee-config', {'vaults': configs}, observed_at=3)
         assert product()['retainedFeeConfigurations'] == []
+
+
+@pytest.mark.parametrize('external,entry_state,total', [('170', 'partial', 370), ('0', 'partial', 200), (None, 'unavailable', 200)])
+def test_fee_capital_discloses_incomplete_ownership_even_with_known_allocations(external, entry_state, total):
+    parent, child, leaf = LOAN, YBOLD, STAKER
+    rows = [{'chain_id': 1, 'vault': a, 'tvl_usd': '200', 'external_tvl_usd': amount}
+            for a, amount in [(parent, '200'), (child, external), (leaf, '0')]]
+    positions = [{'chain_id': 1, 'parent': a, 'strategy': b, 'child': b,
+                  'debt_usd': debt, 'owned_usd': owned, 'status': 'ok'}
+                 for a, b, debt, owned in [(parent, child, '50', None), (child, leaf, '30', '30')]]
+    configs = {'vaults': [{'chainId': 1, 'address': a, 'performanceFee': 1000, 'managementFee': 0}
+                         for a in (parent, child, leaf)]}
+    verified = fee_stack(rows, positions, configs)
+    rows[1]['ownership_incomplete'] = True
+    result = fee_stack(rows, positions, configs)
+    entry = next(e for e in result['entries'] if e['vault']['address'] == child)
+    assert entry['ownershipIncomplete'] is True
+    assert entry['adjustedTvlUsd'] == (None if external is None else float(external))
+    assert entry['adjustedTvlAvailability'] == {
+        'state': entry_state, 'reason': 'counted TVL unavailable' if external is None else 'ownership incomplete'}
+    assert result['totalStackedCapital'] == total
+    assert result['totalStackedCapitalAvailability'] == {
+        'state': 'partial', 'known': 1 if external is None else 2, 'expected': 2,
+        'ownershipIncompleteVaults': [[1, child]]}
+    assert result['availability']['state'] == 'partial'
+    assert [e['performanceFee'] for e in result['entries']] == [e['performanceFee'] for e in verified['entries']]
