@@ -19,12 +19,16 @@ def external(address, amount='20', protocol='yearn-finance'):
                 units='20', replayTvlUsd=amount)
 
 
-def test_symmetric_scope_does_not_confuse_net_zero_with_exclusion():
-    result=discrepancy_details([row('ours'),row('zero','0'),row('unpriced',None,None)],
+@pytest.mark.parametrize('ownership_incomplete', [False, True])
+def test_symmetric_scope_does_not_confuse_net_zero_with_exclusion(ownership_incomplete):
+    result=discrepancy_details([row('ours'),row('zero','0'),row('unpriced',None,None) | {'ownership_incomplete': ownership_incomplete}],
         evidence([external('zero'),external('unpriced'),external('absent')]),'dataset')['categories'][0]
     assert [r['vaultAddress'] for r in result['oursOnly']]==['ours']
     assert {r['vaultAddress'] for r in result['theirsOnly']}=={'unpriced','absent'}
-    assert next(r for r in result['theirsOnly'] if r['vaultAddress']=='unpriced')['oursUsd'] is None
+    unpriced = next(r for r in result['theirsOnly'] if r['vaultAddress']=='unpriced')
+    assert unpriced['oursUsd'] is None
+    assert unpriced['defillamaUsd'] == 20
+    assert unpriced['reason'] == 'Missing local price'
     assert next(r for r in result['theirsOnly'] if r['vaultAddress']=='absent')['oursUsd']==0
 
 
@@ -148,15 +152,18 @@ def test_incomplete_evidence_does_not_abort_preparation(postgres_database, missi
     assert 'categories' not in result
 
 
-@pytest.mark.parametrize('observed', [False, True])
-def test_provisional_capital_stays_in_unresolved_reconciliation(observed):
+@pytest.mark.parametrize('external_amount', [None, '20', '0'])
+def test_provisional_capital_stays_in_unresolved_reconciliation(external_amount):
     candidate = row('provisional', '200', '200') | {'ownership_incomplete': True}
-    result = discrepancy_details([candidate], evidence([external('provisional')] if observed else []),
-                                 'dataset')['categories'][0]
+    observations = [] if external_amount is None else [external('provisional', external_amount)]
+    if external_amount == '0':
+        observations[0]['units'] = '0'
+    result = discrepancy_details([candidate], evidence(observations), 'dataset')['categories'][0]
     assert result['oursOnly'] == []
     assert result['theirsOnly'] == []
     assert len(result['unresolvedVaults']) == 1
     provisional = result['unresolvedVaults'][0]
     assert provisional['oursUsd'] == 200
     assert provisional['ownershipIncomplete'] is True
-    assert provisional.get('defillamaUsd') != 0
+    assert 'defillamaUsd' in provisional
+    assert provisional['defillamaUsd'] == (None if external_amount is None else float(external_amount))

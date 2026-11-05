@@ -564,6 +564,7 @@ def test_provisional_history_warning_survives_preparation_and_reuse(postgres_dat
     with closing(connect('staging')) as conn:
         init_db(conn)
         run(conn, 1, DAY, [(PARENT, '100'), (CHILD, '200')], [(CHILD, None)])
+        run(conn, 2, DAY+86400, [(PARENT, '100'), (CHILD, None)], [(CHILD, '30')])
     original = TvlStore('staging', tmp_path/'pub').get()
     worker = RefreshWorker.__new__(RefreshWorker)
     worker.options = SimpleNamespace(database='staging')
@@ -571,19 +572,21 @@ def test_provisional_history_warning_survives_preparation_and_reuse(postgres_dat
     worker.manifest = lambda _: original.manifest
     history = worker.prepare_history({'datasetId': original.id})
     expected = [{'timestamp': DAY, 'provisionalRows': 1}]
-    assert history['unavailableHistoryDates'] == []
+    unavailable = [{'timestamp': DAY+86400, 'unavailableRows': 1}]
+    assert history['unavailableHistoryDates'] == unavailable
     assert history['provisionalHistoryDates'] == expected
     warning = next(w for w in findings([], {'gaps': {}, 'history': history})
                    if w['code'] == 'history-availability')
     assert warning['details']['provisionalRows'] == 1
-    assert warning['details']['unavailableRows'] == 0
+    assert warning['details']['unavailableRows'] == 1
+    assert warning['details']['dates'] == 2
     with closing(connect('staging')) as conn:
-        run(conn, 2, DAY+86400, [(PARENT, '0'), (CHILD, '0')])
+        run(conn, 3, DAY+2*86400, [(PARENT, '0'), (CHILD, '0')])
     following = TvlStore('staging', tmp_path/'pub').get()
     worker.manifest = lambda _: following.manifest
     copied = worker.prepare_history({'datasetId': following.id})
-    assert copied['preparation']['reusedDates'] == [DAY]
+    assert copied['preparation']['reusedDates'] == [DAY, DAY+86400]
     assert copied['provisionalHistoryDates'] == expected
-    assert copied['unavailableHistoryDates'] == []
+    assert copied['unavailableHistoryDates'] == unavailable
     assert following.history(interval='daily')['chart'][0]['Ethereum'] == 300
     full_copy(following, 'e')

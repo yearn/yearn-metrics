@@ -16,7 +16,7 @@ from .tvl_api import CHAINS, encoded, key, money
 
 DAY = 86400
 YEAR = 365 * DAY
-VERSION = 'powerglove-analytics-26'
+VERSION = 'powerglove-analytics-27'
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS analytics_inputs (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, observed_at INTEGER NOT NULL,
@@ -198,7 +198,7 @@ def comparable(rows, membership):
         if value is None or row.get('ownership_incomplete'):
             unavailable.append({'vaultAddress':identity[1],'chainId':identity[0],
                                 'name':row.get('name'),'countedTvlUsd':None if value is None else float(value),
-                                'reason':'ownership incomplete' if row.get('ownership_incomplete') else 'counted TVL unavailable'})
+                                'reason':'counted TVL unavailable' if value is None else 'ownership incomplete'})
             continue
         if float(value)<=0:continue
         match=observations.get(identity,{})
@@ -370,7 +370,7 @@ def owned_comparison(tvl, rows, snapshots):
     retained=any(r.get('retainedAfterUnavailableRetry') for r in refs.values())
     total=sum(totals) if available else None
     unavailable=[{'chainId':r['chain_id'],'vaultAddress':r['vault'],
-                  'reason':'ownership incomplete' if r.get('ownership_incomplete') else 'counted TVL unavailable'}
+                  'reason':'counted TVL unavailable' if r.get('external_tvl_usd') is None else 'ownership incomplete'}
                  for r in rows if r.get('external_tvl_usd') is None or r.get('ownership_incomplete')]
 
     def complete_total(scope):

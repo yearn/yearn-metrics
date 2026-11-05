@@ -70,7 +70,10 @@ amounts from provisional ownership contributions and summarize both in the
 provisional values under `unavailableTvlVaults` and report partial availability.
 The operator warning report names provisional and unavailable row counts
 separately. Detailed comparison evidence keeps provisional amounts in
-`unresolvedVaults`. Audit-tree vaults expose `ownershipIncomplete` alongside
+`unresolvedVaults`, retaining any independently observed external value. Unpriced
+vaults retain their unavailable-valuation reason and external quote evidence.
+History counts partition unavailable amounts and valued provisional rows.
+Audit-tree vaults expose `ownershipIncomplete` alongside
 `countedTvlUsd`, and the response carries the summary completeness state.
 
 ## Publication rollout
@@ -81,7 +84,7 @@ financial source fingerprint; prepare a new dataset with the current history
 format before deployment. Preparation adds the ownership-status column to the
 chart cache and writes the new immutable rows; retained prepared datasets keep
 their original values. Analytics methodology advances
-to `powerglove-analytics-26`, which keeps unresolved corrected ownership partial
+to `powerglove-analytics-27`, which keeps unresolved corrected ownership partial
 in the fee view. Reprepare analytics even when the selected source IDs are
 unchanged; an older prepared fee stack can otherwise retain a known rate for
 unresolved ownership. Prepared rows/totals must be regenerated for the new

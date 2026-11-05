@@ -367,7 +367,7 @@ class RefreshWorker:
         with closing(connect(self.options.database,readonly=True)) as conn:
             availability=list(conn.execute('''SELECT timestamp,
                 count(*) FILTER (WHERE tvl_usd IS NULL OR external_tvl_usd IS NULL),
-                count(*) FILTER (WHERE ownership_incomplete)
+                count(*) FILTER (WHERE ownership_incomplete AND tvl_usd IS NOT NULL AND external_tvl_usd IS NOT NULL)
                 FROM tvl_chart_rows WHERE dataset_id=?
                 AND (tvl_usd IS NULL OR external_tvl_usd IS NULL OR ownership_incomplete)
                 GROUP BY timestamp ORDER BY timestamp''',(dataset.id,)))

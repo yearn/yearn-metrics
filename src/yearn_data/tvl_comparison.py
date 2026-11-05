@@ -75,11 +75,19 @@ def discrepancy_details(rows, evidence, dataset_id):
             if (row.get('category') == 'curation') != curation:
                 continue
             record = entry(row)
-            if row.get('ownership_incomplete'):
-                unresolved.append(record | {'ownershipIncomplete': True,
+            amount = value(row.get('external_tvl_usd'))
+            if row.get('ownership_incomplete') and amount is not None:
+                observation = external.get((protocol, *identity))
+                observed = None
+                if observation is not None and observation.get('units') is not None:
+                    units = Decimal(observation['units'])
+                    if units == 0:
+                        observed = 0.0
+                    elif units > 0:
+                        observed = value(observation.get('replayTvlUsd'))
+                unresolved.append(record | {'ownershipIncomplete': True, 'defillamaUsd': observed,
                     'reason': 'Local ownership incomplete; counted capital is provisional'})
                 continue
-            amount = value(row.get('external_tvl_usd'))
             if amount is None or amount <= 0 or (protocol, *identity) in external:
                 continue
             if curation and identity[0] in evidence.get('coverage', {}).get('incompleteChains', []):
@@ -93,7 +101,7 @@ def discrepancy_details(rows, evidence, dataset_id):
             row = local.get((chain, address))
             # A zero net contribution is not a scope exclusion: the parent and child
             # attribution differs between the two implementations.
-            if row is not None and (row.get('tvl_usd') is not None or row.get('ownership_incomplete')):
+            if row is not None and row.get('tvl_usd') is not None:
                 continue
             amount = value(observation.get('replayTvlUsd')) if units is not None else None
             record = {'chainId': chain, 'vaultAddress': address, 'name': observation.get('name'),
