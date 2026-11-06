@@ -618,3 +618,25 @@ def test_published_fee_rows_reject_corrupt_individual_json(postgres_database, ra
     # Joining these corrupt values directly could silently remove or add rows.
     with pytest.raises((json.JSONDecodeError, *DATABASE_ERRORS)):
         PublishedFees('staging', 'legacy').view_rows(None, 200, (), None)
+
+
+def test_hosted_harvests_use_published_rows_and_preserve_selection_pins(financial_publication):
+    from yearn_data.harvests import harvest_response
+    database, financial = financial_publication
+    api = HostedAPI(database)
+    source = PairingStore(financial).get()
+    expected = harvest_response(SimpleHarvestStore(source), '/api/harvests')
+    assert expected[1]['reportCount'] == 1
+    assert api.response('/api/harvests') == expected
+    assert api.response('/api/harvests?chainId=1')[1]['reportCount'] == 0
+    assert api.response('/api/harvests?datasetId=' + source.id) == expected
+    assert api.response('/api/harvests?datasetId=' + 'f'*64)[0] == 410
+    assert api.response('/api/harvests?chainId=bad')[0] == 400
+
+
+class SimpleHarvestStore:
+    def __init__(self, dataset):
+        self.dataset = dataset
+
+    def get(self, identity=None):
+        return self.dataset
