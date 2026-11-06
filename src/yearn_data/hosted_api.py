@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 from .hosted_publications import Registry
 from .storage import DATABASE_ERRORS
 
-FEE_PATHS = {'/api/fees', '/api/fees/', '/api/fees/history', '/api/fees/vaults',
+FEE_PATHS = {'/api/harvests', '/api/fees', '/api/fees/', '/api/fees/history', '/api/fees/vaults',
              '/api/fees/vaults/history'}
 TVL_PATHS = {'/api/tvl', '/api/tvl/', '/api/tvl/history/runs/latest',
              '/api/tvl/history/runs/latest/constant-price', '/api/tvl/curation-products', '/api/tvl/graph', '/api/audit/tree'}
@@ -64,7 +64,10 @@ class HostedAPI:
             if valid_pin(identity) and identity[0] != selection[field]:
                 return 410, {'error': 'Data was updated. Reload the page to use the current history.',
                              'releaseId': selection['releaseId']}
-        if path in FEE_PATHS:
+        if path == '/api/harvests':
+            from .harvests import harvest_response
+            response = harvest_response(SelectedStore(self.registry.fees, selection['feesDatasetId']), url)
+        elif path in FEE_PATHS:
             from .pairing import pairing_response
             response = pairing_response(SelectedStore(self.registry.fees, selection['feesDatasetId']), url)
         elif path in TVL_PATHS:
