@@ -137,8 +137,13 @@ def render(receipt):
                      'fee-config':'Fee configuration evidence does not cover the full requested scope.',
                      'membership':'Vault membership evidence does not cover the full requested scope.'}.get(stage,'Analytics uses incomplete or retained source evidence.')
         elif code=='history-availability':
-            description=f"{d['unavailableRows']:,} rows have unavailable USD fields across {d['dates']:,} dates ({date(d['firstTimestamp'])}–{date(d['lastTimestamp'])} UTC)."
-            meaning='These are gaps in retained history, not a count of new failures in this weekly window. The report does not yet distinguish expected historical limitations from repairable omissions.'
+            counts=[]
+            if d.get('unavailableRows'):
+                counts.append(f"{d['unavailableRows']:,} rows have unavailable USD fields")
+            if d.get('provisionalRows'):
+                counts.append(f"{d['provisionalRows']:,} rows have provisional ownership")
+            description='; '.join(counts)+f" across {d['dates']:,} dates ({date(d['firstTimestamp'])}–{date(d['lastTimestamp'])} UTC)."
+            meaning='Counts describe retained history across the stated dates. Provisional contributions preserve known capital less verified deductions, with remaining ownership unresolved. Unavailable fields require supporting valuation or accounting evidence.'
         elif code=='chain-freshness':
             description='The finalized head is dated '+date(d['finalizedTimestamp'])+' UTC; the requested cutoff is '+date(d['cutoff'])+' UTC.'
             meaning='Acquisition covers the verified pinned interval. This finding alone does not establish whether the chain stopped or its provider is stale.'

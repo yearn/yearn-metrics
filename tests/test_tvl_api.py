@@ -140,15 +140,17 @@ def test_registry_correction_applies_to_history_and_is_pinned(source, monkeypatc
          'supersededTargetVaultAddresses':[old_child]}])
     corrected = TvlStore(path,root).get()
     assert corrected.id != old.id
-    assert corrected.summary()['totalTvl'] == 200
-    assert [r['Ethereum'] for r in corrected.history(interval='daily')['chart']] == [200, 200]
+    assert corrected.summary()['totalTvl'] == 300
+    assert [r['Ethereum'] for r in corrected.history(interval='daily')['chart']] == [300, 300]
     legacy = dict(corrected.manifest, datasetId='legacy-corrected')
     legacy.pop('ownershipAccounting')
     assert tvl_api.TvlDataset(legacy).summary()['totalTvl'] == 300
     for _, rows, edges, diagnostics in corrected.frames(corrected.dates()):
         assert next(r for r in rows if r['vault']==old_child)['external_tvl_usd'] == '100'
         target = next(r for r in rows if r['vault']==CHILD)
-        assert target['external_tvl_usd'] is target['overlap_usd'] is None
+        assert target['external_tvl_usd'] == '100'
+        assert target['overlap_usd'] == '0'
+        assert target['ownership_incomplete'] is True
         assert edges[0]['overlap_usd'] == '0'
         assert diagnostics['status'] == 'incomplete'
         assert diagnostics['external_tvl_usd'] is None
@@ -191,8 +193,8 @@ def test_complete_position_from_different_block_is_not_applied(source):
     conn.execute('UPDATE tvl_snapshots SET data_json=? WHERE run_id=2',(json.dumps(row),))
     conn.commit()
     dataset = TvlStore(path,root).get()
-    assert dataset.summary()['totalTvl'] == 100
-    assert next(r for r in dataset.frames((DAY,))[0][1] if r['vault']==CHILD)['external_tvl_usd'] is None
+    assert dataset.summary()['totalTvl'] == 200
+    assert next(r for r in dataset.frames((DAY,))[0][1] if r['vault']==CHILD)['external_tvl_usd'] == '100'
     assert dataset.frames((DAY,))[0][2][0]['reason'] == 'selected_block_mismatch'
 
 

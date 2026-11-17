@@ -373,15 +373,20 @@ def test_http_verification_checks_consumer_ids_and_closed_cutoff(setup, monkeypa
         assert VERIFY_API(settings, rec)['status'] == 'verified'
 
 
-def test_shipped_configuration_and_check_have_no_network_database_or_writes(monkeypatch, tmp_path, capsys):
+def test_configured_example_check_has_no_network_database_or_writes(monkeypatch, tmp_path, capsys):
     root = Path(__file__).parents[1]
     def unexpected(*args, **kwargs):
         pytest.fail('configuration check crossed a write or external boundary')
     monkeypatch.setattr(nightly, 'cycle', unexpected)
     monkeypatch.setattr(nightly, 'connect', unexpected)
     monkeypatch.setattr(nightly.requests, 'get', unexpected)
+    settings = json.loads((root / 'ops/nightly-refresh.example.json').read_text())
+    settings.update(initial_baseline_job='reviewed-baseline', api_origin='https://example.test',
+                    chains=['arb', 'base', 'eth', 'ftm', 'kat', 'op', 'polygon'],
+                    extra_tvl_chains=[100, 999, 4663], confirmations={'ftm': 64})
+    config = tmp_path / 'config.json'; config.write_text(json.dumps(settings))
     env = tmp_path / 'env'; env.write_text('')
-    assert nightly.main(['--config', str(root / 'ops/nightly-refresh.json'), '--env', str(env), '--check']) == 0
+    assert nightly.main(['--config', str(config), '--env', str(env), '--check']) == 0
     body = json.loads(capsys.readouterr().out)
     assert body['scope']['chains'] == ['arb', 'base', 'eth', 'ftm', 'kat', 'op', 'polygon']
     assert body['scope']['extraTvlChains'] == [100, 999, 4663]
@@ -521,7 +526,8 @@ def test_extra_chain_warning_survives_budget_resume(setup, monkeypatch):
     {'extra_tvl_chains': [True]}, {'extra_tvl_chains': [1]},
 ])
 def test_invalid_operator_configuration_is_rejected_before_external_effects(tmp_path, monkeypatch, changes):
-    body = json.loads((Path(__file__).parents[1] / 'ops/nightly-refresh.json').read_text())
+    body = json.loads((Path(__file__).parents[1] / 'ops/nightly-refresh.example.json').read_text())
+    body.update(initial_baseline_job='reviewed-baseline', api_origin='https://example.test')
     body.update(changes)
     config = tmp_path / 'config.json'; config.write_text(json.dumps(body))
     env = tmp_path / 'env'; env.write_text('')

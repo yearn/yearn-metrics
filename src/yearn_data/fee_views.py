@@ -43,10 +43,13 @@ def fee_view_entries(chains, rows):
             own = node['feeAvailability']['state'] == 'available'
             entry.update(performanceFee=node['perfFee'] if own else None,
                          managementFee=node['mgmtFee'] if own else None, feeRateBasis='vault')
-        value = current.get(identity, {}).get('external_tvl_usd')
+        row = current.get(identity, {})
+        entry['ownershipIncomplete'] = bool(row.get('ownership_incomplete'))
+        value = row.get('external_tvl_usd')
         entry['adjustedTvlUsd'] = float(value) if value is not None else None
     if anchor:
         members = [entries[(1, address)] for address in sorted(ACCOUNTANTS) if (1, address) in entries]
+        anchor['ownershipIncomplete'] = any(entry['ownershipIncomplete'] for entry in [anchor, *members])
         anchor['memberAddresses'] += [entry['vault']['address'] for entry in members]
         anchor['roots'] += [root for entry in members for root in entry['roots']]
         capital = [anchor['adjustedTvlUsd'], *[entry['adjustedTvlUsd'] for entry in members]]
@@ -64,6 +67,11 @@ def fee_view_entries(chains, rows):
         for entry in members:
             del entries[key(entry['vault'])]
     for entry in entries.values():
+        entry['adjustedTvlAvailability'] = {
+            'state': ('unavailable' if entry['adjustedTvlUsd'] is None else
+                      'partial' if entry['ownershipIncomplete'] else 'available'),
+            'reason': ('counted TVL unavailable' if entry['adjustedTvlUsd'] is None else
+                       'ownership incomplete' if entry['ownershipIncomplete'] else None)}
         retained = {}
         def collect(node):
             observation = node.get('feeObservation', {})

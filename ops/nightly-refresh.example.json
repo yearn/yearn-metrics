@@ -1,0 +1,12 @@
+{
+  "database": "staging",
+  "chains": ["eth"],
+  "extra_tvl_chains": [],
+  "confirmations": {},
+  "initial_baseline_job": "",
+  "api_origin": "",
+  "publication_root": "../../artifacts/nightly/publication",
+  "state_dir": "../../artifacts/nightly",
+  "max_invocations": 12,
+  "retry_seconds": 60
+}

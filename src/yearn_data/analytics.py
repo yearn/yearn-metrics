@@ -16,7 +16,7 @@ from .tvl_api import CHAINS, encoded, key, money
 
 DAY = 86400
 YEAR = 365 * DAY
-VERSION = 'powerglove-analytics-25'
+VERSION = 'powerglove-analytics-28'
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS analytics_inputs (
  id TEXT PRIMARY KEY, kind TEXT NOT NULL, observed_at INTEGER NOT NULL,
@@ -181,11 +181,20 @@ def fee_stack(rows, positions, configurations):
     rates=[c['effectivePerfFee'] for c in chains if c['effectivePerfFee'] is not None]
     # External fractions attribute the same capital only once even with nested roots.
     identities={(c['root']['vault']['chainId'],c['root']['vault']['address']) for c in chains}
-    capital=money([by_key[i] for i in identities],'external_tvl_usd')
+    capital_rows = [by_key[i] for i in sorted(identities)]
+    capital=money(capital_rows,'external_tvl_usd')
+    capital_availability = coverage(capital_rows, 'external_tvl_usd')
+    capital_availability['ownershipIncompleteVaults'] = [list(key(row)) for row in capital_rows
+                                                       if row.get('ownership_incomplete')]
+    if capital_availability['ownershipIncompleteVaults'] and capital_availability['state'] == 'available':
+        capital_availability['state'] = 'partial'
     from .fee_views import fee_view_entries
-    return {'chains':chains,'entries':fee_view_entries(chains + standalone, rows),'maxDepth':max((c['maxDepth'] for c in chains),default=0),
+    entries = fee_view_entries(chains + standalone, rows)
+    provisional = any(entry['ownershipIncomplete'] for entry in entries)
+    return {'chains':chains,'entries':entries,'maxDepth':max((c['maxDepth'] for c in chains),default=0),
             'maxEffectivePerfFee':max(rates) if rates else None,'avgEffectivePerfFee':sum(rates)/len(rates) if rates else None,
-            'totalStackedCapital':capital,'availability':{'state':'available' if len(rates)==len(chains) and not issues else 'partial',
+            'totalStackedCapital':capital,'totalStackedCapitalAvailability':capital_availability,
+            'availability':{'state':'available' if len(rates)==len(chains) and not issues and not provisional else 'partial',
              'knownStacks':len(rates),'expectedStacks':len(chains),'unresolvedAllocations':issues}}
 
 
@@ -195,10 +204,10 @@ def comparable(rows, membership):
     for row in rows:
         identity=key(row)
         value=row.get('external_tvl_usd')
-        if value is None:
+        if value is None or row.get('ownership_incomplete'):
             unavailable.append({'vaultAddress':identity[1],'chainId':identity[0],
-                                'name':row.get('name'),'countedTvlUsd':None,
-                                'reason':'counted TVL unavailable'})
+                                'name':row.get('name'),'countedTvlUsd':None if value is None else float(value),
+                                'reason':'counted TVL unavailable' if value is None else 'ownership incomplete'})
             continue
         if float(value)<=0:continue
         match=observations.get(identity,{})
@@ -265,18 +274,22 @@ def profitability(financial, rows, history, configurations, cutoff, chain_id=Non
         trend='insufficient_data' if delta is None or len(gain_rows)<3 else 'improving' if delta>0.005 else 'declining' if delta < -0.005 else 'stable'
         priced=fcoverage['known']/fcoverage['expected'] if fcoverage['expected'] else 0
         row=current.get(identity,{});config=cfg.get(identity,{})
+        compatible_gains=not any(r.get('strategy_earnings_policy') for r in gain_rows)
         vaults.append({'address':identity[1],'chainId':identity[0],'name':row.get('name') or financial.vault_names.get(f'{identity[0]}:{identity[1]}'),
             'category':row.get('category','v3' if any(r.get('version')=='v3' for r in gain_rows) else 'v2'),
             'tvlUsd':None if row.get('tvl_usd') is None else float(row['tvl_usd']),
             'timeWeightedTvlUsd':cap['average'],'annualizedFeeRevenue':annual,'feeYield':fee_yield,
-            'feeCapture':ratio(fee,gain) if fcoverage['state']==gcoverage['state']=='available' else None,
-            'gainYield':gain_yield,'trend':trend,'trendDelta':delta,
+            'feeCapture':ratio(fee,gain) if compatible_gains and fcoverage['state']==gcoverage['state']=='available' else None,
+            'gainYield':gain_yield if compatible_gains else None,'trend':trend,'trendDelta':delta,
             'pricingConfidence':'high' if priced>=0.8 else 'medium' if priced>=0.4 else 'low',
             'reportCount':len(gain_rows),'avgHarvestFrequencyDays':cap['expectedDays']/len(gain_rows) if gain_rows else None,
             'performanceFee':config.get('performanceFee'),'managementFee':config.get('managementFee'),
             'totalGainUsd':gain,'totalFeeRevenue':fee,'quadrant':None,'currentPeriodFeeYield':recent,
-            'previousPeriodFeeYield':previous,'availability':{'state':'available' if eligibility and fcoverage['state']==gcoverage['state']=='available' else 'partial',
+            'previousPeriodFeeYield':previous,'availability':{'state':'available' if compatible_gains and eligibility and fcoverage['state']==gcoverage['state']=='available' else 'partial',
                 'tvlDays':cap['days'],'expectedTvlDays':cap['expectedDays'],'fees':fcoverage,'gains':gcoverage}})
+        if not compatible_gains:
+            vaults[-1]['earningsRatiosAvailability']={'state':'unavailable',
+                'reason':'Gain-based ratios require matching ownership scope for gains, fees and capital.'}
     eligible=[v for v in vaults if v['feeYield'] is not None and v['timeWeightedTvlUsd'] is not None]
     displayed=[v for v in eligible if v['tvlUsd'] is not None and 1e4<=v['tvlUsd']<=1e8]
     tvl_median=median(v['tvlUsd'] for v in displayed) if displayed else None
@@ -301,10 +314,15 @@ def profitability(financial, rows, history, configurations, cutoff, chain_id=Non
         return result
     annual=sum(v['annualizedFeeRevenue'] for v in eligible) if eligible else None
     gross_capital=sum(v['timeWeightedTvlUsd'] for v in eligible) if eligible else None
-    capture = [v for v in vaults if v['availability']['fees']['state']==v['availability']['gains']['state']=='available']
-    capture_coverage = {'state':'available' if len(capture)==len(vaults) and capture else 'partial' if capture else 'unavailable',
-                        'contributingVaults':len(capture),'expectedVaults':len(vaults),
+    compatible = [v for v in vaults if 'earningsRatiosAvailability' not in v]
+    capture = [v for v in compatible
+               if v['availability']['fees']['state']==v['availability']['gains']['state']=='available']
+    capture_coverage = {'state':'available' if len(capture)==len(compatible) and capture else 'partial' if capture else 'unavailable',
+                        'contributingVaults':len(capture),'expectedVaults':len(compatible),
                         'basis':'vaults with complete fee and gain observations in the calculation period'}
+    if any('earningsRatiosAvailability' in v for v in vaults):
+        capture_coverage['basis']='vaults with complete fee/gain observations and matching ownership scope'
+        capture_coverage['scopeExcludedVaults']=len(vaults)-len(compatible)
     return {'vaults':vaults,'protocolFeeYield':ratio(annual,gross_capital),'feeCaptureRate':ratio(amount(capture,'totalFeeRevenue'),amount(capture,'totalGainUsd')) if capture else None,
             'feeCaptureCoverage':capture_coverage,
             'medianVaultFeeYield':yield_median,'totalAnnualizedFees':annual,'totalTvl':amount(vaults,'tvlUsd'),
@@ -369,12 +387,13 @@ def owned_comparison(tvl, rows, snapshots):
     available=all(v is not None for v in totals)
     retained=any(r.get('retainedAfterUnavailableRetry') for r in refs.values())
     total=sum(totals) if available else None
-    unavailable=[{'chainId':r['chain_id'],'vaultAddress':r['vault'],'reason':'counted TVL unavailable'}
-                 for r in rows if r.get('external_tvl_usd') is None]
+    unavailable=[{'chainId':r['chain_id'],'vaultAddress':r['vault'],
+                  'reason':'counted TVL unavailable' if r.get('external_tvl_usd') is None else 'ownership incomplete'}
+                 for r in rows if r.get('external_tvl_usd') is None or r.get('ownership_incomplete')]
 
     def complete_total(scope):
         # A known subtotal cannot be reconciled against a complete external total.
-        return None if any(r.get('external_tvl_usd') is None for r in scope) else money(scope,'external_tvl_usd')
+        return None if any(r.get('external_tvl_usd') is None or r.get('ownership_incomplete') for r in scope) else money(scope,'external_tvl_usd')
 
     ours=complete_total(rows)
     difference=ours-total if ours is not None and total is not None else None
