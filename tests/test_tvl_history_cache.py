@@ -384,7 +384,7 @@ def test_price_repair_bounds_recalculation_and_copied_rows_to_publication(postgr
     # A legacy repair could already have persisted the partial close. It must
     # remain intact in the source while the new publication excludes it.
     with closing(connect(path)) as conn,conn:
-        conn.execute('INSERT INTO tvl_chart_rows VALUES (?,?,?,?,?,?,?,?,?,?)',
+        conn.execute('INSERT INTO tvl_chart_rows (dataset_id,timestamp,chain_id,vault,name,category,version,asset_units,tvl_usd,external_tvl_usd) VALUES (?,?,?,?,?,?,?,?,?,?)',
             (previous.id,future,1,PARENT,'Vault','v3','v3','10','300','300'))
         for mode in ('raw','external'):
             for group,series in (('chain','Ethereum'),('category','v3')):

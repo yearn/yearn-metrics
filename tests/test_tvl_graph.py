@@ -205,13 +205,13 @@ def test_cross_chain_graph_and_chain_summary_account_before_filtering(source, mo
     revised=TvlStore(path,root).get()
     _,_,positions,diagnostics=revised.frames((DAY,))[0]
     assert positions[0]['reason']=='selected_child_block_mismatch'
-    assert diagnostics['status']=='incomplete' and revised.summary(10)['overlapExcluded'] is None
-    assert revised.summary(10)['totalTvl'] is None
-    assert revised.graph(10)['totalOverlapTvlUsd'] is None
+    assert diagnostics['status']=='incomplete' and revised.summary(10)['overlapExcluded'] == 0
+    assert revised.summary(10)['totalTvl'] == 200
+    assert revised.graph(10)['totalOverlapTvlUsd'] == 0
     assert revised.graph(1)['diagnostics']['unresolvedPositions'] == 1
     assert revised.graph(10)['diagnostics']['unresolvedPositions'] == 1
     assert revised.graph(137)['diagnostics']['unresolvedPositions'] == 0
-    assert revised.curation(10)['totalTvlUsd'] is None
+    assert revised.curation(10)['totalTvlUsd'] == 200
 
 
 def test_graph_does_not_replace_unpriced_vault_with_synthetic_priced_strategy(source):

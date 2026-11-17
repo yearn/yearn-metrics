@@ -373,6 +373,24 @@ def test_comparison_withholds_incomplete_local_scopes(counted, gross, reference_
         assert scope['difference']==expected
 
 
+@pytest.mark.parametrize('counted', [None, '200'])
+def test_provisional_known_capital_is_not_a_complete_external_comparison(counted):
+    from yearn_data.analytics import owned_comparison
+    tvl = SimpleNamespace(id='test', catalog={}, summary=lambda: {
+        'retiredVaultTvl':0, 'overlapExcluded':0, 'vaultBridgeExcluded':0,
+        'tvlByChain':{'Ethereum':200}})
+    rows = [{'chain_id':1, 'vault':A, 'category':'v3', 'tvl_usd':counted,
+             'external_tvl_usd':counted, 'ownership_incomplete':True}]
+    references = [{'protocol':p, 'total':100, 'byChain':{'Ethereum':100}}
+                  for p in ('yearn-finance','yearn-curating')]
+    result = owned_comparison(tvl, rows, references)
+    assert result['grossTvl'] == (None if counted is None else 200)
+    assert result['ourTotal'] is result['difference'] is None
+    assert result['availability']['state'] == 'partial'
+    assert result['availability']['unavailableTvlVaults'][0]['reason'] == (
+        'counted TVL unavailable' if counted is None else 'ownership incomplete')
+
+
 @pytest.mark.parametrize('reason,status,expected_state', [
     ('bridge_parent_excluded', 'unavailable', 'available'),
     ('superseded_registry_target', 'unavailable', 'partial'),
@@ -391,3 +409,16 @@ def test_fee_stack_keeps_unknown_corrected_ownership_but_omits_excluded_flows(re
     assert result['availability']['unresolvedAllocations'] == (
         [{'parent':[1, A], 'strategy':C, 'reason':'unavailable allocation'}]
         if expected_state == 'partial' else [])
+
+
+@pytest.mark.parametrize('value', [None, '200', '0'])
+def test_comparable_preserves_provisional_ownership_availability(value):
+    row = rows()[0] | {'external_tvl_usd': value, 'ownership_incomplete': True}
+    membership = {'vaults': [{'chainId': 1, 'address': A, 'included': True}]}
+    result = comparable([row], membership)
+    assert result['availability']['state'] == 'partial'
+    assert result['includedVaults'] == []
+    assert result['availability']['expected'] == 1
+    provisional = result['availability']['unavailableTvlVaults'][0]
+    assert provisional['countedTvlUsd'] == (None if value is None else float(value))
+    assert provisional['reason'] == ('counted TVL unavailable' if value is None else 'ownership incomplete')

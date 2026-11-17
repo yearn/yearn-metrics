@@ -11,8 +11,8 @@ from decimal import Decimal,localcontext
 from .storage import connect, table_exists
 from .tvl import decimal
 
-VERSION = 'dated-accounting-2'
-FIELDS = ('chain_id','vault','name','category','version','asset_units','tvl_usd','external_tvl_usd')
+VERSION = 'dated-accounting-3'
+FIELDS = ('chain_id','vault','name','category','version','asset_units','tvl_usd','external_tvl_usd','ownership_incomplete')
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS tvl_chart_publications (
     dataset_id TEXT PRIMARY KEY, version TEXT NOT NULL,
@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS tvl_chart_rows (
     category TEXT, version TEXT NOT NULL, asset_units TEXT, tvl_usd TEXT,
     external_tvl_usd TEXT,
     PRIMARY KEY(dataset_id,timestamp,chain_id,vault));
+ALTER TABLE tvl_chart_rows ADD COLUMN IF NOT EXISTS ownership_incomplete BOOLEAN NOT NULL DEFAULT FALSE;
 CREATE INDEX IF NOT EXISTS tvl_chart_rows_vault_idx
 ON tvl_chart_rows(dataset_id,chain_id,vault,timestamp);
 CREATE TABLE IF NOT EXISTS tvl_chart_totals (
@@ -244,7 +245,7 @@ def prepare_price_repair(dataset, previous):
         marks=','.join('?' for _ in changed)
         unchanged=f' AND timestamp NOT IN ({marks})' if changed else ''
         conn.execute(f'INSERT INTO tvl_chart_rows SELECT ?,timestamp,{",".join(FIELDS)} FROM tvl_chart_rows WHERE dataset_id=? AND timestamp<=?{unchanged}',(dataset.id,previous.id,close,*changed))
-        conn.executemany('INSERT INTO tvl_chart_rows VALUES (?,?,?,?,?,?,?,?,?,?)',repaired)
+        conn.executemany('INSERT INTO tvl_chart_rows VALUES (?,?,?,?,?,?,?,?,?,?,?)',repaired)
         conn.execute(f'INSERT INTO tvl_chart_totals SELECT ?,timestamp,group_by,mode,series,value FROM tvl_chart_totals WHERE dataset_id=? AND timestamp<=?{unchanged}',(dataset.id,previous.id,close,*changed))
         conn.executemany('INSERT INTO tvl_chart_totals VALUES (?,?,?,?,?,?)',sums)
         count=conn.execute('SELECT COUNT(*) FROM tvl_chart_rows WHERE dataset_id=?',(dataset.id,)).fetchone()[0]
