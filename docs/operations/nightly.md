@@ -1,21 +1,50 @@
-# Nightly VM refresh
+# Nightly refresh
 
 The repository supplies a scheduler adapter and systemd templates. An operator installs the
 service, configures user lingering, tests a supervised publication and enables the timer
 through the steps below.
 
-## Scope and runtime
+## Configure an installation
 
-`ops/nightly-refresh.json` preserves the October 30 production acquisition scope:
-reports/fees and TVL on Ethereum, Optimism, Polygon, Fantom, Base, Arbitrum and
-Katana; TVL-only discovery/collection on Gnosis (100), HyperEVM (999) and Yeer
-(4663). Fantom uses 64 confirmations. Other report chains retain native source
-and finality policies. The TVL scope includes the seven report chains and the three TVL-only
-chains.
-Financial preparation continues to include all retained history through the cutoff.
+Start with [development setup](../development/setup.md) and the environment/provider
+settings in `.env.example`. Each operator chooses a database, report chains,
+additional TVL-only chains, confirmation overrides and hosted API origin. The example
+uses an Ethereum-only staging scope. Financial preparation includes all retained
+history within the chosen scope through the cutoff.
 
-The configured `initial_baseline_job` supplies a historical bootstrap candidate whose
-receipt must match the live selection. Before acquisition the adapter reads its
+Keep installation settings and machine notes in ignored `.deployment/nightly/`.
+Keep credentials in the ignored `.env`; the runtime checkpoint and publication data
+use the directories selected in the local config.
+
+```bash
+install -d -m 700 .deployment/nightly
+install -m 600 ops/nightly-refresh.example.json .deployment/nightly/config.json
+```
+
+Edit the copied config. Supply a reviewed `initial_baseline_job` and the HTTPS
+`api_origin` for the selected database. Configure that database's credentials in `.env`.
+A new database needs a supervised [native baseline publication](refresh.md)
+before scheduling. The example's required baseline and origin fields are blank.
+
+| Field | Meaning |
+| --- | --- |
+| `database` | Explicit named database: `staging` or `neon`. |
+| `chains` | Native report-chain names used for reports, fees and TVL. |
+| `extra_tvl_chains` | Additional TVL-only chain IDs outside the report scope. |
+| `confirmations` | Explicit per-chain finality overrides, such as `{"ftm": 64}` when Fantom is included. |
+| `initial_baseline_job` | Reviewed selected native receipt used to seed a fresh installation. |
+| `api_origin` | HTTPS origin serving the matching selected publication. |
+| `publication_root` | Publication files directory, resolved relative to this JSON. |
+| `state_dir` | Wrapper checkpoint directory, resolved relative to this JSON. |
+| `max_invocations`, `retry_seconds` | Native invocation budget and verification retry interval. |
+
+The example paths are relative to `.deployment/nightly/config.json` and resolve to
+`artifacts/nightly/` under the checkout. Choose persistent locations deliberately.
+For an existing installation, preserve its resolved publication/state directories and
+accepted checkpoint when relocating configuration.
+
+The operator supplies `initial_baseline_job` from a reviewed selected native receipt.
+Its receipt must match the live selection. Before acquisition the adapter reads its
 native receipt, requires completed selection/consolidation and checks that its
 release still matches the database. Verify a current receipt before installing.
 A publication without a matching native receipt requires a supervised native
@@ -30,13 +59,12 @@ set the bootstrap job to a reviewed current selected native receipt or initializ
 state with `--adopt-baseline REVIEWED_JOB_ID`. Both initialization paths verify that the
 reviewed receipt matches the live selection.
 
-Use a dedicated environment to avoid the existing `.venv` editable installation
-pointing at a different checkout. From the repository root:
+Use a dedicated environment for each service checkout. From the repository root:
 
 ```bash
-UV_PROJECT_ENVIRONMENT=.scratch/nightly-venv uv sync --locked --extra dev
-PYTHONPATH="$PWD/src" .scratch/nightly-venv/bin/python -m yearn_data.nightly \
-  --config ops/nightly-refresh.json --env .env --check
+UV_PROJECT_ENVIRONMENT=.deployment/nightly/venv uv sync --locked --extra dev
+PYTHONPATH="$PWD/src" .deployment/nightly/venv/bin/python -m yearn_data.nightly \
+  --config .deployment/nightly/config.json --env .env --check
 ```
 
 `--check` validates local configuration and prints the source-module path. Its checks use
@@ -45,12 +73,14 @@ Check that its package path belongs to this checkout. Python follows the repo's
 `.python-version`. The service sets an explicit source path and uses this dedicated
 environment; deploy code and dependencies explicitly into that environment.
 
-The ignored `.env` needs production writer credentials, the existing price/indexer
-credentials and archive RPCs for all ten chains. TVL-only RPC overrides are
-`ARCHIVE_RPC_URL_100`, `ARCHIVE_RPC_URL_999` and `ARCHIVE_RPC_URL_4663`, as listed
-in `.env.example`. Existing refresh GitHub warning
-reporting remains governed by its approved template and environment configuration;
-the wrapper adds no new external notification destination.
+The ignored `.env` supplies writer credentials and price/indexer/provider settings
+for the selected scope. Additional TVL chains use `ARCHIVE_RPC_URL_<CHAIN_ID>`;
+`.env.example` lists supported overrides. Existing refresh GitHub warning reporting
+uses its approved template and environment configuration.
+
+Record the chosen checkout, Python executable, config/environment locations, schedule,
+compatibility links and operational verification references in
+`.deployment/nightly/README.md`. General procedures remain in this guide.
 
 ## Execution and recovery
 
@@ -125,8 +155,8 @@ After a separately reviewed manual publication, use this explicit operation to
 adopt its selected native refresh receipt as the existing installation's baseline:
 
 ```bash
-PYTHONPATH="$PWD/src" .scratch/nightly-venv/bin/python -m yearn_data.nightly \
-  --config ops/nightly-refresh.json --env .env --adopt-baseline REVIEWED_JOB_ID
+PYTHONPATH="$PWD/src" .deployment/nightly/venv/bin/python -m yearn_data.nightly \
+  --config .deployment/nightly/config.json --env .env --adopt-baseline REVIEWED_JOB_ID
 ```
 
 Adoption takes the local wrapper lock, initializes missing state or updates idle
@@ -204,46 +234,65 @@ The service allows ten hours per invocation, then requests graceful shutdown;
 systemd may terminate it after another 90 seconds. It retries failed invocations
 after five minutes, with at most three starts in twelve hours. The next nightly
 activation can resume unfinished work. These limits bound retry work. Source outages can
-continue beyond the nightly window. Inspect journal failures and receipt
-warnings; no separate overdue-publication alert has been installed.
+continue beyond the nightly window. Inspect journal failures, receipt warnings and
+the verified publication cutoff. Record each installation's monitoring in its local runbook.
 
-## New installation: review, test, then install disabled
+## Render, test and install disabled
 
-Validate configuration and behavior offline:
+From the repository root, render service files with the actual checkout and runtime.
+The helper validates configuration with the selected Python's offline `--check`, checks
+its source-module identity, and writes the two unit files into the ignored output
+directory. Installation and activation are explicit subsequent steps.
 
 ```bash
-.scratch/nightly-venv/bin/python -m pytest -q tests/test_nightly.py
-.scratch/nightly-venv/bin/python -m ruff check .
-systemd-analyze --user verify ops/yearn-data-nightly.service ops/yearn-data-nightly.timer
+.deployment/nightly/venv/bin/python scripts/install_nightly.py \
+  --python "$PWD/.deployment/nightly/venv/bin/python" \
+  --config "$PWD/.deployment/nightly/config.json" --env "$PWD/.env"
+systemd-analyze --user verify \
+  .deployment/nightly/units/yearn-data-nightly.service \
+  .deployment/nightly/units/yearn-data-nightly.timer
 systemd-analyze calendar '*-*-* 02:00:00 UTC'
 ```
 
-Tests mock the native worker, collectors and HTTP boundaries to cover scheduler
-recovery. The existing worker/Postgres suites continue to own SQL, accounting,
-atomic publication and consolidation. CI policy is unchanged.
+Use `--repo` for another checkout, `--output-dir` for a separate rendered directory,
+and `--python` for a dedicated existing virtual environment. The helper uses its bundled
+templates and validates the selected checkout's wrapper. The renderer quotes paths,
+escapes systemd specifiers and preserves the selected virtual-environment executable.
+The tracked `.service.in` contains placeholders; the rendered `.service` contains the
+installation's paths.
 
-After review, install templates without enabling or starting them:
+Validate the adapter and installer behavior offline:
+
+```bash
+.deployment/nightly/venv/bin/python -m pytest -q tests/test_nightly.py tests/test_install_nightly.py
+.deployment/nightly/venv/bin/python -m ruff check .
+```
+
+Scheduler tests mock the native worker, collectors and HTTP boundaries. Installer tests
+exercise portable path rendering, offline checks and invalid-input handling. The existing
+worker/Postgres suites own SQL, accounting, atomic publication and consolidation.
+
+For a new installation, copy the rendered units and reload the user service manager:
 
 ```bash
 install -d -m 700 ~/.config/systemd/user
-install -m 644 ops/yearn-data-nightly.service ops/yearn-data-nightly.timer ~/.config/systemd/user/
+install -m 644 .deployment/nightly/units/yearn-data-nightly.service \
+  .deployment/nightly/units/yearn-data-nightly.timer ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user is-enabled yearn-data-nightly.timer
 systemctl --user is-active yearn-data-nightly.timer
 ```
 
 Expect `disabled` and `inactive` (their commands return nonzero for those states).
-The templates assume `%h/raaaws/yearn-data`; change both the working directory
-and absolute paths when deploying elsewhere. Configure user lingering only when
-ready for unattended execution. Check that backups and recovery are adequate:
-canonical consolidation retires superseded releases, so recovery requires verified retained
-datasets or a restorable backup.
+For an existing installation, stop the timer and coordinate active work before replacing
+its units. Preserve its checkpoint and financial scope, inspect the rendered paths, and
+restore its reviewed schedule after verification. Configure user lingering when ready for
+unattended execution. Recovery requires retained datasets or a restorable backup.
 
-A supervised `--run` **writes to production, publishes, consolidates and may update
-the existing approved GitHub warning issue**. Schedule that acceptance run separately
-after reviewing these files. Only after it succeeds should an operator explicitly
-enable/start the timer. Installation, acceptance testing and timer activation are explicit
-operator steps.
+A supervised `--run` writes to the selected database, publishes, consolidates and may
+update the existing approved GitHub warning issue. Complete that acceptance run after
+reviewing the installation, then explicitly enable/start the timer. Record the service
+result, native receipt, hosted identities and next activation in the local runbook.
 
 For inspection after installation:
 
@@ -256,5 +305,34 @@ Restrict GitHub reports to approved public summary fields; keep credentials, pri
 URLs and raw provider exceptions in private operational evidence. See [publication
 recovery](refresh.md#publication-and-recovery)
 for native selected-cleanup-failed and changed-code recovery.
+
+## Repository renames and path reconciliation
+
+A checkout move changes service paths and can leave saved receipts using an earlier
+path. Record the old and new destinations in the installation runbook. The package name
+`yearn_data` and service/timer names `yearn-data-nightly` remain stable across checkout
+names.
+
+Nightly state compares resolved publication-directory paths, so a compatibility
+symlink to the same directory preserves the existing baseline. The next saved
+checkpoint records the canonical path. A missing alias, a different destination,
+or a change to chains, confirmations, database or API origin requires operator
+reconciliation through the existing scope guard.
+
+For a checkout rename:
+
+1. Stop the timer and coordinate any running service before changing paths.
+2. Preserve the saved state, publication directory, dedicated runtime and environment.
+   Keep a compatibility symlink when retained receipts still refer to the old path.
+3. Render the service with the new checkout and its selected Python, config and
+   environment paths. Install the reviewed units and reload the user service manager.
+4. Run configuration validation and compare the saved baseline with the selected
+   database release and hosted publication. Preserve pending jobs and historical bounds.
+5. Start the installed service under supervision. Require successful exit, hosted
+   verification and a fresh cutoff before calling the update operational. Restore
+   the timer and confirm its next 02:00 UTC activation.
+
+Check the verified cutoff and service result after the next overnight run. Timer
+activation alone confirms scheduling; publication freshness confirms delivery.
 
 [Documentation index](../README.md).

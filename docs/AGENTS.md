@@ -33,6 +33,12 @@ its approval semantics intact. Keep fixture provenance next to its fixtures.
 Use reusable configuration in current setup defaults. Establish live deployment IDs, ports
 and release retention through current operational checks.
 
+Keep shared setup instructions and templates portable across checkouts and hosts.
+Store actual installation paths, hosted origins, bootstrap receipts, machine inventory
+and incident notes in ignored `.deployment/`; credentials use ignored environment files.
+Public examples identify the values an operator must supply. Preserve resolved state
+and publication directories when relocating a deployment configuration.
+
 ## Language and framing
 
 Describe each component by its role, behavior, outputs and evidence requirements.

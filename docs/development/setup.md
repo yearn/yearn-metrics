@@ -60,6 +60,12 @@ database fixture.
   data explicitly after setup.
 - [Testing policy](testing.md): offline checks, disposable Postgres and optional EVM replay.
 
+For scheduling, copy the [nightly example](../../ops/nightly-refresh.example.json) into
+ignored `.deployment/nightly/`, supply this installation’s settings and render its units
+through the [nightly setup procedure](../operations/nightly.md#render-test-and-install-disabled).
+Keep machine-specific paths, operational IDs and incident notes in the local deployment
+runbook.
+
 Provider/RPC settings are described by `.env.example` and the owning operation.
 Keep credentials in ignored environment files. Use purpose-specific review or test
 configuration with isolated credentials. Seed staging only through a separately

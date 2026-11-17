@@ -98,11 +98,12 @@ The VM adapter invokes that worker through a systemd timer configured for
 cutoff: a run at 02:00 covers through 23:59:59 UTC on the preceding day. This
 schedule stays fixed in UTC across daylight-saving changes.
 
-The repository's nightly configuration covers reports, fees and TVL on Ethereum,
-Optimism, Polygon, Fantom, Base, Arbitrum and Katana. It also collects TVL on
-Gnosis, HyperEVM and Yeer. Financial preparation includes retained history through
-the cutoff. The installed service and its receipts establish actual runtime
-state and freshness.
+Each installation chooses its report chains, additional TVL-only chains and confirmation
+settings in an ignored local configuration. The tracked example provides a starting
+staging scope; its operator supplies the hosted origin and reviewed baseline. Financial
+preparation includes retained history through the cutoff. The installed service and
+receipts establish runtime state and freshness. See [nightly setup](docs/operations/nightly.md)
+for portable templates, local configuration and installation.
 
 Each cycle continues from a verified prior job, acquiring the next report ranges
 and missing daily TVL closes. It refreshes analytics inputs such as external
