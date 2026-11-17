@@ -265,18 +265,22 @@ def profitability(financial, rows, history, configurations, cutoff, chain_id=Non
         trend='insufficient_data' if delta is None or len(gain_rows)<3 else 'improving' if delta>0.005 else 'declining' if delta < -0.005 else 'stable'
         priced=fcoverage['known']/fcoverage['expected'] if fcoverage['expected'] else 0
         row=current.get(identity,{});config=cfg.get(identity,{})
+        compatible_gains=not any(r.get('strategy_earnings_policy') for r in gain_rows)
         vaults.append({'address':identity[1],'chainId':identity[0],'name':row.get('name') or financial.vault_names.get(f'{identity[0]}:{identity[1]}'),
             'category':row.get('category','v3' if any(r.get('version')=='v3' for r in gain_rows) else 'v2'),
             'tvlUsd':None if row.get('tvl_usd') is None else float(row['tvl_usd']),
             'timeWeightedTvlUsd':cap['average'],'annualizedFeeRevenue':annual,'feeYield':fee_yield,
-            'feeCapture':ratio(fee,gain) if fcoverage['state']==gcoverage['state']=='available' else None,
-            'gainYield':gain_yield,'trend':trend,'trendDelta':delta,
+            'feeCapture':ratio(fee,gain) if compatible_gains and fcoverage['state']==gcoverage['state']=='available' else None,
+            'gainYield':gain_yield if compatible_gains else None,'trend':trend,'trendDelta':delta,
             'pricingConfidence':'high' if priced>=0.8 else 'medium' if priced>=0.4 else 'low',
             'reportCount':len(gain_rows),'avgHarvestFrequencyDays':cap['expectedDays']/len(gain_rows) if gain_rows else None,
             'performanceFee':config.get('performanceFee'),'managementFee':config.get('managementFee'),
             'totalGainUsd':gain,'totalFeeRevenue':fee,'quadrant':None,'currentPeriodFeeYield':recent,
-            'previousPeriodFeeYield':previous,'availability':{'state':'available' if eligibility and fcoverage['state']==gcoverage['state']=='available' else 'partial',
+            'previousPeriodFeeYield':previous,'availability':{'state':'available' if compatible_gains and eligibility and fcoverage['state']==gcoverage['state']=='available' else 'partial',
                 'tvlDays':cap['days'],'expectedTvlDays':cap['expectedDays'],'fees':fcoverage,'gains':gcoverage}})
+        if not compatible_gains:
+            vaults[-1]['earningsRatiosAvailability']={'state':'unavailable',
+                'reason':'Gain-based ratios require matching ownership scope for gains, fees and capital.'}
     eligible=[v for v in vaults if v['feeYield'] is not None and v['timeWeightedTvlUsd'] is not None]
     displayed=[v for v in eligible if v['tvlUsd'] is not None and 1e4<=v['tvlUsd']<=1e8]
     tvl_median=median(v['tvlUsd'] for v in displayed) if displayed else None
@@ -301,10 +305,15 @@ def profitability(financial, rows, history, configurations, cutoff, chain_id=Non
         return result
     annual=sum(v['annualizedFeeRevenue'] for v in eligible) if eligible else None
     gross_capital=sum(v['timeWeightedTvlUsd'] for v in eligible) if eligible else None
-    capture = [v for v in vaults if v['availability']['fees']['state']==v['availability']['gains']['state']=='available']
-    capture_coverage = {'state':'available' if len(capture)==len(vaults) and capture else 'partial' if capture else 'unavailable',
-                        'contributingVaults':len(capture),'expectedVaults':len(vaults),
+    compatible = [v for v in vaults if 'earningsRatiosAvailability' not in v]
+    capture = [v for v in compatible
+               if v['availability']['fees']['state']==v['availability']['gains']['state']=='available']
+    capture_coverage = {'state':'available' if len(capture)==len(compatible) and capture else 'partial' if capture else 'unavailable',
+                        'contributingVaults':len(capture),'expectedVaults':len(compatible),
                         'basis':'vaults with complete fee and gain observations in the calculation period'}
+    if any('earningsRatiosAvailability' in v for v in vaults):
+        capture_coverage['basis']='vaults with complete fee/gain observations and matching ownership scope'
+        capture_coverage['scopeExcludedVaults']=len(vaults)-len(compatible)
     return {'vaults':vaults,'protocolFeeYield':ratio(annual,gross_capital),'feeCaptureRate':ratio(amount(capture,'totalFeeRevenue'),amount(capture,'totalGainUsd')) if capture else None,
             'feeCaptureCoverage':capture_coverage,
             'medianVaultFeeYield':yield_median,'totalAnnualizedFees':annual,'totalTvl':amount(vaults,'tvlUsd'),
