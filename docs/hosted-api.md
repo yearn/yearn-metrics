@@ -431,3 +431,24 @@ Release the backend route before enabling a consumer that uses it. A consumer
 must validate the dataset, aggregation scope, interval, and exact requested
 bucket bounds; missing or malformed buckets are unavailable data. Reload the
 selection on HTTP 410. Older backends return 404 for this new route.
+
+## Weekly harvest activity
+
+`GET /api/harvests` counts published contract report events over the seven days
+ending at the selected financial dataset's exclusive cutoff. It reads the
+existing compact fee/report rows, independent of accounting and USD valuation;
+no new ingestion or schema migration is required. V2 vault, V3 allocator, and
+Tokenized Strategy reports each count once per chain/transaction/log identity
+validated during publication. Separate underlying strategy and allocator
+reports count separately. Earnings rows are not added because they repeat
+allocator reports. Zero-profit, loss, zero-fee and unvalued reports count.
+
+The response includes `reportCount`, `startTimestamp`, `endTimestamp`,
+`datasetId`, `chainIds`, `byContractFamily`, and methodology
+`published-contract-reports-v1`. Optional `chainId` selects one supported chain;
+optional `datasetId` uses the existing selection pin/HTTP 410 retirement rules.
+Unsupported filters are rejected. The window advances with publication, not
+request time. Counts describe the published dataset's supported-chain cohort.
+Missing publications/database failures return unavailable errors rather than
+a successful zero. Powerglove must deploy this API capability before consuming
+it. The frontend retains an unavailable state against older API deployments.
