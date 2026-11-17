@@ -207,16 +207,16 @@ def since_receipt(options):
     """Freeze acquisition bounds from an explicitly accepted financial baseline."""
     if options.baseline_job is None:
         return options
+    from .refresh_state import read_receipt, CheckpointRejected
     if options.from_blocks or options.first_close is not None or options.repair_history:
-        raise ValueError('--since cannot be combined with explicit acquisition bounds or repair-history')
-    from .refresh_state import read_receipt
+        raise CheckpointRejected('--since cannot be combined with explicit acquisition bounds or repair-history')
     previous = read_receipt(options.database, options.baseline_job)
     if previous['status'] not in ('prepared','selected','selected-cleanup-failed') or not previous['result'].get('publishReady'):
-        raise ValueError('baseline must be a publish-ready prepared or selected refresh')
+        raise CheckpointRejected('baseline must be a publish-ready prepared or selected refresh')
     prior = previous['context']
     if prior['database'] != options.database or not set(options.chains) <= set(prior['chains']):
-        raise ValueError('baseline does not cover the requested database/chains')
+        raise CheckpointRejected('baseline does not cover the requested database/chains')
     if prior['cutoff'] >= options.cutoff:
-        raise ValueError('baseline cutoff must precede the requested cutoff')
+        raise CheckpointRejected('baseline cutoff must precede the requested cutoff')
     return replace(options, first_close=prior['cutoff']+DAY-1,
                    from_blocks={c:previous['bounds'][c]['toBlock']+1 for c in options.chains})

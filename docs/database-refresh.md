@@ -5,6 +5,9 @@ interfaces. Run it manually or from a scheduler; the worker does not configure a
 scheduler. Acquisition and preparation write the explicitly selected database.
 Preparation is the default; selecting a serving release requires `--mode publish`.
 
+For the optional VM scheduler adapter and disabled systemd templates, see
+[Nightly VM refresh](nightly-refresh.md).
+
 ## Scope and invocation
 
 Choose a named database, chain scope, an exclusive closed UTC midnight cutoff,

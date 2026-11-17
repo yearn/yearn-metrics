@@ -1,5 +1,18 @@
 # Hosted Powerglove API — local implementation
 
+## Verified nightly origin on November 4, 2026
+
+The supervised production refresh verified unauthenticated reads from
+`https://yearn-data-api-preview.vercel.app`, including `/api/publication` and the
+pinned fee, TVL and analytics routes, after publishing through November 3 UTC.
+The accepted job was `489379dd27de4cd486ca27238a335d78`; the independently verified
+release was `68f9ec8825a7e717f9dd22e3c4e66a484c2231b787ac64d621010493afc6ad27`.
+The earlier deployment and 503/SSO notes below describe historical deployments;
+they are not evidence that this later verified alias requires authentication.
+The nightly wrapper rechecks the actual hosted selection and cutoff each run.
+
+## Original implementation record
+
 Branch: `ross/powerglove-hosted-api`, started from `42f98a7`.
 The API has a personal Vercel preview deployment backed by a published Neon release.
 The existing Powerglove production configuration remains unchanged.

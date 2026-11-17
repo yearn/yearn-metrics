@@ -515,3 +515,72 @@ def test_grouped_history_cache_bounds_bytes_across_filters_and_datasets(monkeypa
     del first
     gc.collect()
     assert reference() is None
+
+
+def test_strategy_ownership_round_trips_selection_and_hosted_serving(postgres_database, tmp_path, monkeypatch):
+    from yearn_data.hosted_fees import prepare, PublishedFees
+    from yearn_data.strategy_earnings import POLICY as OWNERSHIP_POLICY, digest
+    import sys
+    annual_end = 1735689600  # 2024-01-01 to 2025-01-01 (leap year).
+    monkeypatch.setattr(sys.modules[__name__], 'CUTOFF', annual_end)
+    with connect('staging') as db:
+        init_db(db)
+        runs = snapshots(db, fee_cutoff=annual_end)
+        item = db.execute("SELECT rowid,row_json FROM analysis_outputs WHERE run_id=? AND name='fee_usd_events' ORDER BY rowid", (runs[1],)).fetchall()[1]
+        event = json.loads(item['row_json'])
+        event.update(gross_gain_usd='100', loss_usd='20')
+        with db:
+            db.execute('UPDATE analysis_outputs SET row_json=? WHERE rowid=?', (json.dumps(event), item['rowid']))
+        legacy = PairingDataset('staging', *runs)
+        ledger = {'policy': OWNERSHIP_POLICY, 'sourceFeeRowsSha256': digest(legacy.fees),
+                  'periods': [{'since': DAY, 'until': annual_end}], 'reports': [{
+                      'chainId': 1, 'vaultAddress': TOKENIZED, 'txHash': event['tx_hash'],
+                      'logIndex': 0, 'blockTimestamp': DAY, 'fractions': [
+                          {'classification': status, 'pathId': f"1:{VAULT if status == 'parent-overlap' else ASSET}",
+                           'numerator': '1', 'denominator': '2'}
+                          for status in ('included', 'parent-overlap')]}]}
+        root = tmp_path / 'candidate'
+        ledger_path = tmp_path / 'ownership.json'
+        ledger_path.write_text(json.dumps(ledger))
+        assert main(['--db', 'staging', 'select-pairing', '--earnings-run-id', str(runs[0]),
+                     '--fees-run-id', str(runs[1]), '--strategy-ownership', str(ledger_path),
+                     '--out', str(root)]) == 0
+        selected = PairingStore(root).get()
+        manifest = json.loads((root/'datasets'/f'{selected.id}.json').read_text())
+        assert selected.id == manifest['datasetId'] != legacy.id
+        prepare(db, selected)
+        hosted = PublishedFees('staging', selected.id)
+        for name in ('summary', 'history', 'vaults', 'vault-history'):
+            assert hosted.view(name) == selected.view(name)
+        result = hosted.view('summary')
+        assert result['totalFeesPaidUsd'] == legacy.view('summary')['totalFeesPaidUsd'] == '22'
+        assert result['netLifetimeEarningsUsd'] == '175'  # Existing 135 + external strategy 40.
+        assert result['strategyEarningsAccounting']['annualPathThresholdUsd'] == '1000'
+        assert PairingStore(root).get().view('summary') == result
+        # An omitted policy option cannot replace an already selected policy.
+        with pytest.raises(ValueError, match='strategy ownership'):
+            select_pairing('staging', *runs, root)
+        assert PairingStore(root).get().id == selected.id
+        # The native refresh uses a fresh job directory. Hosted policy also guards it.
+        from types import SimpleNamespace
+        from yearn_data.hosted_publications import save_release, Registry
+        from yearn_data.refresh import RefreshWorker
+        # Match the five-field fees manifest that publish() actually persists.
+        hosted_manifest = {key: manifest[key] for key in
+                           ('datasetId', 'database', 'earningsRunId', 'feesRunId', 'vaultNames')}
+        release = save_release(db, hosted_manifest, {'datasetId': 'a'*64}, 'b'*64)
+        assert 'strategyEarningsAccounting' not in Registry('staging').manifest('fees', selected.id)
+        worker = RefreshWorker.__new__(RefreshWorker)
+        worker.options = SimpleNamespace(database='staging')
+        worker.root = tmp_path / 'next-refresh-job'
+        with pytest.raises(ValueError, match='strategy ownership'):
+            worker.make_pairing({'runId': runs[0]}, {'runId': runs[1]})
+        assert not (worker.root/'fees'/'current.json').exists()
+        assert Registry('staging').selection()['releaseId'] == release
+        # A rejected material omission must leave the prior selection intact.
+        ledger['reports'][0]['fractions'] = [{'classification': 'unresolved', 'pathId': f'1:{VAULT}',
+                                            'numerator': '1', 'denominator': '1'}]
+        ledger['sourceFeeRowsSha256'] = 'stale'
+        with pytest.raises(ValueError, match='source fee rows mismatch'):
+            select_pairing('staging', *runs, root, strategy_ownership=ledger)
+        assert PairingStore(root).get().id == selected.id

@@ -12,6 +12,7 @@ from yearn_data.config import CHAINS
 from yearn_data.history_sources import HistoricalSource
 from yearn_data.indexing import normalize_strategy_report
 from yearn_data.refresh_scope import RefreshOptions
+from yearn_data.refresh_state import read_receipt
 from yearn_data.storage import connect,init_db
 from yearn_data.hosted_publications import Registry
 
@@ -82,6 +83,18 @@ def workflow(postgres_database,tmp_path,monkeypatch):
     options=RefreshOptions('staging',('eth',),CUTOFF,tmp_path/'publication',from_blocks={'eth':0},
                            first_close=86399,source='rpc')
     return options,acquired
+
+
+def test_job_id_is_emitted_before_initialization_can_fail(workflow, monkeypatch):
+    options, _ = workflow
+    events = []
+    def fail(conn):
+        raise RuntimeError('initialization unavailable')
+    monkeypatch.setattr(refresh, 'init_db', fail)
+    failed = refresh.run_refresh(options, progress=events.append)
+    assert failed['status'] == 'failed'
+    assert events[0] == dict(event='refresh-job-ready', jobId=failed['jobId'])
+    assert read_receipt(options.database, events[0]['jobId'])['status'] == 'failed'
 
 
 def test_prepare_is_inspectable_then_publish_resumes_the_same_verified_job(workflow):

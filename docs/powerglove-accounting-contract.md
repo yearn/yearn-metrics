@@ -12,6 +12,26 @@ Earnings do not require accepted fee accounting. A report's gain/loss can be kno
 
 The lifetime-yield export is currently an incident-adjusted sum of stored report P&L. It is not yet a consolidation of earnings across nested contracts. Including retired reports fixes historical membership; it does not fix layered recognition.
 
+## Optional strategy ownership attribution
+
+The default pairing retains the reported-P&L scope above. Selecting the
+[report-time strategy-ownership policy](strategy-earnings.md) adds the supported
+external share of Tokenized Strategy gains/losses to those allocator reports.
+The enabled financial series therefore contains reported allocator earnings plus
+attributed strategy earnings. `strategyEarningsAccounting` declares that policy,
+its reviewed annual periods and omission disclosures. `lifetimeEarnings.raw*`
+preserves source report amounts before incident and ownership adjustments,
+including the full strategy reports. The raw-to-counted difference reflects the
+combined effect of applied incident adjustments and ownership attribution.
+Measure incident adjustments from their recorded evidence. The enabled metadata
+states this `rawAmountBasis`.
+
+Fees retain their existing charge scope. Product redistribution exclusions retain
+the designated earnings leg. The policy attributes ownership at strategy report
+time; full underlying-yield consolidation additionally requires recognition and
+profit-unlocking timing evidence across reporting layers. Full-history activation
+requires reviewed evidence for every annual period in scope.
+
 ## Different aggregation rules
 
 | Metric | Aggregation rule | Required boundary |
@@ -47,7 +67,7 @@ Powerglove `codex/qtov-on-improved-fee-data@04a1a30586d17a3b3da86ccdd30ecf2560a2
 
 1. Expose core JSON views from a pinned completed snapshot, using consistent time/chain/family filters and cutoff. Include active and retired history. Retain snapshot identity and independent accounting, pricing and discovery diagnostics in yearn-data publication records.
 2. Define earnings as incident-adjusted reported P&L until historical consolidation is supported. Keep that methodology in yearn-data and keep per-family/per-vault financial views available. Gross fees across layers include each distinct accepted charge once.
-3. Preserve raw and incident-adjusted earnings and independent known/unknown counts in yearn-data. Do not derive report P&L exclusively from accepted fee projections. The display API can serve available aggregate amounts while developer records retain the missing-source diagnostics.
+3. Preserve source and counted earnings and independent known/unknown counts in yearn-data. Raw fields contain source reports before all applicable incident and ownership adjustments; counted fields apply the selected policy. Do not derive report P&L exclusively from accepted fee projections. The display API can serve available aggregate amounts while developer records retain the missing-source diagnostics.
 4. Preserve the existing fee-stack/profitability and TVL features on their current sources during the core migration, separating routing as needed. Rebuilding those analytics in yearn-data is later work. TVL relationships can inform historical earnings attribution.
 
 ## Acceptance checks

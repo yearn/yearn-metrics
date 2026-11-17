@@ -138,6 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
     pairing_p = sub.add_parser("select-pairing", help="Select completed earnings/fees for Powerglove without changing source data")
     pairing_p.add_argument("--earnings-run-id", type=int, required=True)
     pairing_p.add_argument("--fees-run-id", type=int, required=True)
+    pairing_p.add_argument("--strategy-ownership", type=Path, help="Pinned report-time ownership ledger; enables materiality-gated strategy earnings")
     pairing_p.add_argument("--out", type=Path, default=Path("data/powerglove"))
 
     hosted_p = sub.add_parser('publish-hosted', help='Validate and atomically select database-backed API publications')
@@ -341,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError('refresh requires a named Postgres database: neon or staging')
         from .refresh import run_refresh
         from .refresh_scope import RefreshOptions
-        from .refresh_state import read_receipt,CheckpointRejected,RefreshBusy
+        from .refresh_state import read_receipt,CheckpointRejected,RefreshBusy,RefreshNotStarted
         if args.inspect:
             try:result=read_receipt(args.db,args.inspect)
             except Exception as exc:
@@ -371,6 +372,9 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:
                 result={'status':'rejected','failureClass':type(exc).__name__}
                 if isinstance(exc,(CheckpointRejected,RefreshBusy)):result['reason']=str(exc)
+                elif isinstance(exc,RefreshNotStarted):
+                    result['sourceFailureClass']=exc.failure_class
+                    if exc.reason is not None:result['reason']=exc.reason
         body=json.dumps(result,sort_keys=True,indent=2)
         if args.receipt:
             args.receipt.parent.mkdir(parents=True,exist_ok=True)
@@ -420,7 +424,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "select-pairing":
         from .pairing import select_pairing
-        manifest = select_pairing(args.db, args.earnings_run_id, args.fees_run_id, args.out)
+        ownership = json.loads(args.strategy_ownership.read_text()) if args.strategy_ownership else None
+        manifest = select_pairing(args.db, args.earnings_run_id, args.fees_run_id, args.out, strategy_ownership=ownership)
         print(json.dumps({'datasetId': manifest['datasetId'], 'publication': str(args.out)}, sort_keys=True))
         return 0
     if args.command == "serve-pairing":

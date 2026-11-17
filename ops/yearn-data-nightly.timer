@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Yearn Data nightly at 02:00 UTC
+
+[Timer]
+OnCalendar=*-*-* 02:00:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=yearn-data-nightly.service
+
+[Install]
+WantedBy=timers.target
