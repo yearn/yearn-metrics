@@ -54,6 +54,43 @@ def test_cutoff_and_missed_days_continue_from_accepted_baseline(setup):
     assert len(calls) == 2
 
 
+@pytest.mark.parametrize('alias', ['same-directory', 'different-directory', 'missing'])
+def test_repository_rename_accepts_only_the_same_publication_directory(setup, tmp_path, alias):
+    settings, _, calls, _ = setup
+    old = tmp_path / 'yearn-data'
+    (old / 'publication').mkdir(parents=True)
+    settings = replace(settings, publication_root=old / 'publication')
+    settings.state_dir.mkdir()
+    state_path = settings.state_dir / 'state.json'
+    original = dict(version=1, scope=settings.identity(), lastJob='baseline', pending=None)
+    nightly.save(state_path, original)
+    renamed = tmp_path / 'yearn-metrics'
+    old.rename(renamed)
+    if alias == 'same-directory':
+        old.symlink_to(renamed, target_is_directory=True)
+    elif alias == 'different-directory':
+        other = tmp_path / 'another-repo'
+        (other / 'publication').mkdir(parents=True)
+        old.symlink_to(other, target_is_directory=True)
+    settings = replace(settings, publication_root=renamed / 'publication')
+    if alias != 'same-directory':
+        with pytest.raises(nightly.NightlyStop, match='scope changed'):
+            nightly.cycle(settings, now=172801)
+        assert calls == []
+        assert json.loads(state_path.read_text()) == original
+        return
+    # A valid path alias must not relax the rest of the financial scope.
+    with pytest.raises(nightly.NightlyStop, match='scope changed'):
+        nightly.cycle(replace(settings, confirmations={'eth': 64}), now=172801)
+    assert json.loads(state_path.read_text()) == original
+    assert nightly.cycle(settings, now=172801) == 0
+    saved = json.loads(state_path.read_text())
+    assert saved['scope'] == settings.identity()
+    assert saved['lastJob'] == 'job-172800'
+    assert saved['pending'] is None
+    assert saved['lastVerified']['status'] == 'verified'
+
+
 def test_budget_and_cleanup_resumes_keep_original_cutoff_and_job(setup, monkeypatch):
     settings, receipts, calls, receipt = setup
     original = nightly.run_refresh

@@ -176,7 +176,7 @@ systemctl --user is-active yearn-data-nightly.timer
 ```
 
 Expect `disabled` and `inactive` (their commands return nonzero for those states).
-The templates assume `%h/raaaws/yearn-data`; change both the working directory
+The templates assume `%h/raaaws/yearn-metrics`; change both the working directory
 and absolute paths when deploying elsewhere. Configure user lingering only when
 ready for unattended execution. Check that backups and recovery are adequate:
 canonical consolidation retires superseded releases, so old IDs are not guaranteed
@@ -197,3 +197,32 @@ journalctl --user -u yearn-data-nightly.service --since yesterday
 Never put credentials, private preview URLs or raw provider exceptions into GitHub
 reports. See [publication recovery](database-refresh.md#publication-and-recovery)
 for native selected-cleanup-failed and changed-code recovery.
+
+## Repository renames and path reconciliation
+
+The VM checkout is `/home/dev/raaaws/yearn-metrics`, matching the upstream
+`yearn/yearn-metrics` repository. `/home/dev/raaaws/yearn-data` is a compatibility
+symlink. The Python package remains `yearn_data` and the installed service and
+timer remain `yearn-data-nightly`.
+
+Nightly state compares resolved publication-directory paths, so a compatibility
+symlink to the same directory preserves the existing baseline. The next saved
+checkpoint records the canonical path. A missing alias, a different destination,
+or a change to chains, confirmations, database or API origin requires operator
+reconciliation through the existing scope guard.
+
+For a checkout rename:
+
+1. Stop the timer and coordinate any running service before changing paths.
+2. Preserve the saved state, publication directory, dedicated runtime and environment.
+   Keep a compatibility symlink when retained receipts still refer to the old path.
+3. Update the service's working directory, source path, interpreter, configuration
+   and environment paths to the canonical checkout; reload the user service manager.
+4. Run configuration validation and compare the saved baseline with the selected
+   database release and hosted publication. Preserve pending jobs and historical bounds.
+5. Start the installed service under supervision. Require successful exit, hosted
+   verification and a fresh cutoff before calling the update operational. Restore
+   the timer and confirm its next 02:00 UTC activation.
+
+Check the verified cutoff and service result after the next overnight run. Timer
+activation alone confirms scheduling; publication freshness confirms delivery.

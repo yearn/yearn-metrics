@@ -5,10 +5,10 @@ StartLimitBurst=3
 
 [Service]
 Type=oneshot
-WorkingDirectory=%h/raaaws/yearn-data
-Environment=PYTHONPATH=%h/raaaws/yearn-data/src
+WorkingDirectory=%h/raaaws/yearn-metrics
+Environment=PYTHONPATH=%h/raaaws/yearn-metrics/src
 Environment=PYTHONUNBUFFERED=1
-ExecStart=%h/raaaws/yearn-data/.scratch/nightly-venv/bin/python -m yearn_data.nightly --config %h/raaaws/yearn-data/ops/nightly-refresh.json --env %h/raaaws/yearn-data/.env --run
+ExecStart=%h/raaaws/yearn-metrics/.scratch/nightly-venv/bin/python -m yearn_data.nightly --config %h/raaaws/yearn-metrics/ops/nightly-refresh.json --env %h/raaaws/yearn-metrics/.env --run
 TimeoutStartSec=10h
 TimeoutStopSec=90s
 Restart=on-failure
