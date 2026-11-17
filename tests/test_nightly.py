@@ -54,6 +54,43 @@ def test_cutoff_and_missed_days_continue_from_accepted_baseline(setup):
     assert len(calls) == 2
 
 
+@pytest.mark.parametrize('alias', ['same-directory', 'different-directory', 'missing'])
+def test_repository_rename_accepts_only_the_same_publication_directory(setup, tmp_path, alias):
+    settings, _, calls, _ = setup
+    old = tmp_path / 'yearn-data'
+    (old / 'publication').mkdir(parents=True)
+    settings = replace(settings, publication_root=old / 'publication')
+    settings.state_dir.mkdir()
+    state_path = settings.state_dir / 'state.json'
+    original = dict(version=1, scope=settings.identity(), lastJob='baseline', pending=None)
+    nightly.save(state_path, original)
+    renamed = tmp_path / 'yearn-metrics'
+    old.rename(renamed)
+    if alias == 'same-directory':
+        old.symlink_to(renamed, target_is_directory=True)
+    elif alias == 'different-directory':
+        other = tmp_path / 'another-repo'
+        (other / 'publication').mkdir(parents=True)
+        old.symlink_to(other, target_is_directory=True)
+    settings = replace(settings, publication_root=renamed / 'publication')
+    if alias != 'same-directory':
+        with pytest.raises(nightly.NightlyStop, match='scope changed'):
+            nightly.cycle(settings, now=172801)
+        assert calls == []
+        assert json.loads(state_path.read_text()) == original
+        return
+    # A valid path alias must not relax the rest of the financial scope.
+    with pytest.raises(nightly.NightlyStop, match='scope changed'):
+        nightly.cycle(replace(settings, confirmations={'eth': 64}), now=172801)
+    assert json.loads(state_path.read_text()) == original
+    assert nightly.cycle(settings, now=172801) == 0
+    saved = json.loads(state_path.read_text())
+    assert saved['scope'] == settings.identity()
+    assert saved['lastJob'] == 'job-172800'
+    assert saved['pending'] is None
+    assert saved['lastVerified']['status'] == 'verified'
+
+
 def test_budget_and_cleanup_resumes_keep_original_cutoff_and_job(setup, monkeypatch):
     settings, receipts, calls, receipt = setup
     original = nightly.run_refresh
@@ -336,15 +373,20 @@ def test_http_verification_checks_consumer_ids_and_closed_cutoff(setup, monkeypa
         assert VERIFY_API(settings, rec)['status'] == 'verified'
 
 
-def test_shipped_configuration_and_check_have_no_network_database_or_writes(monkeypatch, tmp_path, capsys):
+def test_configured_example_check_has_no_network_database_or_writes(monkeypatch, tmp_path, capsys):
     root = Path(__file__).parents[1]
     def unexpected(*args, **kwargs):
         pytest.fail('configuration check crossed a write or external boundary')
     monkeypatch.setattr(nightly, 'cycle', unexpected)
     monkeypatch.setattr(nightly, 'connect', unexpected)
     monkeypatch.setattr(nightly.requests, 'get', unexpected)
+    settings = json.loads((root / 'ops/nightly-refresh.example.json').read_text())
+    settings.update(initial_baseline_job='reviewed-baseline', api_origin='https://example.test',
+                    chains=['arb', 'base', 'eth', 'ftm', 'kat', 'op', 'polygon'],
+                    extra_tvl_chains=[100, 999, 4663], confirmations={'ftm': 64})
+    config = tmp_path / 'config.json'; config.write_text(json.dumps(settings))
     env = tmp_path / 'env'; env.write_text('')
-    assert nightly.main(['--config', str(root / 'ops/nightly-refresh.json'), '--env', str(env), '--check']) == 0
+    assert nightly.main(['--config', str(config), '--env', str(env), '--check']) == 0
     body = json.loads(capsys.readouterr().out)
     assert body['scope']['chains'] == ['arb', 'base', 'eth', 'ftm', 'kat', 'op', 'polygon']
     assert body['scope']['extraTvlChains'] == [100, 999, 4663]
@@ -484,7 +526,8 @@ def test_extra_chain_warning_survives_budget_resume(setup, monkeypatch):
     {'extra_tvl_chains': [True]}, {'extra_tvl_chains': [1]},
 ])
 def test_invalid_operator_configuration_is_rejected_before_external_effects(tmp_path, monkeypatch, changes):
-    body = json.loads((Path(__file__).parents[1] / 'ops/nightly-refresh.json').read_text())
+    body = json.loads((Path(__file__).parents[1] / 'ops/nightly-refresh.example.json').read_text())
+    body.update(initial_baseline_job='reviewed-baseline', api_origin='https://example.test')
     body.update(changes)
     config = tmp_path / 'config.json'; config.write_text(json.dumps(body))
     env = tmp_path / 'env'; env.write_text('')

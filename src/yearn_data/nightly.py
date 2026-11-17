@@ -113,8 +113,14 @@ def local_state(settings):
     path = settings.state_dir / 'state.json'
     state = json.loads(path.read_text()) if path.exists() else dict(
         version=1, scope=settings.identity(), lastJob=settings.initial_baseline_job, pending=None)
-    if state['version'] != 1 or state['scope'] != settings.identity():
+    scope = dict(state['scope'])
+    # A repository rename can leave a compatibility symlink to the same data.
+    # Compare destinations while retaining every other scope check.
+    if isinstance(scope.get('publicationRoot'), str):
+        scope['publicationRoot'] = str(Path(scope['publicationRoot']).resolve())
+    if state['version'] != 1 or scope != settings.identity():
         raise NightlyStop('scope-changed', 'nightly scope changed; review state before starting a new scope')
+    state['scope'] = scope
     return path, state
 
 

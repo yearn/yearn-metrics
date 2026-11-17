@@ -1,0 +1,19 @@
+[Unit]
+Description=Yearn Data nightly acquisition and publication
+StartLimitIntervalSec=12h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+WorkingDirectory=@ROOT@
+Environment=@PYTHONPATH@
+Environment=PYTHONUNBUFFERED=1
+ExecStart=:@PYTHON@ -m yearn_data.nightly --config @CONFIG@ --env @ENV@ --run
+TimeoutStartSec=10h
+TimeoutStopSec=90s
+Restart=on-failure
+RestartSec=5min
+UMask=0077
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
