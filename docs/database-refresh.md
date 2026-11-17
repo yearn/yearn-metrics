@@ -7,6 +7,10 @@ Preparation is the default; selecting a serving release requires `--mode publish
 
 For the optional VM scheduler adapter and disabled systemd templates, see
 [Nightly VM refresh](nightly-refresh.md).
+On a VM with that scheduler installed, every manual publication must finish the
+[nightly baseline handoff](nightly-refresh.md#required-handoff-after-a-manual-publication)
+before scheduling is restored. A publication without a matching native receipt
+requires a supervised native baseline run first.
 
 ## Scope and invocation
 
