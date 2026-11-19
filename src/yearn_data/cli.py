@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -99,6 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init-db")
+    sub.add_parser("repair-legacy-fees", help="Reassess historical zero and derived canonical fee projections")
 
     canonical_p = sub.add_parser('consolidate-history', help='Keep one canonical history, verifying every historical key')
     canonical_p.add_argument('--apply', action='store_true', help='Apply atomically; the default only reports the plan')
@@ -383,6 +385,12 @@ def main(argv: list[str] | None = None) -> int:
         print(body)
         return (3 if result['status']=='work-deferred' else 4 if result['status']=='selected-cleanup-failed'
                 else 2 if result['status'] in ('failed','rejected') else 0)
+    if args.command == 'repair-legacy-fees':
+        from .legacy_fee_repair import repair_legacy_fees
+        with closing(connect(args.db)) as conn, conn:
+            repaired = repair_legacy_fees(conn)
+        print(json.dumps(repaired, sort_keys=True))
+        return 0
     if args.command == 'consolidate-history':
         from .canonical_history import consolidate
         result = consolidate(args.db, apply=args.apply, progress=progress)

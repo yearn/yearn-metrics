@@ -43,13 +43,24 @@ Consolidation rolls back if any preservation check fails.
   precedence over records from failed runs.
 - Keys found only in failed runs also survive, retaining their failed provenance.
   The retained serving union includes already published observations only.
-- The exact JSON, source run, snapshot block, and every historical identity are
-  checked against a temporary inventory before commit. Run IDs record provenance; retain
-  earlier backfill dates within the canonical history.
+- Cleanup counts rows per historical identity separately for snapshots and
+  positions. When every identity occurs once, the transaction leaves that
+  table untouched. When identities overlap, cleanup ranks the versions and
+  inventories the winners. For each observation table, it deletes by run ID
+  when that run contributes zero winners. In partly retained runs, it matches
+  individual keys and run IDs. Before commit, it verifies all retained keys,
+  source runs, snapshot blocks and JSON values against the inventory. Both paths
+  check for unpublished finished observations. Postgres transaction-local write
+  counts confirm that cleanup left the unique rows untouched. With `track_counts`
+  disabled, apply uses the full inventory and value checks.
 - Selected earnings/fee outputs retain their row order and bytes. One completed
   result per other analysis type is retained, including raw canonical-fee exports.
-  Every historical event identity in older outputs must exist in the retained
-  output of that analysis type and output name.
+  A retiring event is covered when the same analysis and output name retains
+  its exact payload. For other retiring event payloads, cleanup checks chain,
+  lowercased transaction hash and log index (falling back to report log index)
+  against the retained events in that projection. If all output rows are
+  retained, cleanup skips the event-set comparison. It still checks JSON
+  validity and verifies the retained rows' order and original bytes.
 - Current chart rows, totals, prepared financial rows and publication metadata
   are checked by key and SHA-256 of all fields. They remain unchanged.
 - Source events, fee receipts, traces, prices, discovery evidence, coverage,

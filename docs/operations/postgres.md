@@ -55,6 +55,24 @@ writes its own strategy mappings and coverage; fee/earnings catalogs, pricing de
 analysis outputs retain their independent owners. Run IDs stay local to
 their respective run tables.
 
+## Repairing older canonical fee projections
+
+When upgrading or restoring a database containing projections from before the
+zero-gain and derived-fee acceptance rules, run the following once after
+`init-db` and before using those projections for a new analysis or publication.
+Choose the database explicitly. An existing database previously initialized by
+the corrected runtime has already received both repairs.
+
+```bash
+yearn-data --db staging repair-legacy-fees
+```
+
+The command reassesses stored evidence in one transaction and reports counts
+as `invalidatedZeros` and `reassessedDerived`. Repeating it on the same repaired
+data returns zero for both. It holds a writer lock on the report and canonical
+fee tables for the duration, so schedule it between writers. Ordinary opens,
+exports and refresh initialization skip this historical data repair.
+
 ## Tests
 
 All database regressions run against Postgres. Tests request `postgres_database`

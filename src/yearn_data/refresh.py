@@ -477,13 +477,16 @@ class RefreshWorker:
 
     def publish_prepared(self,result):
         if not result.get('publishReady'):raise ValueError('prepared datasets failed publication integrity checks')
+        timings = canonical_history.PublicationTimings()
         for chain,bounds in self.job.bounds.items():verify_bounds(self.options,chain,bounds,self.sources[chain])
         import hashlib
         expected=hashlib.sha256(release_encoded(dict(feesDatasetId=result['feeDatasetId'],tvlDatasetId=result['tvlDatasetId'],
             analyticsPublicationId=result['analyticsPublicationId'])).encode()).hexdigest()
         self.job.checkpoint({'expectedReleaseId':expected},result|{'expectedReleaseId':expected})
+        timings.finished('check-bounds-and-checkpoint')
+        result = result | {'publicationPhaseSeconds': timings.seconds}
         try:
-            release=publish(self.options.database,self.root/'fees',self.root/'tvl',result['analyticsPublicationId'])
+            release=publish(self.options.database,self.root/'fees',self.root/'tvl',result['analyticsPublicationId'], timings=timings)
             return result|{'releaseId':release,'publication':'selected','consolidation':'complete'}
         except PublicationCleanupError as exc:
             return result|{'releaseId':exc.release_id,'publication':'selected','consolidation':'failed'}
@@ -498,7 +501,9 @@ class RefreshWorker:
         if selection(self.options.database)!=result['releaseId']:
             raise ValueError('the serving release changed after this refresh; inspect the current selection before recovery')
         if result['consolidation']!='complete':
-            try:canonical_history.consolidate(self.options.database,apply=True)
+            timings = canonical_history.PublicationTimings()
+            result = result | {'cleanupRetryPhaseSeconds': timings.seconds}
+            try:canonical_history.consolidate(self.options.database,apply=True,timings=timings)
             except Exception:
                 self.job.finish('selected-cleanup-failed',result|{'consolidation':'failed'})
                 return self.job.receipt()

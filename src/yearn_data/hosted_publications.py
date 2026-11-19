@@ -82,14 +82,17 @@ class PublicationCleanupError(RuntimeError):
         super().__init__(f'Release {release_id} was published before consolidation failed; inspect the current selection before recovery')
 
 
-def publish(database, financial_directory, tvl_directory, analytics_id=None, *, prepare_analytics=False):
+def publish(database, financial_directory, tvl_directory, analytics_id=None, *, prepare_analytics=False, timings=None):
     """Import validated completed selections. Never invoked by an HTTP request."""
     from .pairing import PairingStore
     from .tvl_api import TvlDataset
     from .tvl_history_cache import ready, totals_ready
     from .analytics import AnalyticsStore
+    from .canonical_history import PublicationTimings, consolidate
+    timings = timings or PublicationTimings()
     reference = database_reference(database)
     financial = PairingStore(financial_directory).get()
+    timings.finished('load-financial-dataset')
     root = Path(tvl_directory)
     selected = identifier(json.loads((root/'current.json').read_text())['datasetId'])
     manifest = json.loads((root/'datasets'/f'{selected}.json').read_text())
@@ -116,18 +119,21 @@ def publish(database, financial_directory, tvl_directory, analytics_id=None, *, 
     fees = {'datasetId': financial.id, 'database': reference,
             'earningsRunId': financial.context['earningsRunId'],
             'feesRunId': financial.context['feesRunId'], 'vaultNames': financial.vault_names}
+    timings.finished('validate-tvl-and-analytics')
     with closing(connect(database)) as conn:
         from .hosted_fees import prepare
         prepare(conn, financial)
+        timings.finished('prepare-fee-rows')
         dates = [row[0] for row in conn.execute(
             'SELECT DISTINCT timestamp FROM tvl_chart_rows WHERE dataset_id=? ORDER BY timestamp', (tvl.id,))]
+        timings.finished('read-chart-dates')
         release = save_release(conn, fees, manifest, analytics['publicationId'], tvl_dates=dates)
     # Retire superseded values only after a complete coherent publication exists.
     # A verification failure rolls back consolidation and keeps both revisions
     # for inspection; the newly published, already validated release stays usable.
-    from .canonical_history import consolidate
+    timings.finished('select-release')
     try:
-        consolidate(database, apply=True)
+        consolidate(database, apply=True, timings=timings)
     except Exception as exc:
         raise PublicationCleanupError(release) from exc
     return release

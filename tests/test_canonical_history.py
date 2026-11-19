@@ -2,6 +2,7 @@
 from contextlib import closing
 import json
 
+import psycopg
 import pytest
 
 from test_hosted_api import published as published
@@ -11,6 +12,7 @@ from yearn_data import canonical_history
 from yearn_data.canonical_history import consolidate
 from yearn_data.storage import connect, init_db, table_exists
 from yearn_data.pairing import select_pairing
+from yearn_data.tvl import SCHEMA as TVL_SCHEMA
 from yearn_data.tvl_api import TvlStore, TvlDataset
 from yearn_data.tvl_history_cache import prepare
 from yearn_data.hosted_api import HostedAPI
@@ -103,13 +105,48 @@ def assert_consolidated(database,tvl):
         assert conn.execute('SELECT COUNT(*) FROM tvl_chart_publications').fetchone()[0]==1
         assert conn.execute('SELECT COUNT(*) FROM api_releases').fetchone()[0]==1
         assert conn.execute("SELECT COUNT(*) FROM analysis_runs WHERE status='superseded'").fetchone()[0]==2
-    again=consolidate(database,apply=True)
+    retained = database_rows(database)
+    timings = canonical_history.PublicationTimings()
+    again=consolidate(database,apply=True,timings=timings)
     assert all(v['before']==v['after'] for v in again['observations'].values())
     assert again['analysis_outputs']['before']==again['analysis_outputs']['retained_rows']
+    assert database_rows(database) == retained
+    for table in canonical_history.OBSERVATIONS:
+        assert 'cleanup.check-keys.' + table in timings.seconds
+        assert 'cleanup.stage.' + table not in timings.seconds
+        assert 'cleanup.delete.' + table not in timings.seconds
+        assert 'cleanup.verify.' + table not in timings.seconds
 
 
 def test_every_historical_key_and_selected_value_survives(legacy):
     assert_consolidated(legacy[0],legacy[3])
+
+
+def test_snapshot_overlap_does_not_rebuild_unique_positions(legacy):
+    database = legacy[0]
+    with closing(connect(database)) as conn, conn:
+        conn.execute('DELETE FROM tvl_positions WHERE run_id<>3')
+    timings = canonical_history.PublicationTimings()
+    result = consolidate(database, apply=True, timings=timings)
+    snapshots = result['observations']['tvl_snapshots']
+    assert snapshots['before'] > snapshots['after'] == snapshots['canonical_keys']
+    assert 'cleanup.verify.tvl_snapshots' in timings.seconds
+    assert 'cleanup.stage.tvl_positions' not in timings.seconds
+    assert result['observations']['tvl_positions'] == {
+        'before': 1, 'canonical_keys': 1, 'after': 1, 'missing_or_changed_keys': 0}
+
+
+def test_unexpected_write_to_unique_observation_rolls_back(published, monkeypatch):
+    database = published[0]
+    before = database_rows(database)
+    original = canonical_history._delete_obsolete
+    def corrupt(conn, selection, keep):
+        original(conn, selection, keep)
+        conn.execute("UPDATE tvl_snapshots SET data_json='{}'")
+    monkeypatch.setattr(canonical_history, '_delete_obsolete', corrupt)
+    with pytest.raises(ValueError, match='unique observations changed'):
+        consolidate(database, apply=True)
+    assert database_rows(database) == before
 
 
 def test_consolidation_accepts_pre_index_chart_schema(published):
@@ -130,6 +167,127 @@ def test_consolidation_accepts_pre_index_chart_schema(published):
                        for table in canonical_history.OPTIONAL_DERIVED)
 
 
+def test_identical_snapshot_payload_keeps_the_winning_runs_block(pg):
+    conn, _ = pg
+    conn.executescript(TVL_SCHEMA)
+    for run_id in (1, 2, 3):
+        run(conn, run_id, DAY, [(PARENT, '0')])
+    conn.execute('UPDATE tvl_snapshots SET block_number=run_id')
+    counts = canonical_history._stage_observations(conn, 'tvl_snapshots', (1, 2))
+    assert tuple(counts) == (1, 3)
+    assert [tuple(row) for row in conn.execute(
+        'SELECT run_id,block_number FROM canonical_keep_tvl_snapshots')] == [(2, 2)]
+
+
+def test_staged_position_rejects_a_second_winner_for_the_same_key(pg):
+    conn, _ = pg
+    conn.executescript(TVL_SCHEMA)
+    for run_id in (1, 2):
+        run(conn, run_id, DAY, [], [(CHILD, '0')])
+    counts = canonical_history._stage_observations(conn, 'tvl_positions', (1, 2))
+    assert tuple(counts) == (1, 2)
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        conn.execute('''INSERT INTO canonical_keep_tvl_positions
+            (timestamp,chain_id,parent,strategy,child,run_id,expected_payload,copies)
+            SELECT timestamp,chain_id,parent,strategy,child,1,expected_payload,copies
+            FROM canonical_keep_tvl_positions WHERE run_id=2''')
+
+
+@pytest.mark.parametrize('run_ids,payload', [
+    ((1,), 'invalid JSON'),
+    ((1, 2), '{"status":"ok","debt_usd":"invalid number"}'),
+])
+def test_uncontested_positions_still_reject_invalid_evidence(pg, run_ids, payload):
+    conn, _ = pg
+    conn.executescript(TVL_SCHEMA)
+    for run_id in run_ids:
+        run(conn, run_id, DAY, [], [(CHILD, '0')])
+    conn.execute('UPDATE tvl_positions SET data_json=?', (payload,))
+    with pytest.raises(psycopg.errors.InvalidTextRepresentation):
+        canonical_history._stage_observations(conn, 'tvl_positions', (1, 2))
+
+
+def test_partly_retained_run_keeps_its_other_snapshot(legacy):
+    database = legacy[0]
+    # The failed run loses PARENT but is the only source for BRIDGE on DAY.
+    with closing(connect(database)) as conn, conn:
+        run(conn, 8, DAY, [(PARENT, '999'), (BRIDGE, '50')], status='failed')
+    consolidate(database, apply=True)
+    with closing(connect(database)) as conn:
+        winners = {tuple(row) for row in conn.execute(
+            'SELECT vault,run_id FROM tvl_snapshots WHERE timestamp=? AND vault IN (?,?)',
+            (DAY, BRIDGE, PARENT))}
+    assert winners == {(BRIDGE, 8), (PARENT, 3)}
+
+
+def test_wrong_survivor_with_same_count_in_partial_run_rolls_back(legacy):
+    database = legacy[0]
+    with closing(connect(database)) as conn, conn:
+        run(conn, 8, DAY, [(PARENT, '999'), (BRIDGE, '50')], status='failed')
+        # Skip the loser and delete the winner in the same run instead.
+        conn.raw.execute('''CREATE FUNCTION swap_snapshot() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF OLD.run_id=8 AND OLD.vault=TG_ARGV[0] THEN
+                    DELETE FROM tvl_snapshots WHERE run_id=8 AND vault=TG_ARGV[1];
+                    RETURN NULL;
+                END IF;
+                RETURN OLD;
+            END $$''')
+        conn.raw.execute(f'''CREATE TRIGGER swap_snapshot BEFORE DELETE ON tvl_snapshots
+            FOR EACH ROW EXECUTE FUNCTION swap_snapshot('{PARENT}', '{BRIDGE}')''')
+    before = database_rows(database)
+    with pytest.raises(ValueError, match='tvl_snapshots: canonical key/value verification failed'):
+        consolidate(database, apply=True)
+    assert database_rows(database) == before
+
+
+@pytest.mark.parametrize('keep_loser', [False, True], ids=['missing', 'same-count-wrong-key'])
+def test_losing_a_position_winner_rolls_back(legacy, monkeypatch, keep_loser):
+    database = legacy[0]
+    with closing(connect(database)) as conn:
+        # This failed run loses CHILD to a published run but is the only source of BRIDGE.
+        run(conn, 8, DAY, [], [(CHILD, '10'), (BRIDGE, '50')], status='failed')
+    before = database_rows(database)
+    original = canonical_history._delete_obsolete_observations
+
+    def lose_winner(conn, table, runs):
+        if table == 'tvl_positions':
+            if keep_loser:
+                # Skip the partial-run delete for run 8 to preserve its original loser.
+                runs = [row for row in runs if row[0] != 8]
+            conn.execute('DELETE FROM tvl_positions WHERE run_id=8 AND child=?', (BRIDGE,))
+        original(conn, table, runs)
+
+    monkeypatch.setattr(canonical_history, '_delete_obsolete_observations', lose_winner)
+    with pytest.raises(ValueError, match='tvl_positions: canonical key/value verification failed'):
+        consolidate(database, apply=True)
+    assert database_rows(database) == before
+
+
+@pytest.mark.parametrize('preserve_obsolete', [False, True], ids=['missing', 'equal-count-wrong-run'])
+def test_deleting_a_selected_output_rolls_back(legacy, preserve_obsolete):
+    database = legacy[0]
+    keep = consolidate(database)['analysis_outputs']['run_ids']
+    with closing(connect(database)) as conn, conn:
+        selected, obsolete = conn.execute('''SELECT min(rowid) FILTER (WHERE run_id = ANY(?)),
+            min(rowid) FILTER (WHERE NOT (run_id = ANY(?))) FROM analysis_outputs''', (keep, keep)).fetchone()
+        assert selected is not None and obsolete is not None
+        conn.raw.execute('''CREATE FUNCTION lose_output() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                IF OLD.rowid=TG_ARGV[0]::bigint THEN
+                    DELETE FROM analysis_outputs WHERE rowid=TG_ARGV[1]::bigint;
+                    IF TG_ARGV[2]::boolean THEN RETURN NULL; END IF;
+                END IF;
+                RETURN OLD;
+            END $$''')
+        conn.raw.execute(f'''CREATE TRIGGER lose_output BEFORE DELETE ON analysis_outputs
+            FOR EACH ROW EXECUTE FUNCTION lose_output('{obsolete}', '{selected}', '{preserve_obsolete}')''')
+    before = database_rows(database)
+    with pytest.raises(ValueError, match='analysis_outputs: selected row verification failed'):
+        consolidate(database, apply=True)
+    assert database_rows(database) == before
+
+
 @pytest.mark.parametrize('table', ['tvl_snapshots','tvl_positions','analysis_outputs','tvl_chart_rows'])
 def test_value_corruption_rolls_back_the_whole_consolidation(legacy,monkeypatch,table):
     database=legacy[0];before=database_rows(database)
@@ -137,6 +295,9 @@ def test_value_corruption_rolls_back_the_whole_consolidation(legacy,monkeypatch,
     def corrupt(conn,selection,keep):
         original(conn,selection,keep)
         if table=='tvl_chart_rows':conn.execute("UPDATE tvl_chart_rows SET tvl_usd='999'")
+        elif table=='tvl_positions':
+            # The digest must cover the stored text, including changes that parse to the same JSON.
+            conn.execute("UPDATE tvl_positions SET data_json=data_json || ' '")
         else:
             field='row_json' if table=='analysis_outputs' else 'data_json'
             conn.execute(f"UPDATE {table} SET {field}='{{}}'")
@@ -178,9 +339,48 @@ def test_shorter_analysis_cannot_erase_earlier_event_keys(legacy):
     assert database_rows(database)==before
 
 
+def test_historical_event_witness_requires_the_same_scope_and_identity(pg):
+    conn, _ = pg
+    init_db(conn)
+    conn.executemany("""INSERT INTO analysis_runs(id,name,status,started_at)
+        VALUES (?,?,'complete',1)""", [(1, 'fees'), (2, 'fees'), (3, 'earnings')])
+    event = '{"chain_id":1,"tx_hash":"0xAB","report_log_index":7,"amount":10}'
+    conn.executemany('INSERT INTO analysis_outputs(run_id,name,row_json) VALUES (?,?,?)', [
+        (1, 'events', event), (1, 'events', event),
+        (2, 'summary', event), (3, 'events', event),
+        (2, 'events', event.replace('"chain_id":1', '"chain_id":1.0')),
+        (1, 'events', '{"tx_hash":"0xCD","amount":0}'),
+        (2, 'events', '{"tx_hash":"0xcd","amount":null}'),
+    ])
+    # Identical bytes in another projection and JSONB-equal numeric fields
+    # cannot witness this event. Duplicate old copies are one missing key.
+    with pytest.raises(ValueError, match='lose 1 historical event'), conn.raw.transaction():
+        canonical_history._stage_analyses(conn, (2, 3))
+    replacement = '{"chain_id":1,"tx_hash":"0xab","log_index":7,"amount":null}'
+    conn.execute('INSERT INTO analysis_outputs(run_id,name,row_json) VALUES (2,?,?)',
+                 ('events', replacement))
+    assert canonical_history._stage_analyses(conn, (2, 3))['missing_event_keys'] == 0
+
+
+def test_retained_only_skips_event_comparison_but_rejects_malformed_json(pg, monkeypatch):
+    conn, _ = pg
+    init_db(conn)
+    conn.execute("INSERT INTO analysis_runs(id,name,status,started_at) VALUES (1,'fees','complete',1)")
+    conn.execute("INSERT INTO analysis_outputs(run_id,name,row_json) VALUES (1,'events','null')")
+    def unexpected_comparison(*args):
+        pytest.fail('No rows are retiring')
+    monkeypatch.setattr(canonical_history, '_missing_analysis_events', unexpected_comparison)
+    with conn.raw.transaction(force_rollback=True):
+        report = canonical_history._stage_analyses(conn, (1,))
+        assert report['before'] == report['retained_rows'] == 1
+    conn.execute("UPDATE analysis_outputs SET row_json='invalid'")
+    with pytest.raises(psycopg.errors.InvalidTextRepresentation), conn.raw.transaction():
+        canonical_history._stage_analyses(conn, (1,))
+
+
 @pytest.mark.parametrize('status', ['running','complete'])
-def test_unpublished_update_is_not_discarded(legacy,status):
-    database=legacy[0]
+def test_unpublished_update_is_not_discarded(published,status):
+    database=published[0]
     with closing(connect(database)) as conn:run(conn,8,DAY+28*86400,[(PARENT,'500')],status=status)
     before=database_rows(database)
     with pytest.raises(ValueError,match='running jobs|outside the selected'):consolidate(database,apply=True)
