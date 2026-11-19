@@ -4,6 +4,7 @@ import hashlib
 import json
 import time
 
+from . import chart_day_rows
 from .storage import connect
 
 DAY = 86400
@@ -112,11 +113,16 @@ def build(dataset, progress=None, *, full_rebuild=False, backfill=None):
     started = time.monotonic()
     context = context_identity(dataset)
     with closing(connect(dataset.database, direct=True)) as conn:
-        conn.executescript(CHART_SCHEMA + SCHEMA)
+        shared = chart_day_rows.enabled(conn)
+        conn.executescript(SCHEMA if shared else CHART_SCHEMA + SCHEMA)
+        values_table = 'tvl_chart_row_values' if shared else 'tvl_chart_rows'
+        owner = chart_day_rows.new_owner() if shared else dataset.id
         install(conn)
         with conn:
             # Hashing, winner selection, accounting and copies use one snapshot.
             conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
+            if shared:
+                chart_day_rows.lock_memberships(conn)
             if not conn.execute('SELECT pg_try_advisory_xact_lock(743219889)').fetchone()[0]:
                 raise ValueError('TVL chart preparation is already running')
             existing = conn.execute('SELECT version FROM tvl_chart_publications WHERE dataset_id=?', (dataset.id,)).fetchone()
@@ -129,7 +135,10 @@ def build(dataset, progress=None, *, full_rebuild=False, backfill=None):
                 # Compatible immutable rows are never replaced.
                 for table in ('tvl_chart_rows', 'tvl_chart_totals', 'tvl_chart_inputs',
                               'tvl_chart_preparations', 'tvl_chart_publications'):
-                    conn.execute(f'DELETE FROM {table} WHERE dataset_id=?', (dataset.id,))
+                    if shared and table == 'tvl_chart_rows':
+                        chart_day_rows.retire(conn, dataset.id, keep_selected=False)
+                    elif table != 'tvl_chart_totals' or not chart_day_rows.totals_enabled(conn):
+                        conn.execute(f'DELETE FROM {table} WHERE dataset_id=?', (dataset.id,))
             previous = None if full_rebuild or unsupported else conn.execute('''SELECT p.dataset_id FROM tvl_chart_preparations p
                 JOIN tvl_chart_publications c ON c.dataset_id=p.dataset_id
                 WHERE p.context_digest=? AND c.version=? AND p.dataset_id<>?
@@ -213,8 +222,8 @@ def build(dataset, progress=None, *, full_rebuild=False, backfill=None):
                         values = [row.get(field) for field in FIELDS]
                         values[3] = row.get('category', row['version'])
                         values[5:] = [None if v is None else str(v) for v in values[5:]]
-                        batch.append((dataset.id, timestamp, *values))
-                with conn.raw.cursor() as cursor, cursor.copy('COPY tvl_chart_rows FROM STDIN') as copy:
+                        batch.append((owner, timestamp, *values))
+                with conn.raw.cursor() as cursor, cursor.copy(f'COPY {values_table} FROM STDIN') as copy:
                     for record in batch:
                         copy.write_row(record)
                 written += len(batch)
@@ -222,13 +231,18 @@ def build(dataset, progress=None, *, full_rebuild=False, backfill=None):
             reuse.sort()
             copied = 0
             copy_started = time.monotonic()
-            # Bound SQL parameters independently of the full historical date count.
-            for offset in range(0, len(reuse), 400):
-                days = reuse[offset:offset+400]
-                placeholders = ','.join('?' for _ in days)
-                copied += conn.execute(f'''INSERT INTO tvl_chart_rows
-                    SELECT ?,timestamp,{','.join(FIELDS)} FROM tvl_chart_rows
-                    WHERE dataset_id=? AND timestamp IN ({placeholders})''', (dataset.id, previous, *days)).rowcount
+            shared_rows = 0
+            if shared:
+                row_count = chart_day_rows.link(conn, dataset.id, previous, reuse, recompute, owner)
+                shared_rows = row_count - written
+            else:
+                # Bound SQL parameters independently of the full historical date count.
+                for offset in range(0, len(reuse), 400):
+                    days = reuse[offset:offset+400]
+                    placeholders = ','.join('?' for _ in days)
+                    copied += conn.execute(f'''INSERT INTO tvl_chart_rows
+                        SELECT ?,timestamp,{','.join(FIELDS)} FROM tvl_chart_rows
+                        WHERE dataset_id=? AND timestamp IN ({placeholders})''', (dataset.id, previous, *days)).rowcount
             copy_seconds = time.monotonic()-copy_started
             closes = range((dates[0]//DAY)*DAY+DAY-1, dataset.as_of()+1, DAY) if dates else ()
             pending = []
@@ -249,14 +263,16 @@ def build(dataset, progress=None, *, full_rebuild=False, backfill=None):
                                             catalog=[[*key, value] for key,value in sorted(catalog.items())],
                                             asOf=dataset.as_of(), priceRejections=new_rejections),
                            recomputedRowsWritten=written, copiedRows=copied,
-                           rows=written+copied, copySeconds=copy_seconds, seconds=time.monotonic()-started)
+                           sharedRows=shared_rows, rows=written+copied+shared_rows, copySeconds=copy_seconds, seconds=time.monotonic()-started)
             conn.executemany('''INSERT INTO tvl_chart_inputs
                 (dataset_id,timestamp,input_digest,tracking_revision,known_chains) VALUES (?,?,?,?,?)''', identities)
             conn.execute('INSERT INTO tvl_chart_preparations VALUES (?,?,?,?)',
                          (dataset.id, context, json.dumps(receipt, sort_keys=True), time.time_ns()//1000))
             conn.execute('INSERT INTO tvl_chart_publications VALUES (?,?,?,?)',
-                         (dataset.id, VERSION, written+copied, int(time.time())))
+                         (dataset.id, VERSION, written+copied+shared_rows, int(time.time())))
             notify(f'History staged: {len(reuse)} dates reused, {len(recompute)} recomputed, {len(pending)} pending chain/date gaps; commit and totals pending')
-        conn.raw.execute('ANALYZE tvl_chart_rows')
+        conn.raw.execute(f'ANALYZE {values_table}')
+        if shared:
+            conn.raw.execute('ANALYZE tvl_chart_days')
     dataset._prepared = True
     return receipt

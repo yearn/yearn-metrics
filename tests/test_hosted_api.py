@@ -482,7 +482,7 @@ def test_republish_rejects_changed_serving_bounds_atomically(published, change):
         assert conn.execute('SELECT dates_json FROM api_tvl_dates').fetchone()[0] == old_dates
 
 
-def test_new_history_uses_new_dataset_and_date_index(published):
+def test_new_history_uses_new_dataset_and_date_index(published, monkeypatch):
     from yearn_data.analytics import prepare as prepare_analytics
     database, financial, history, release = published
     api = HostedAPI(database)
@@ -490,12 +490,19 @@ def test_new_history_uses_new_dataset_and_date_index(published):
     assert api.response('/api/tvl/history/runs/latest')[0] == 200
     with closing(connect(database)) as conn:
         run(conn, 3, DAY+8*86400, [(PARENT, '300')])
+        run(conn, 4, DAY+86400, [(PARENT, None)])
     tvl = TvlStore(database, history).get()
     assert tvl.id != old['tvlDatasetId']
     assert prepare(tvl)['status'] == 'prepared'
     analytics_id = prepare_analytics(database, PairingStore(financial).get(), tvl, select=False)
     assert publish(database, financial, history, analytics_id) != release
-    assert Registry(database).tvl(tvl.id).dates() == (DAY, DAY+7*86400, DAY+8*86400)
+    hosted = Registry(database).tvl(tvl.id)
+    assert hosted.dates() == (DAY, DAY+86400, DAY+7*86400, DAY+8*86400)
+    def unexpected_probe(*args):
+        pytest.fail('a hosted totals read already has the published chart dates')
+    monkeypatch.setattr('yearn_data.tvl_history_cache.populated_dates', unexpected_probe)
+    assert hosted.history(interval='daily', start=DAY+86400, end=DAY+86400)['chart'] == [
+        {'timestamp': DAY+86400}]
     status, body = api.response('/api/tvl')
     assert status == 200 and body['datasetId'] == tvl.id and body['totalTvl'] == 300
 

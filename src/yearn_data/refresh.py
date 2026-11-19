@@ -189,8 +189,15 @@ class RefreshWorker:
     def history_output(self,result):
         identity=result.get('datasetId')
         if not identity:return digest(None)
-        return self.signature([(t,f'SELECT * FROM {t} WHERE dataset_id=?',(identity,)) for t in
-            ('tvl_chart_publications','tvl_chart_rows','tvl_chart_totals')])
+        with closing(connect(self.options.database,readonly=True)) as conn:
+            dependencies={}
+            if table_exists(conn,'tvl_chart_days'):
+                dependencies['tvl_chart_rows']=('tvl_chart_row_values','tvl_chart_days')
+            if table_exists(conn,'tvl_chart_total_values'):
+                dependencies['tvl_chart_totals']=('tvl_chart_total_values','tvl_chart_days','tvl_chart_publications')
+        return self.signature([
+            (dependencies.get(t,t),f'SELECT * FROM {t} WHERE dataset_id=?',(identity,))
+            for t in ('tvl_chart_publications','tvl_chart_rows','tvl_chart_totals')])
 
     def stage(self,name,inputs,output,action):
         self.active=name

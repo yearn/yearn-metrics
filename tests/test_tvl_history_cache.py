@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from contextlib import closing
 
 import pytest
@@ -410,9 +411,9 @@ def test_price_repair_bounds_recalculation_and_copied_rows_to_publication(postgr
     assert chart[1]['Ethereum']==200
 
 
-@pytest.mark.parametrize('price', ['72000000.00', '7.2e7'])
+@pytest.mark.parametrize(('price', 'shared_days'), [('72000000.00', False), ('7.2e7', True)])
 @pytest.mark.parametrize('add_rejection', [False, True])
-def test_price_repair_ignores_equivalent_quote_reformatting(postgres_database, tmp_path, monkeypatch, price, add_rejection):
+def test_price_repair_ignores_equivalent_quote_reformatting(postgres_database, tmp_path, monkeypatch, price, shared_days, add_rejection):
     from copy import deepcopy
     from yearn_data.tvl_history_cache import prepare_price_repair
     with closing(connect('staging')) as conn:
@@ -423,6 +424,11 @@ def test_price_repair_ignores_equivalent_quote_reformatting(postgres_database, t
     quote = {'chainId':1, 'asset':'0x'+'aa'*20, 'timestamp':DAY, 'priceUsd':'72000000', 'reason':'fixture'}
     manifest.update(datasetId='d'*64, priceRejections=[quote])
     previous = TvlDataset(manifest); prepare(previous)
+    if shared_days:
+        migration = Path(__file__).resolve().parents[1] / 'scripts/enable-chart-day-reuse.sql'
+        with closing(connect('staging')) as conn:
+            conn.raw.execute(migration.read_text())
+            conn.raw.execute(migration.with_name('enable-chart-total-reuse.sql').read_text())
     updated = deepcopy(manifest); updated['datasetId']='e'*64
     updated['priceRejections'][0]['priceUsd'] = price
     if add_rejection:
