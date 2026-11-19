@@ -121,6 +121,9 @@ def test_prepare_is_inspectable_then_publish_resumes_the_same_verified_job(workf
     assert acquired==['analytics']
     assert Registry('staging').selection()['releaseId']==published['result']['releaseId']
     assert published['result']['consolidation']=='complete'
+    timings = published['result']['publicationPhaseSeconds']
+    assert {'prepare-fee-rows', 'select-release', 'cleanup.delete', 'cleanup.final-check-and-commit'} <= timings.keys()
+    assert all(seconds >= 0 for seconds in timings.values())
 
 
 def test_budget_resume_drains_all_canonical_report_and_fee_price_pages(workflow):

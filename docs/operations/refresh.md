@@ -290,6 +290,26 @@ invalidation and explicit repair, and [performance recipes](../development/perfo
 for independent full-versus-incremental comparisons. Historical repair remains a separate
 task under both nightly and weekly schedules.
 
+## Measuring publication
+
+Inspect `result.publicationPhaseSeconds` in a refresh receipt after publication.
+It records consecutive monotonic wall-clock intervals, in seconds, for the
+bounds check and checkpoint, financial dataset load, TVL and analytics
+validation, compact fee-row preparation, date lookup and release selection.
+The `cleanup.check-keys.tvl_snapshots` and `cleanup.check-keys.tvl_positions`
+entries measure the unpublished-run and key-uniqueness checks. Only observation
+tables with overlapping keys record subsequent per-table stage, delete and verify
+times under the default `track_counts=on`. Other `cleanup.*` entries cover
+locking, derived data, and the final check and commit. A cleanup-only retry
+has its own `result.cleanupRetryPhaseSeconds`.
+
+Compare the sum for one attempt to the corresponding journal
+`stage-completed` event for `publication`. Stage bookkeeping after the writer
+returns accounts for the residual. Timing fields contain completed phases
+only, so a failed cleanup can have a partial breakdown. For older jobs, the
+journal records the overall stage duration. Diagnostics live in the refresh receipt, outside the
+financial dataset and release identity.
+
 ## Publication and recovery
 
 `--mode acquire` stops before financial preparation; `--mode prepare` writes

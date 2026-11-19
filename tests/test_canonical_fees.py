@@ -356,7 +356,7 @@ def test_candidate_exports_never_inflate_accepted_totals(db):
     assert sum(r['unknown_reports'] for r in totals) == 2
 
 
-def test_init_migrates_legacy_derived_amount_without_losing_evidence(db):
+def test_explicit_repair_reassesses_legacy_derived_amount_without_losing_evidence(db, capsys):
     case = next(c for c in CASES if c['event']['id'] == 82042)
     seed(db, [case])
     e = case['event']
@@ -369,13 +369,17 @@ def test_init_migrates_legacy_derived_amount_without_losing_evidence(db):
         (e['chain_id'],e['transaction_hash'],e['log_index'],
          json.dumps({'amount_source':'derived-contract','total_fees_paid_raw':'65525'}),json.dumps(legacy)))
     init_db(db)
+    assert db.execute("SELECT candidate_json FROM canonical_fee_reports").fetchone()[0] is None
+    assert main(["--db", "staging", "repair-legacy-fees"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"invalidatedZeros": 0, "reassessedDerived": 1}
     row = db.execute('SELECT * FROM canonical_fee_reports').fetchone()
     assert row['accounting_json'] is None and row['status'] == 'unresolved'
     assert json.loads(row['candidate_json'])['precision'] == 'singleton'
     assert json.loads(row['decision_json'])['status'] == 'conditional'
     assert json.loads(row['evidence_json'])['historical_state'] == case['reconstruction']
     before = tuple(row)
-    init_db(db)
+    assert main(["--db", "staging", "repair-legacy-fees"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"invalidatedZeros": 0, "reassessedDerived": 0}
     assert tuple(db.execute('SELECT * FROM canonical_fee_reports').fetchone()) == before
 
 
@@ -488,6 +492,8 @@ def test_old_zero_gain_with_actual_fee_mint_is_not_accepted_zero(db):
     db.execute("UPDATE canonical_fee_reports SET status='ok',reason=NULL,accounting_json=?,method_version='canonical-fees-5'",
         (json.dumps(normalize_v2_fees(0,0,0,0,0)),))
     db.commit();init_db(db)
+    assert db.execute("SELECT status FROM canonical_fee_reports").fetchone()[0] == "ok"
+    assert main(["--db", "staging", "repair-legacy-fees"]) == 0
     r=db.execute('SELECT * FROM canonical_fee_reports').fetchone()
     assert r['accounting_json'] is None and r['reason']=='zero_gain_requires_fee_evidence'
 
