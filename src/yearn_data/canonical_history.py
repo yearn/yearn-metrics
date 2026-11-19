@@ -390,6 +390,7 @@ def consolidate(database, *, apply=False, progress=None, timings=None):
             report = {'database': database_reference(database), 'applied': apply,
                       'selection': selection, 'tvlRunIds': list(run_ids), 'observations': {}, 'derived': {}}
             staged = []
+            untouched_storage = {}
             track_writes = conn.execute('SHOW track_counts').fetchone()[0] == 'on'
             for table in OBSERVATIONS:
                 notify('Inventorying canonical keys: '+table)
@@ -404,6 +405,10 @@ def consolidate(database, *, apply=False, progress=None, timings=None):
                     if covered != before:
                         raise ValueError(f'{table}: staged keys do not cover all observations')
                     timings.finished('cleanup.stage.' + table)
+                elif apply:
+                    # TRUNCATE replaces the heap without counting individual deletes.
+                    untouched_storage[table] = conn.execute(
+                        'SELECT pg_relation_filenode(?::regclass)', (table,)).fetchone()[0]
                 report['observations'][table] = {'before': before, 'canonical_keys': canonical_keys}
             keep = _retained_analyses(conn, manifests['fees'])
             notify('Verifying analysis event coverage')
@@ -447,10 +452,10 @@ def consolidate(database, *, apply=False, progress=None, timings=None):
             # trigger effects, before claiming that unique rows were untouched.
             for table, counts in report['observations'].items():
                 if table not in staged:
-                    writes = conn.execute('''SELECT n_tup_ins + n_tup_upd + n_tup_del
+                    writes, storage = conn.execute('''SELECT n_tup_ins + n_tup_upd + n_tup_del, pg_relation_filenode(relid)
                         FROM pg_catalog.pg_stat_xact_user_tables WHERE relid = ?::regclass''',
-                        (table,)).fetchone()[0]
-                    if writes:
+                        (table,)).fetchone()
+                    if writes or storage != untouched_storage[table]:
                         raise ValueError(f'{table}: unique observations changed during consolidation')
                     counts.update(after=counts['before'], missing_or_changed_keys=0)
             conn.execute(SCHEMA)
