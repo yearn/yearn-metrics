@@ -136,13 +136,14 @@ def test_snapshot_overlap_does_not_rebuild_unique_positions(legacy):
         'before': 1, 'canonical_keys': 1, 'after': 1, 'missing_or_changed_keys': 0}
 
 
-def test_unexpected_write_to_unique_observation_rolls_back(published, monkeypatch):
+@pytest.mark.parametrize('write', ["UPDATE tvl_snapshots SET data_json='{}'", "TRUNCATE tvl_snapshots"])
+def test_unexpected_write_to_unique_observation_rolls_back(published, monkeypatch, write):
     database = published[0]
     before = database_rows(database)
     original = canonical_history._delete_obsolete
     def corrupt(conn, selection, keep):
         original(conn, selection, keep)
-        conn.execute("UPDATE tvl_snapshots SET data_json='{}'")
+        conn.execute(write)
     monkeypatch.setattr(canonical_history, '_delete_obsolete', corrupt)
     with pytest.raises(ValueError, match='unique observations changed'):
         consolidate(database, apply=True)
