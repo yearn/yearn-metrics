@@ -1,6 +1,7 @@
 """Reuse must agree with a full rebuild, including corrections outside a backfill."""
 from contextlib import closing
 from copy import deepcopy
+from pathlib import Path
 import json
 from types import SimpleNamespace
 
@@ -581,6 +582,9 @@ def test_provisional_history_warning_survives_preparation_and_reuse(postgres_dat
     assert warning['details']['unavailableRows'] == 1
     assert warning['details']['dates'] == 2
     with closing(connect('staging')) as conn:
+        scripts = Path(__file__).resolve().parents[1] / 'scripts'
+        for name in ('enable-chart-day-reuse.sql', 'enable-chart-total-reuse.sql'):
+            conn.raw.execute((scripts / name).read_text())
         run(conn, 3, DAY+2*86400, [(PARENT, '0'), (CHILD, '0')])
     following = TvlStore('staging', tmp_path/'pub').get()
     worker.manifest = lambda _: following.manifest
@@ -590,3 +594,52 @@ def test_provisional_history_warning_survives_preparation_and_reuse(postgres_dat
     assert copied['unavailableHistoryDates'] == unavailable
     assert following.history(interval='daily')['chart'][0]['Ethereum'] == 300
     full_copy(following, 'e')
+
+
+def test_reused_chart_day_survives_both_earlier_releases_and_backfill(postgres_database,tmp_path,monkeypatch):
+    from yearn_data import tvl_history_cache as cache
+    from pathlib import Path
+    from yearn_data.chart_day_rows import retire
+    root=tmp_path/'pub'
+    with closing(connect('staging')) as conn:
+        init_db(conn)
+        run(conn,1,DAY,[(PARENT,'100'),(CHILD,None)])
+    first=TvlStore('staging',root).get()
+    prepare(first)
+    original=captured(first)
+    with closing(connect('staging')) as conn:
+        conn.raw.execute((Path(__file__).resolve().parents[1]/'scripts/enable-chart-day-reuse.sql').read_text())
+        run(conn,2,DAY+86400,[(PARENT,'12')])
+    second=TvlStore('staging',root).get()
+    receipt=prepare(second)
+    assert receipt['sharedRows']==2 and receipt['copiedRows']==0
+    assert captured(first)==original
+    second_rows = captured(second)
+    with closing(connect('staging')) as conn:
+        migration = Path(__file__).resolve().parents[1]/'scripts/enable-chart-total-reuse.sql'
+        conn.raw.execute(migration.read_text())
+        run(conn,3,DAY+2*86400,[(PARENT,'0')])
+    assert captured(first)==original and captured(second)==second_rows
+    third=TvlStore('staging',root).get()
+    with monkeypatch.context() as patch:
+        def interrupt(_dataset):
+            raise RuntimeError('totals interrupted')
+        patch.setattr(cache,'prepare_totals',interrupt)
+        with pytest.raises(RuntimeError,match='totals interrupted'):
+            prepare(third,backfill=(DAY+86400,DAY+86400))
+    assert captured(third)[1]==[]
+    with closing(connect('staging')) as conn,conn:
+        retire(conn,third.id,keep_selected=True)
+        conn.execute('DELETE FROM tvl_chart_publications WHERE dataset_id<>?',(third.id,))
+    receipt=prepare(third)
+    assert receipt['totalsRowsCopied']==0 and receipt['totalsDatesShared']==1
+    assert receipt['sharedRows']==2 and receipt['recomputedRowsWritten']==2
+    expected=captured(third)
+    full_copy(third,'f')
+    with closing(connect('staging')) as conn,conn:
+        retire(conn,third.id,keep_selected=True)
+        assert conn.execute('SELECT count(*) FROM tvl_chart_rows WHERE dataset_id=?',(second.id,)).fetchone()[0]==0
+        assert conn.execute('SELECT count(*) FROM tvl_chart_row_values').fetchone()[0]==len(expected[0])
+        assert conn.execute('SELECT count(*) FROM tvl_chart_total_values').fetchone()[0]==len(expected[1])
+    assert captured(third)==expected
+    assert expected[0][:2]==original[0]

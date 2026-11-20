@@ -653,20 +653,25 @@ class TvlDataset:
                 if chain_id is None or rows:
                     yield timestamp,rows
 
+    def _populated_chart_dates(self, sampled):
+        from .tvl_history_cache import populated_dates
+        return populated_dates(self, sampled)
+
     def _history(self, group, mode, interval, start, end, chain_id, constant, max_points=None, top=None, top_metric=None):
         timestamps = self.sampled_dates(interval, start, end)
         if not constant and group in ('chain','category','type') and chain_id is None:
-            from .tvl_history_cache import totals_ready,totals,populated_dates
-            if totals_ready(self):
-                chart={timestamp:{'timestamp':timestamp} for timestamp in populated_dates(self,timestamps)}
-                points=[]
-                for row in totals(self,timestamps,'category' if group=='type' else group,mode,chain_id):
-                    value=float(Decimal(row['value']))
-                    chart[row['timestamp']][row['series']]=value
-                    if max_points is not None and len(points) >= max_points:
-                        raise ValueError('history point limit exceeded; narrow the time range or grouping')
-                    points.append({'timestamp':row['timestamp'],'series':row['series'],'tvlUsd':value})
-                return self.history_result(group,mode,interval,start,end,timestamps,points,list(chart.values()))
+            from .tvl_history_cache import has_prepared_totals, totals
+            with closing(read_db(self.database)) as conn:
+                if has_prepared_totals(conn, self.id):
+                    chart={timestamp:{'timestamp':timestamp} for timestamp in self._populated_chart_dates(timestamps)}
+                    points=[]
+                    for row in totals(self,timestamps,'category' if group=='type' else group,mode,chain_id,conn=conn):
+                        value=float(Decimal(row['value']))
+                        chart[row['timestamp']][row['series']]=value
+                        if max_points is not None and len(points) >= max_points:
+                            raise ValueError('history point limit exceeded; narrow the time range or grouping')
+                        points.append({'timestamp':row['timestamp'],'series':row['series'],'tvlUsd':value})
+                    return self.history_result(group,mode,interval,start,end,timestamps,points,list(chart.values()))
         # Long daily histories remain streamed instead of retaining millions of
         # vault rows. The main weekly charts fit within the bounded shared cache.
         if self.history_prepared():

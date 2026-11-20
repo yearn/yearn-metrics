@@ -73,6 +73,32 @@ data returns zero for both. It holds a writer lock on the report and canonical
 fee tables for the duration, so schedule it between writers. Ordinary opens,
 exports and refresh initialization skip this historical data repair.
 
+## Convert existing TVL charts to shared days
+
+The publisher supports the original tables, shared chart rows alone, and shared
+rows plus totals. Reuse follows the input identity for each date. Retirement
+removes physical values only after their final release reference is gone.
+
+1. Deploy the compatible writer first. When upgrading from an earlier accounting
+   revision, prepare a fresh TVL dataset using the new revision and verify its
+   provisional and unavailable dates with the matching API. Allow a full history
+   build. Keep the nightly receipt, publication paths, and accepted baseline.
+2. Pause publication and preparation. Confirm there is no active writer, all
+   chart publication versions end in `+totals`, and the owner can run both
+   scripts. Record the selected release, chart counts and reader grants. Check
+   storage headroom and create a restorable cutover point with roles and grants.
+3. Run `psql -X -v ON_ERROR_STOP=1 -f scripts/enable-chart-day-reuse.sql`,
+   then `psql -X -v ON_ERROR_STOP=1 -f scripts/enable-chart-total-reuse.sql`
+   on the intended database. Each script commits separately. After a failure
+   inspect the relations before retrying the incomplete step. Verify charts as
+   the API reader and compare the complete row and total contents with the
+   cutover point.
+4. Resume the compatible writer. Check preparation, the new selected release,
+   chart and fee reads, and retirement in the first nightly receipt. On a
+   rollback, pause writers and restore the cutover point with its matching code
+   and receipt. Reconcile or replay subsequent writes before resuming. A writer
+   for the original layout requires the original tables.
+
 ## Tests
 
 All database regressions run against Postgres. Tests request `postgres_database`

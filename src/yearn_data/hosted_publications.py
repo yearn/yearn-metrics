@@ -177,6 +177,11 @@ from .tvl_api import TvlDataset
 
 
 class PublishedTvlDataset(TvlDataset):
+    def _populated_chart_dates(self, sampled):
+        # publish() builds this dataset's date index from distinct chart row
+        # timestamps, including days on which every valuation is unavailable.
+        return sampled
+
     @lru_cache(maxsize=1)
     def dates(self):
         # A published hosted dataset always has prepared history. Reading its

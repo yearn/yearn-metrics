@@ -150,13 +150,37 @@ def test_unexpected_write_to_unique_observation_rolls_back(published, monkeypatc
     assert database_rows(database) == before
 
 
+@pytest.mark.parametrize(('table','column','logical'), [
+    ('tvl_chart_row_values','tvl_usd','tvl_chart_rows'),
+    ('tvl_chart_total_values','value','tvl_chart_totals'),
+])
+def test_shared_chart_value_update_rolls_back_cleanup(published, monkeypatch, table, column, logical):
+    from pathlib import Path
+    database = published[0]
+    with closing(connect(database)) as conn:
+        migration = Path(__file__).resolve().parents[1] / 'scripts/enable-chart-day-reuse.sql'
+        conn.raw.execute(migration.read_text())
+        conn.raw.execute(migration.with_name('enable-chart-total-reuse.sql').read_text())
+    before = database_rows(database)
+    delete_obsolete = canonical_history._delete_obsolete
+
+    def corrupt(conn, selection, keep):
+        delete_obsolete(conn, selection, keep)
+        conn.execute(f"UPDATE {table} SET {column}='-123.45'")
+
+    monkeypatch.setattr(canonical_history, '_delete_obsolete', corrupt)
+    with pytest.raises(ValueError, match=f'{logical}: current publication key/value'):
+        consolidate(database, apply=True)
+    assert database_rows(database) == before
+
+
 def test_consolidation_accepts_pre_index_chart_schema(published):
     database, _, _, _ = published
     # Model an already selected legacy chart: all serving data is present,
     # but the newer incremental bookkeeping tables have never been installed.
     with closing(connect(database)) as conn:
         for table in canonical_history.OPTIONAL_DERIVED:
-            conn.execute('DROP TABLE ' + table)
+            conn.execute('DROP TABLE IF EXISTS ' + table)
         conn.commit()
     original = database_rows(database)
     for apply in (False, True):

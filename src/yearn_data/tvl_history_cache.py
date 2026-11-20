@@ -3,11 +3,12 @@
 Run the existing accounting once, then serve slim dated rows instead of repeatedly
 loading raw snapshots and positions. The completion marker and rows commit together.
 """
-from contextlib import closing
+from contextlib import closing, nullcontext
 import time
 from collections import defaultdict
 from decimal import Decimal,localcontext
 
+from . import chart_day_rows
 from .storage import connect, table_exists
 from .tvl import decimal
 
@@ -40,11 +41,15 @@ def ready(dataset):
             (dataset.id,VERSION,VERSION+'+totals')).fetchone() is not None
 
 
+def has_prepared_totals(conn, dataset_id):
+    return table_exists(conn,'tvl_chart_publications') and conn.execute(
+        'SELECT 1 FROM tvl_chart_publications WHERE dataset_id=? AND version=?',
+        (dataset_id,VERSION+'+totals')).fetchone() is not None
+
+
 def totals_ready(dataset):
     with closing(connect(dataset.database,readonly=True)) as conn:
-        return table_exists(conn,'tvl_chart_publications') and conn.execute(
-            'SELECT 1 FROM tvl_chart_publications WHERE dataset_id=? AND version=?',
-            (dataset.id,VERSION+'+totals')).fetchone() is not None
+        return has_prepared_totals(conn, dataset.id)
 
 
 def populated_dates(dataset, timestamps):
@@ -60,17 +65,17 @@ def populated_dates(dataset, timestamps):
         return tuple(row['timestamp'] for row in conn.execute(statement, (*timestamps, dataset.id)))
 
 
-def totals(dataset,timestamps,group,mode,chain_id=None):
+def totals(dataset,timestamps,group,mode,chain_id=None,*,conn=None):
     if not timestamps:return []
-    marks=','.join('?' for _ in timestamps)
-    statement=f'SELECT timestamp,series,value FROM tvl_chart_totals WHERE dataset_id=? AND timestamp IN ({marks}) AND group_by=? AND mode=?'
-    args=(dataset.id,*timestamps,group,mode)
+    statement='''SELECT timestamp,series,value FROM tvl_chart_totals
+        WHERE dataset_id=? AND timestamp=ANY(?::bigint[]) AND group_by=? AND mode=?'''
+    args=(dataset.id,list(timestamps),group,mode)
     if chain_id is not None:
         from .tvl_api import CHAINS
         statement+=' AND series=?';args+=(CHAINS.get(chain_id,f'Chain {chain_id}'),)
     statement+=' ORDER BY timestamp,series'
-    with closing(connect(dataset.database,readonly=True)) as conn:
-        return list(conn.execute(statement,args))
+    with (nullcontext(conn) if conn is not None else closing(connect(dataset.database,readonly=True))) as reader:
+        return list(reader.execute(statement,args))
 
 
 def prepare_totals(dataset):
@@ -78,31 +83,49 @@ def prepare_totals(dataset):
     from .tvl_api import CHAINS
     dates=tuple(date for date in dataset.dates() if date<=dataset.as_of())
     with closing(connect(dataset.database,direct=True)) as conn:
-        conn.executescript(SCHEMA)
+        shared = chart_day_rows.enabled(conn)
+        if not shared:
+            conn.executescript(SCHEMA)
         with conn:
             # Keep the copy-source marker and its totals in one snapshot even
             # if consolidation retires that publication between statements.
             conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
+            if shared:
+                chart_day_rows.lock_memberships(conn)
             if not conn.execute('SELECT pg_try_advisory_xact_lock(743219889)').fetchone()[0]:
                 raise ValueError('TVL chart preparation is already running')
             if totals_ready(dataset):return
             from .tvl_incremental import preparation
             plan = preparation(conn,dataset.id) if table_exists(conn,'tvl_chart_preparations') else None
             previous = plan.get('previousDatasetId') if plan else None
-            reusable = bool(previous and conn.execute('SELECT 1 FROM tvl_chart_publications WHERE dataset_id=? AND version=?',
-                (previous,VERSION+'+totals')).fetchone())
-            reused = plan['reusedDates'] if reusable else []
-            reused_set = set(reused)
-            pending = [day for day in dates if day not in reused_set]
+            share_totals = chart_day_rows.totals_enabled(conn)
             started = time.monotonic()
             copied = read = written = 0
-            conn.execute('DELETE FROM tvl_chart_totals WHERE dataset_id=?',(dataset.id,))
-            for offset in range(0,len(reused),400):
-                days=reused[offset:offset+400]
-                marks=','.join('?' for _ in days)
-                copied+=conn.execute(f'''INSERT INTO tvl_chart_totals SELECT ?,timestamp,group_by,mode,series,value
-                    FROM tvl_chart_totals WHERE dataset_id=? AND timestamp IN ({marks})''',(dataset.id,previous,*days)).rowcount
+            if share_totals:
+                # Row preparation pinned the completed source's day versions.
+                # Its release may have retired, but these physical totals survive.
+                reused = plan['reusedDates'] if plan else []
+                values_table = 'tvl_chart_total_values'
+            else:
+                values_table = 'tvl_chart_totals'
+                reusable = previous and conn.execute('SELECT 1 FROM tvl_chart_publications WHERE dataset_id=? AND version=?',
+                                                      (previous,VERSION+'+totals')).fetchone()
+                reused = plan['reusedDates'] if reusable else []
+                conn.execute('DELETE FROM tvl_chart_totals WHERE dataset_id=?',(dataset.id,))
+                for offset in range(0,len(reused),400):
+                    days=reused[offset:offset+400]
+                    marks=','.join('?' for _ in days)
+                    copied+=conn.execute(f'''INSERT INTO tvl_chart_totals SELECT ?,timestamp,group_by,mode,series,value
+                        FROM tvl_chart_totals WHERE dataset_id=? AND timestamp IN ({marks})''',(dataset.id,previous,*days)).rowcount
             copy_seconds=time.monotonic()-started
+            reused_set = set(reused)
+            pending = [day for day in dates if day not in reused_set]
+            owners = {}
+            if share_totals and pending:
+                owners = dict(conn.execute('''SELECT timestamp,owner_id FROM tvl_chart_days
+                    WHERE dataset_id=? AND timestamp=ANY(?::bigint[])''',(dataset.id,pending)))
+                if len(owners) != len(pending):
+                    raise ValueError('missing chart membership for totals preparation')
             for offset in range(0,len(pending),31):
                 batch=[]
                 for timestamp,points in rows(dataset,pending[offset:offset+31]):
@@ -116,14 +139,15 @@ def prepare_totals(dataset):
                             groups[('category',mode,row['category'])].append(value)
                     with localcontext() as ctx:
                         ctx.prec=78
-                        batch.extend((dataset.id,timestamp,*identity,str(sum(values,Decimal(0))))
+                        batch.extend((owners.get(timestamp,dataset.id),timestamp,*identity,str(sum(values,Decimal(0))))
                                      for identity,values in groups.items())
-                conn.executemany('INSERT INTO tvl_chart_totals VALUES (?,?,?,?,?,?)',batch)
+                conn.executemany(f'INSERT INTO {values_table} VALUES (?,?,?,?,?,?)',batch)
                 written+=len(batch)
             conn.execute('UPDATE tvl_chart_publications SET version=? WHERE dataset_id=?',(VERSION+'+totals',dataset.id))
             if plan:
                 import json
                 plan.update(status='prepared',totalsRowsRead=read,totalsRowsCopied=copied,totalsRowsWritten=written,
+                            totalsDatesShared=len(reused) if share_totals else 0,
                             totalsCopySeconds=copy_seconds,totalsSeconds=time.monotonic()-started)
                 conn.execute('UPDATE tvl_chart_preparations SET receipt_json=? WHERE dataset_id=?',
                              (json.dumps(plan,sort_keys=True),dataset.id))
@@ -234,6 +258,12 @@ def prepare_price_repair(dataset, previous):
     with closing(connect(dataset.database,direct=True)) as conn,conn:
         if not conn.execute('SELECT pg_try_advisory_xact_lock(743219889)').fetchone()[0]:
             raise ValueError('TVL chart preparation is already running')
+        shared = chart_day_rows.enabled(conn)
+        if shared:
+            chart_day_rows.lock_memberships(conn)
+            if not conn.execute('SELECT 1 FROM tvl_chart_publications WHERE dataset_id=? AND version=?',
+                                (previous.id,VERSION+'+totals')).fetchone():
+                raise ValueError('previous TVL history was retired before price repair')
         existing=conn.execute('SELECT version FROM tvl_chart_publications WHERE dataset_id=?',(dataset.id,)).fetchone()
         if existing:
             if existing['version']==VERSION+'+totals':
@@ -244,12 +274,26 @@ def prepare_price_repair(dataset, previous):
             raise ValueError('existing chart rows require full history preparation')
         marks=','.join('?' for _ in changed)
         unchanged=f' AND timestamp NOT IN ({marks})' if changed else ''
-        conn.execute(f'INSERT INTO tvl_chart_rows SELECT ?,timestamp,{",".join(FIELDS)} FROM tvl_chart_rows WHERE dataset_id=? AND timestamp<=?{unchanged}',(dataset.id,previous.id,close,*changed))
-        conn.executemany('INSERT INTO tvl_chart_rows VALUES (?,?,?,?,?,?,?,?,?,?,?)',repaired)
-        conn.execute(f'INSERT INTO tvl_chart_totals SELECT ?,timestamp,group_by,mode,series,value FROM tvl_chart_totals WHERE dataset_id=? AND timestamp<=?{unchanged}',(dataset.id,previous.id,close,*changed))
-        conn.executemany('INSERT INTO tvl_chart_totals VALUES (?,?,?,?,?,?)',sums)
+        if shared:
+            owner = chart_day_rows.new_owner()
+            conn.executemany('INSERT INTO tvl_chart_row_values VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                             [(owner,*row[1:]) for row in repaired])
+            reused = [r[0] for r in conn.execute(f'SELECT timestamp FROM tvl_chart_days WHERE dataset_id=? AND timestamp<=?{unchanged}',
+                                                 (previous.id,close,*changed))]
+            chart_day_rows.link(conn,dataset.id,previous.id,reused,list(changed),owner)
+            values_table = 'tvl_chart_row_values'
+        else:
+            values_table = 'tvl_chart_rows'
+            conn.execute(f'INSERT INTO tvl_chart_rows SELECT ?,timestamp,{",".join(FIELDS)} FROM tvl_chart_rows WHERE dataset_id=? AND timestamp<=?{unchanged}',(dataset.id,previous.id,close,*changed))
+            conn.executemany('INSERT INTO tvl_chart_rows VALUES (?,?,?,?,?,?,?,?,?,?,?)',repaired)
+        if chart_day_rows.totals_enabled(conn):
+            conn.executemany('INSERT INTO tvl_chart_total_values VALUES (?,?,?,?,?,?)',
+                             [(owner,*row[1:]) for row in sums])
+        else:
+            conn.execute(f'INSERT INTO tvl_chart_totals SELECT ?,timestamp,group_by,mode,series,value FROM tvl_chart_totals WHERE dataset_id=? AND timestamp<=?{unchanged}',(dataset.id,previous.id,close,*changed))
+            conn.executemany('INSERT INTO tvl_chart_totals VALUES (?,?,?,?,?,?)',sums)
         count=conn.execute('SELECT COUNT(*) FROM tvl_chart_rows WHERE dataset_id=?',(dataset.id,)).fetchone()[0]
         conn.execute('INSERT INTO tvl_chart_publications VALUES (?,?,?,?)',(dataset.id,VERSION+'+totals',count,int(time.time())))
-        conn.raw.execute('ANALYZE tvl_chart_rows')
+        conn.raw.execute(f'ANALYZE {values_table}')
     dataset._prepared=True
     return {'status':'prepared','datasetId':dataset.id,'recomputedDates':list(changed),'rows':count}

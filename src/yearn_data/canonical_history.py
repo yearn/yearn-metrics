@@ -8,6 +8,7 @@ from contextlib import closing
 import json
 import time
 
+from . import chart_day_rows
 from .storage import connect, database_reference, table_exists, table_columns
 from .tvl_api import observation_selection
 
@@ -18,6 +19,7 @@ DERIVED = {
     'tvl_chart_totals': ('dataset_id', 'tvlDatasetId'),
     'tvl_chart_publications': ('dataset_id', 'tvlDatasetId'),
     'tvl_chart_inputs': ('dataset_id', 'tvlDatasetId'),
+    'tvl_chart_days': ('dataset_id', 'tvlDatasetId'),
     'tvl_chart_preparations': ('dataset_id', 'tvlDatasetId'),
     'api_tvl_dates': ('dataset_id', 'tvlDatasetId'),
     'api_fee_rows': ('dataset_id', 'feesDatasetId'),
@@ -27,12 +29,12 @@ DERIVED = {
 }
 # These indexes were introduced after legacy chart publications. Required
 # serving tables must still fail verification if missing.
-OPTIONAL_DERIVED = {'tvl_chart_inputs', 'tvl_chart_preparations'}
+OPTIONAL_DERIVED = {'tvl_chart_days', 'tvl_chart_inputs', 'tvl_chart_preparations'}
 DERIVED_KEYS = {
     'tvl_chart_rows': 'dataset_id,timestamp,chain_id,vault',
     'tvl_chart_totals': 'dataset_id,timestamp,group_by,mode,series',
     'tvl_chart_publications': 'dataset_id', 'api_tvl_dates': 'dataset_id',
-    'tvl_chart_inputs': 'dataset_id,timestamp', 'tvl_chart_preparations': 'dataset_id',
+    'tvl_chart_days': 'dataset_id,timestamp', 'tvl_chart_inputs': 'dataset_id,timestamp', 'tvl_chart_preparations': 'dataset_id',
     'api_fee_rows': 'dataset_id,kind,ordinal', 'api_fee_datasets': 'dataset_id',
     'analytics_publications': 'id', 'api_releases': 'id',
 }
@@ -343,7 +345,12 @@ def _delete_obsolete(conn, selection, keep):
     if conn.execute("SELECT 1 FROM analytics_selection WHERE name<>'powerglove' LIMIT 1").fetchone():
         raise ValueError('additional analytics selections require explicit consolidation')
     for table, (column, field) in _available_derived(conn).items():
-        conn.execute(f'DELETE FROM {table} WHERE {column}<>?', (selection[field],))
+        if table == 'tvl_chart_days':
+            chart_day_rows.retire(conn, selection[field], keep_selected=True)
+        elif table == 'tvl_chart_totals' and chart_day_rows.totals_enabled(conn):
+            continue
+        elif table != 'tvl_chart_rows' or not chart_day_rows.enabled(conn):
+            conn.execute(f'DELETE FROM {table} WHERE {column}<>?', (selection[field],))
     conn.execute("DELETE FROM api_manifests WHERE NOT ((kind='fees' AND id=?) OR (kind='tvl' AND id=?))",
                  (selection['feesDatasetId'], selection['tvlDatasetId']))
 
@@ -371,8 +378,11 @@ def consolidate(database, *, apply=False, progress=None, timings=None):
     timings = timings or PublicationTimings()
     notify = progress or (lambda message: None)
     with closing(connect(database, direct=True)) as conn:
+        shared = apply and chart_day_rows.enabled(conn)
         conn.raw.execute('BEGIN ISOLATION LEVEL REPEATABLE READ')
         conn.raw.execute("SET LOCAL lock_timeout='5s'")
+        if shared:
+            chart_day_rows.lock_memberships(conn)
         if not conn.execute('SELECT pg_try_advisory_xact_lock(743219890)').fetchone()[0]:
             raise ValueError('another canonical consolidation is running')
         if apply:
@@ -433,6 +443,11 @@ def consolidate(database, *, apply=False, progress=None, timings=None):
             _delete_obsolete(conn, selection, keep)
             timings.finished('cleanup.delete')
             delete_only = _delete_only_tables(conn) if track_writes else set()
+            # A join of two delete-only tables can only lose logical rows.
+            if {'tvl_chart_days','tvl_chart_row_values'} <= delete_only:
+                delete_only.add('tvl_chart_rows')
+            if {'tvl_chart_days','tvl_chart_total_values','tvl_chart_publications'} <= delete_only:
+                delete_only.add('tvl_chart_totals')
             for table in staged:
                 expected = report['observations'][table]['canonical_keys']
                 report['observations'][table].update(_verify_observations(

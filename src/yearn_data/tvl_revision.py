@@ -4,6 +4,8 @@ from functools import lru_cache
 import hashlib
 from pathlib import Path
 
+from .tvl_revision_aliases import EQUIVALENT_REVISIONS
+
 # Entry points, not whole serving modules. Module-local dependencies (including
 # constants and import bindings) are followed below. Add new financial instance
 # methods here; keep serving/cache initialization outside _init_accounting.
@@ -12,6 +14,7 @@ ROOTS = {
     'tvl_policy.py': ('classify_vault', 'correct_catalog'),
     'tvl_api.py': ('CHAINS', 'encoded', 'read_db', 'key', 'observation_selection', 'TvlDataset'),
     'tvl_history_cache.py': ('ready', 'totals_ready', 'rows', 'prepare', 'prepare_totals', 'prepare_price_repair'),
+    'chart_day_rows.py': ('enabled', 'totals_enabled', 'lock_memberships', 'new_owner', 'link', 'retire'),
     'tvl_day_tracking.py': ('install', 'state'),
     'tvl_incremental.py': ('digest', 'context_identity', 'input_identity', 'preparation', 'build'),
 }
@@ -22,7 +25,8 @@ DATASET_METHODS = {'_init_accounting', 'dates', 'as_of', 'selected_rows',
 def accounting_revision():
     root = Path(__file__).parent
     sources = tuple((name, (root/name).read_bytes()) for name in (*ROOTS, 'tvl_revision.py'))
-    return _revision(sources)
+    revision = _revision(sources)
+    return EQUIVALENT_REVISIONS.get(revision, revision)
 
 
 @lru_cache(maxsize=4)
